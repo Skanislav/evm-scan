@@ -1,0 +1,611 @@
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"strconv"
+	"sync"
+	"time"
+
+	"github.com/ethereum/go-ethereum/common"
+
+	"github.com/Skanislav/evm-scan/internal/chain"
+	"github.com/Skanislav/evm-scan/internal/hintreg"
+	"github.com/Skanislav/evm-scan/internal/indexer"
+	"github.com/Skanislav/evm-scan/internal/store"
+	"github.com/Skanislav/evm-scan/internal/token"
+)
+
+// --------------------------------------------------------------------------
+// Assets
+// --------------------------------------------------------------------------
+
+type assetJSON struct {
+	ChainID       uint64 `json:"chain_id"`
+	Address       string `json:"address"`
+	Standard      string `json:"standard"`
+	Symbol        string `json:"symbol,omitempty"`
+	Name          string `json:"name,omitempty"`
+	Decimals      *int16 `json:"decimals,omitempty"`
+	Status        string `json:"status"`
+	Source        string `json:"source"`
+	Registrant    string `json:"registrant,omitempty"`
+	HintFromBlock uint64 `json:"hint_from_block"`
+	AnchorBlock   uint64 `json:"anchor_block,omitempty"`
+	BackfillNext  uint64 `json:"backfill_next,omitempty"`
+	BackfillDone  bool   `json:"backfill_done"`
+	TailBlock     uint64 `json:"tail_block,omitempty"`
+	LogsSeen      uint64 `json:"logs_seen,omitempty"`
+}
+
+func (s *Server) assetView(ctx context.Context, a store.Asset) assetJSON {
+	v := assetJSON{
+		ChainID:       a.ChainID,
+		Address:       a.Address.Hex(),
+		Standard:      standardName(a.Standard),
+		Symbol:        a.Symbol,
+		Name:          a.Name,
+		Decimals:      a.Decimals,
+		Status:        a.Status,
+		Source:        a.Source,
+		HintFromBlock: a.HintFromBlock,
+	}
+	if a.Registrant != nil {
+		v.Registrant = a.Registrant.Hex()
+	}
+	if c, err := s.d.Store.GetCursor(ctx, a.ChainID, a.Address); err == nil {
+		v.AnchorBlock = c.AnchorBlock
+		v.BackfillNext = c.BackfillNext
+		v.BackfillDone = c.BackfillDone
+		v.TailBlock = c.TailBlock
+		v.LogsSeen = c.LogsSeen
+	}
+	return v
+}
+
+func (s *Server) listAssets(w http.ResponseWriter, r *http.Request) {
+	chainID, _, err := s.chainOf(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad chain", err)
+		return
+	}
+
+	assets, err := s.d.Store.ListAssets(r.Context(), chainID, r.URL.Query().Get("include_revoked") == "true")
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "query failed", err)
+		return
+	}
+
+	out := make([]assetJSON, 0, len(assets))
+	for _, a := range assets {
+		out = append(out, s.assetView(r.Context(), a))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"chain_id": chainID, "assets": out})
+}
+
+func (s *Server) getAsset(w http.ResponseWriter, r *http.Request) {
+	chainID, _, err := s.chainOf(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad chain", err)
+		return
+	}
+	addr, err := parseAddress(r.PathValue("address"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad address", err)
+		return
+	}
+
+	a, err := s.d.Store.GetAsset(r.Context(), chainID, addr)
+	if errors.Is(err, store.ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "asset not registered", nil)
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "query failed", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.assetView(r.Context(), a))
+}
+
+type registerRequest struct {
+	ChainID   uint64 `json:"chain_id"`
+	Address   string `json:"address"`
+	FromBlock uint64 `json:"from_block"`
+}
+
+// registerAsset adds a hint directly, without going through the on-chain registry.
+//
+// This is the local convenience path. It is gated behind api.allow_registration
+// because the on-chain HintRegistry is the permissionless, bonded, publicly auditable
+// way in; this one has no bond and no public record.
+func (s *Server) registerAsset(w http.ResponseWriter, r *http.Request) {
+	if !s.d.AllowRegistration {
+		writeErr(w, http.StatusForbidden, "direct registration disabled",
+			errors.New("register through the on-chain HintRegistry, or set api.allow_registration"))
+		return
+	}
+
+	var req registerRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad request body", err)
+		return
+	}
+
+	chainID := req.ChainID
+	if chainID == 0 && len(s.chains) == 1 {
+		chainID = s.chains[0]
+	}
+	src, ok := s.d.Sources[chainID]
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "unknown chain", nil)
+		return
+	}
+	addr, err := parseAddress(req.Address)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad address", err)
+		return
+	}
+
+	ctx := r.Context()
+	head, err := src.HeadBlock(ctx)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, "node unreachable", err)
+		return
+	}
+
+	// Refuse an address with no code: a hint for an EOA can only ever waste scans.
+	code, err := src.CodeAt(ctx, addr)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, "node unreachable", err)
+		return
+	}
+	if len(code) == 0 {
+		writeErr(w, http.StatusBadRequest, "address has no contract code", nil)
+		return
+	}
+
+	from := req.FromBlock
+	if from > head {
+		from = 0
+	}
+
+	meta := token.Probe(ctx, src, addr)
+	created, err := s.d.Store.RegisterAsset(ctx, store.Asset{
+		ChainID:       chainID,
+		Address:       addr,
+		HintFromBlock: from,
+		Symbol:        meta.Symbol,
+		Name:          meta.Name,
+		Decimals:      meta.Decimals,
+		Source:        store.SourceLocal,
+	}, head)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "registration failed", err)
+		return
+	}
+	if n, ok := s.d.Nudgers[chainID]; ok {
+		n.Nudge()
+	}
+
+	a, err := s.d.Store.GetAsset(ctx, chainID, addr)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "query failed", err)
+		return
+	}
+
+	code2 := http.StatusOK
+	if created {
+		code2 = http.StatusCreated
+	}
+	writeJSON(w, code2, map[string]any{"created": created, "asset": s.assetView(ctx, a)})
+}
+
+func (s *Server) assetAccounts(w http.ResponseWriter, r *http.Request) {
+	chainID, _, err := s.chainOf(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad chain", err)
+		return
+	}
+	addr, err := parseAddress(r.PathValue("address"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad address", err)
+		return
+	}
+	limit := intParam(r, "limit", 100, 1, 1000)
+	offset := intParam(r, "offset", 0, 0, 1_000_000)
+
+	rows, err := s.d.Store.AssetHolders(r.Context(), chainID, addr, limit, offset)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "query failed", err)
+		return
+	}
+
+	type holder struct {
+		Account    string   `json:"account"`
+		FirstBlock uint64   `json:"first_block"`
+		LastBlock  uint64   `json:"last_block"`
+		EventCount uint64   `json:"event_count"`
+		Roles      []string `json:"roles"`
+	}
+	out := make([]holder, 0, len(rows))
+	for _, r0 := range rows {
+		out = append(out, holder{
+			Account:    r0.Account.Hex(),
+			FirstBlock: r0.FirstBlock,
+			LastBlock:  r0.LastBlock,
+			EventCount: r0.EventCount,
+			Roles:      indexer.RoleNames(r0.Roles),
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"chain_id": chainID, "asset": addr.Hex(), "accounts": out,
+	})
+}
+
+func intParam(r *http.Request, name string, def, lo, hi int) int {
+	raw := r.URL.Query().Get(name)
+	if raw == "" {
+		return def
+	}
+	v, err := strconv.Atoi(raw)
+	if err != nil || v < lo {
+		return def
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
+// --------------------------------------------------------------------------
+// Accounts: the discovery surface
+// --------------------------------------------------------------------------
+
+type accountAssetJSON struct {
+	Address      string   `json:"address"`
+	Standard     string   `json:"standard"`
+	Symbol       string   `json:"symbol,omitempty"`
+	Name         string   `json:"name,omitempty"`
+	Decimals     *int16   `json:"decimals,omitempty"`
+	FirstBlock   uint64   `json:"first_block"`
+	LastBlock    uint64   `json:"last_block"`
+	EventCount   uint64   `json:"event_count"`
+	Roles        []string `json:"roles"`
+	IndexStatus  string   `json:"index_status"`
+	Balance      *string  `json:"balance,omitempty"`
+	BalanceError string   `json:"balance_error,omitempty"`
+}
+
+// accountAssets is the rich view: discovery hints plus live balances read from our
+// own node at head.
+func (s *Server) accountAssets(w http.ResponseWriter, r *http.Request) {
+	chainID, src, err := s.chainOf(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad chain", err)
+		return
+	}
+	account, err := parseAddress(r.PathValue("address"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad address", err)
+		return
+	}
+
+	ctx := r.Context()
+	rows, err := s.d.Store.AccountAssets(ctx, chainID, account)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "query failed", err)
+		return
+	}
+
+	out := make([]accountAssetJSON, len(rows))
+	for i, a := range rows {
+		out[i] = accountAssetJSON{
+			Address:     a.Asset.Hex(),
+			Standard:    standardName(a.Standard),
+			Symbol:      a.Symbol,
+			Name:        a.Name,
+			Decimals:    a.Decimals,
+			FirstBlock:  a.FirstBlock,
+			LastBlock:   a.LastBlock,
+			EventCount:  a.EventCount,
+			Roles:       indexer.RoleNames(a.Roles),
+			IndexStatus: a.Status,
+		}
+	}
+
+	if r.URL.Query().Get("balances") != "false" {
+		s.fillBalances(ctx, src, account, rows, out)
+	}
+
+	head, _ := src.HeadBlock(ctx)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"account":     account.Hex(),
+		"chain_id":    chainID,
+		"as_of_block": head,
+		"assets":      out,
+	})
+}
+
+// fillBalances reads balanceOf for each discovered asset concurrently.
+//
+// ERC-1155 is skipped: balance there is per token id, and the index tracks contracts
+// rather than ids, so there is no single number to report. Returning nothing is
+// better than returning a misleading zero.
+func (s *Server) fillBalances(ctx context.Context, src chain.Source, account common.Address,
+	rows []store.AccountAsset, out []accountAssetJSON) {
+
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	const parallelism = 8
+	sem := make(chan struct{}, parallelism)
+	var wg sync.WaitGroup
+
+	for i := range rows {
+		if out[i].Standard == "erc1155" || out[i].Standard == "unknown" {
+			continue
+		}
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			bal, err := token.BalanceOf(ctx, src, rows[i].Asset, account)
+			if err != nil {
+				out[i].BalanceError = err.Error()
+				return
+			}
+			str := bal.String()
+			out[i].Balance = &str
+		}(i)
+	}
+	wg.Wait()
+}
+
+// accountContracts is the minimal wallet-facing surface: just the contract list.
+//
+// This is the endpoint the whole project exists to serve. A wallet or discovery
+// service asks "what should I pull history for", gets a short list instead of
+// scanning the chain, and then fetches the actual history itself from any source it
+// trusts. Nothing here has to be believed.
+func (s *Server) accountContracts(w http.ResponseWriter, r *http.Request) {
+	chainID, src, err := s.chainOf(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad chain", err)
+		return
+	}
+	account, err := parseAddress(r.PathValue("address"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad address", err)
+		return
+	}
+
+	ctx := r.Context()
+	rows, err := s.d.Store.AccountAssets(ctx, chainID, account)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "query failed", err)
+		return
+	}
+
+	type hint struct {
+		Address    string `json:"address"`
+		Standard   string `json:"standard"`
+		FirstBlock uint64 `json:"first_block"`
+		LastBlock  uint64 `json:"last_block"`
+	}
+	hints := make([]hint, len(rows))
+	for i, a := range rows {
+		hints[i] = hint{
+			Address:    a.Asset.Hex(),
+			Standard:   standardName(a.Standard),
+			FirstBlock: a.FirstBlock,
+			LastBlock:  a.LastBlock,
+		}
+	}
+
+	head, _ := src.HeadBlock(ctx)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"account":     account.Hex(),
+		"chain_id":    chainID,
+		"as_of_block": head,
+		"contracts":   hints,
+		"disclaimer":  "discovery hint over registered assets only; verify against the chain",
+	})
+}
+
+// --------------------------------------------------------------------------
+// Commitments
+// --------------------------------------------------------------------------
+
+type epochJSON struct {
+	ID         int64  `json:"id"`
+	ChainID    uint64 `json:"chain_id"`
+	FromBlock  uint64 `json:"from_block"`
+	ToBlock    uint64 `json:"to_block"`
+	MerkleRoot string `json:"merkle_root"`
+	LeafCount  int64  `json:"leaf_count"`
+	URI        string `json:"uri,omitempty"`
+	OnchainID  *int64 `json:"onchain_epoch_id,omitempty"`
+	TxHash     string `json:"tx_hash,omitempty"`
+	Status     string `json:"status"`
+}
+
+func epochView(e store.Epoch) epochJSON {
+	v := epochJSON{
+		ID: e.ID, ChainID: e.ChainID, FromBlock: e.FromBlock, ToBlock: e.ToBlock,
+		MerkleRoot: e.MerkleRoot.Hex(), LeafCount: e.LeafCount, URI: e.URI,
+		OnchainID: e.OnchainID, Status: e.Status,
+	}
+	if e.TxHash != nil {
+		v.TxHash = e.TxHash.Hex()
+	}
+	return v
+}
+
+func (s *Server) listEpochs(w http.ResponseWriter, r *http.Request) {
+	chainID := uint64(0)
+	if raw := r.URL.Query().Get("chain_id"); raw != "" {
+		v, err := strconv.ParseUint(raw, 10, 64)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "bad chain_id", err)
+			return
+		}
+		chainID = v
+	}
+
+	rows, err := s.d.Store.ListEpochs(r.Context(), chainID, intParam(r, "limit", 20, 1, 200))
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "query failed", err)
+		return
+	}
+	out := make([]epochJSON, 0, len(rows))
+	for _, e := range rows {
+		out = append(out, epochView(e))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"epochs": out})
+}
+
+type createEpochRequest struct {
+	ChainID uint64 `json:"chain_id"`
+	URI     string `json:"uri"`
+	Publish bool   `json:"publish"`
+}
+
+// createEpoch builds a commitment and optionally posts it on-chain.
+func (s *Server) createEpoch(w http.ResponseWriter, r *http.Request) {
+	if s.d.Publisher == nil {
+		writeErr(w, http.StatusServiceUnavailable, "publisher not configured",
+			errors.New("set registry.address and registry.publisher_key"))
+		return
+	}
+
+	var req createEpochRequest
+	if r.ContentLength > 0 {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req); err != nil {
+			writeErr(w, http.StatusBadRequest, "bad request body", err)
+			return
+		}
+	}
+	chainID := req.ChainID
+	if chainID == 0 && len(s.chains) == 1 {
+		chainID = s.chains[0]
+	}
+	if _, ok := s.d.Sources[chainID]; !ok {
+		writeErr(w, http.StatusBadRequest, "unknown chain", nil)
+		return
+	}
+
+	ctx := r.Context()
+	e, err := s.d.Publisher.Build(ctx, chainID, req.URI)
+	if errors.Is(err, hintreg.ErrEmptyIndex) {
+		writeErr(w, http.StatusConflict, "index is empty", err)
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "build failed", err)
+		return
+	}
+
+	if !req.Publish {
+		writeJSON(w, http.StatusCreated, epochView(e))
+		return
+	}
+
+	if _, err := s.d.Publisher.Publish(ctx, e.ID); err != nil {
+		writeErr(w, http.StatusBadGateway, "publish failed", err)
+		return
+	}
+	stored, err := s.d.Store.GetEpoch(ctx, e.ID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "query failed", err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, epochView(stored))
+}
+
+func (s *Server) getEpoch(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad epoch id", err)
+		return
+	}
+	e, err := s.d.Store.GetEpoch(r.Context(), id)
+	if errors.Is(err, store.ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "epoch not found", nil)
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "query failed", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, epochView(e))
+}
+
+// epochProof returns everything needed to call HintRegistry.verifyInclusion.
+func (s *Server) epochProof(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad epoch id", err)
+		return
+	}
+	account, err := parseAddress(r.URL.Query().Get("account"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad account", err)
+		return
+	}
+
+	ctx := r.Context()
+	e, err := s.d.Store.GetEpoch(ctx, id)
+	if errors.Is(err, store.ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "epoch not found", nil)
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "query failed", err)
+		return
+	}
+
+	leaf, proof, err := hintreg.ProofFor(ctx, s.d.Store, id, account)
+	if errors.Is(err, store.ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "account not in this commitment", nil)
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "proof failed", err)
+		return
+	}
+
+	hexProof := make([]string, len(proof))
+	for i, p := range proof {
+		hexProof[i] = p.Hex()
+	}
+
+	// The asset list is echoed so a verifier can recompute assets_hash independently
+	// rather than taking our digest on trust.
+	assets, err := s.d.Store.AccountAssets(ctx, e.ChainID, account)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "query failed", err)
+		return
+	}
+	addrs := make([]string, 0, len(assets))
+	for _, a := range assets {
+		if a.FirstBlock <= e.ToBlock {
+			addrs = append(addrs, a.Asset.Hex())
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"epoch":            epochView(e),
+		"account":          account.Hex(),
+		"assets_hash":      leaf.AssetsHash.Hex(),
+		"leaf":             leaf.Leaf.Hex(),
+		"leaf_index":       leaf.Index,
+		"proof":            hexProof,
+		"assets":           addrs,
+		"verify_with":      "HintRegistry.verifyInclusion(epochId, account, assetsHash, proof)",
+		"onchain_epoch_id": e.OnchainID,
+	})
+}

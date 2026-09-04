@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>evm-scan — asset discovery</title>
+<style>
+  :root {
+    --bg: #fbfbfa; --panel: #fff; --ink: #1a1a18; --muted: #6b6b66;
+    --line: #e4e4e0; --accent: #2f5d50; --accent-ink: #fff;
+    --warn: #8a5a1b; --warn-bg: #fdf6ec; --ok: #2f6d4f; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16171a; --panel: #1e2024; --ink: #e9e9e6; --muted: #9a9a94;
+      --line: #2e3138; --accent: #6fbfa4; --accent-ink: #12241d;
+      --warn: #e0b070; --warn-bg: #2a2115; --ok: #7fc6a0;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 32px 20px 80px; }
+  header { border-bottom: 1px solid var(--line); padding-bottom: 20px; margin-bottom: 28px; }
+  h1 { margin: 0 0 6px; font-size: 26px; letter-spacing: -0.02em; }
+  h2 { font-size: 15px; text-transform: uppercase; letter-spacing: 0.08em;
+       color: var(--muted); margin: 0 0 14px; font-weight: 600; }
+  .sub { color: var(--muted); margin: 0; max-width: 70ch; }
+  section { background: var(--panel); border: 1px solid var(--line);
+            border-radius: 10px; padding: 20px; margin-bottom: 20px; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; }
+  input[type=text] {
+    flex: 1 1 340px; min-width: 0; padding: 10px 12px; font-family: var(--mono); font-size: 13px;
+    border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--ink);
+  }
+  input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  button {
+    padding: 10px 16px; border: 0; border-radius: 7px; background: var(--accent);
+    color: var(--accent-ink); font-weight: 600; font-size: 14px; cursor: pointer;
+  }
+  button.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+  button:disabled { opacity: .5; cursor: progress; }
+  .stats { display: flex; flex-wrap: wrap; gap: 22px; }
+  .stat .k { font-size: 11px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); }
+  .stat .v { font-size: 20px; font-variant-numeric: tabular-nums; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .07em;
+       color: var(--muted); padding: 6px 10px 6px 0; border-bottom: 1px solid var(--line); font-weight: 600; }
+  td { padding: 10px 10px 10px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr:last-child td { border-bottom: 0; }
+  .mono { font-family: var(--mono); font-size: 12.5px; }
+  .num { font-variant-numeric: tabular-nums; text-align: right; }
+  .tag { display: inline-block; padding: 1px 7px; border-radius: 20px; font-size: 11px;
+         background: var(--bg); border: 1px solid var(--line); color: var(--muted); margin-right: 4px; }
+  .scroll { overflow-x: auto; }
+  .note { background: var(--warn-bg); border-left: 3px solid var(--warn); padding: 10px 14px;
+          border-radius: 0 6px 6px 0; color: var(--muted); font-size: 13.5px; margin-top: 14px; }
+  .err { color: #b3261e; font-size: 13.5px; margin-top: 10px; }
+  .ok { color: var(--ok); }
+  .empty { color: var(--muted); font-style: italic; padding: 8px 0; }
+  pre { background: var(--bg); border: 1px solid var(--line); border-radius: 7px;
+        padding: 12px; overflow-x: auto; font-size: 12px; margin: 12px 0 0; }
+  .hint { color: var(--muted); font-size: 12.5px; margin-top: 8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>evm-scan</h1>
+  <p class="sub">
+    Permissionless asset indexing over your own node. Contracts are registered on-chain
+    as <em>hints</em>; only those are scanned. The result is a per-account discovery
+    index, committed back on-chain as a merkle root.
+  </p>
+</header>
+
+<section>
+  <h2>Node &amp; index</h2>
+  <div class="stats" id="stats"><span class="empty">loading…</span></div>
+  <div class="note" id="node-note" hidden></div>
+</section>
+
+<section>
+  <h2>Look up an account</h2>
+  <div class="row">
+    <input type="text" id="account" placeholder="0x… account address" spellcheck="false" autocomplete="off">
+    <button id="lookup">Look up</button>
+  </div>
+  <div class="hint">Balances are read live from the node with <code>eth_call</code> at head — never derived from indexed events.</div>
+  <div class="err" id="account-err" hidden></div>
+  <div class="scroll"><table id="account-table" hidden>
+    <thead><tr>
+      <th>Contract</th><th>Token</th><th>Std</th><th>Roles</th>
+      <th class="num">Blocks</th><th class="num">Events</th><th class="num">Balance</th>
+    </tr></thead>
+    <tbody></tbody>
+  </table></div>
+  <div class="empty" id="account-empty" hidden>No indexed interactions for this account.</div>
+</section>
+
+<section>
+  <h2>Registered assets</h2>
+  <div class="row">
+    <input type="text" id="new-asset" placeholder="0x… contract address to index" spellcheck="false" autocomplete="off">
+    <button id="register" class="ghost">Register hint</button>
+  </div>
+  <div class="hint">Registration is permissionless and optimistic. This local shortcut mirrors what
+    <code>HintRegistry.registerAsset</code> does on-chain.</div>
+  <div class="err" id="asset-err" hidden></div>
+  <div class="scroll"><table id="assets-table">
+    <thead><tr>
+      <th>Contract</th><th>Token</th><th>Std</th><th>Status</th><th>Source</th>
+      <th class="num">Logs</th><th>Backfill</th>
+    </tr></thead>
+    <tbody></tbody>
+  </table></div>
+</section>
+
+<section>
+  <h2>On-chain index commitments</h2>
+  <div class="row">
+    <button id="build">Build &amp; publish commitment</button>
+    <button id="refresh-epochs" class="ghost">Refresh</button>
+  </div>
+  <div class="hint">Publishes a merkle root over the whole account→contracts index, with a challenge window.</div>
+  <div class="err" id="epoch-err" hidden></div>
+  <div class="scroll"><table id="epochs-table">
+    <thead><tr>
+      <th class="num">#</th><th>Root</th><th class="num">Accounts</th>
+      <th class="num">Range</th><th>Status</th><th>Tx</th>
+    </tr></thead>
+    <tbody></tbody>
+  </table></div>
+  <pre id="proof" hidden></pre>
+</section>
+
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+const short = (h, n = 6) => (h && h.length > 2 * n + 4) ? h.slice(0, n + 2) + '…' + h.slice(-n) : (h || '');
+
+async function api(path, opts) {
+  const res = await fetch(path, opts);
+  const text = await res.text();
+  let body;
+  try { body = text ? JSON.parse(text) : {}; } catch { body = { error: text }; }
+  if (!res.ok) throw new Error(body.detail || body.error || res.statusText);
+  return body;
+}
+
+function showErr(el, err) {
+  const node = $(el);
+  node.textContent = err ? String(err.message || err) : '';
+  node.hidden = !err;
+}
+
+// Formats a raw integer balance against its decimals without floating point, which
+// would silently lose precision on 18-decimal values.
+function formatUnits(raw, decimals) {
+  if (raw === undefined || raw === null) return '—';
+  const d = Number.isInteger(decimals) ? decimals : 0;
+  const neg = raw.startsWith('-');
+  let s = (neg ? raw.slice(1) : raw).padStart(d + 1, '0');
+  let whole = d ? s.slice(0, -d) : s;
+  let frac = d ? s.slice(-d).replace(/0+$/, '') : '';
+  whole = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  return (neg ? '-' : '') + whole + (frac ? '.' + frac.slice(0, 6) : '');
+}
+
+async function loadStatus() {
+  try {
+    const s = await api('/v1/status');
+    const c = s.chains && s.chains[0];
+    if (!c) return;
+    $('stats').innerHTML = [
+      ['chain', c.chain_id], ['head block', c.head_block],
+      ['assets', c.assets], ['accounts', c.accounts],
+      ['interactions', c.interactions], ['unconfirmed', c.pending_events],
+    ].map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
+
+    const note = $('node-note');
+    note.hidden = false;
+    note.innerHTML = c.node_local
+      ? `Reading <strong>your own node</strong> over <code>${c.node_transport}</code> — no third-party RPC in the path.`
+      : `<strong>Warning:</strong> this node is remote (<code>${c.node_transport}</code>), so a third party sees every query.`;
+  } catch (e) { showErr('account-err', e); }
+}
+
+async function loadAssets() {
+  try {
+    const { assets = [] } = await api('/v1/assets');
+    $('assets-table').querySelector('tbody').innerHTML = assets.length ? assets.map(a => `
+      <tr>
+        <td class="mono" title="${a.address}">${short(a.address)}</td>
+        <td>${a.symbol ? `<strong>${a.symbol}</strong>` : '<span class="empty">unknown</span>'}
+            ${a.name ? `<div class="hint">${a.name}</div>` : ''}</td>
+        <td><span class="tag">${a.standard}</span></td>
+        <td>${a.status}</td>
+        <td>${a.source}</td>
+        <td class="num">${a.logs_seen ?? 0}</td>
+        <td>${a.backfill_done ? '<span class="ok">complete</span>' : `to block ${a.backfill_next ?? '—'}`}</td>
+      </tr>`).join('') : `<tr><td colspan="7" class="empty">No assets registered yet.</td></tr>`;
+  } catch (e) { showErr('asset-err', e); }
+}
+
+async function lookup() {
+  const addr = $('account').value.trim();
+  if (!addr) return;
+  showErr('account-err', null);
+  $('lookup').disabled = true;
+  try {
+    const r = await api(`/v1/accounts/${addr}`);
+    const rows = r.assets || [];
+    $('account-table').hidden = rows.length === 0;
+    $('account-empty').hidden = rows.length !== 0;
+    $('account-table').querySelector('tbody').innerHTML = rows.map(a => `
+      <tr>
+        <td class="mono" title="${a.address}">${short(a.address)}</td>
+        <td>${a.symbol ? `<strong>${a.symbol}</strong>` : '<span class="empty">—</span>'}</td>
+        <td><span class="tag">${a.standard}</span></td>
+        <td>${(a.roles || []).map(x => `<span class="tag">${x}</span>`).join('')}</td>
+        <td class="num">${a.first_block}–${a.last_block}</td>
+        <td class="num">${a.event_count}</td>
+        <td class="num mono">${a.balance !== undefined
+            ? formatUnits(a.balance, a.decimals)
+            : (a.balance_error ? '<span class="empty">n/a</span>' : '—')}</td>
+      </tr>`).join('');
+  } catch (e) {
+    $('account-table').hidden = true;
+    $('account-empty').hidden = true;
+    showErr('account-err', e);
+  } finally { $('lookup').disabled = false; }
+}
+
+async function register() {
+  const address = $('new-asset').value.trim();
+  if (!address) return;
+  showErr('asset-err', null);
+  $('register').disabled = true;
+  try {
+    await api('/v1/assets', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ address }),
+    });
+    $('new-asset').value = '';
+    await loadAssets();
+  } catch (e) { showErr('asset-err', e); }
+  finally { $('register').disabled = false; }
+}
+
+async function loadEpochs() {
+  try {
+    const { epochs = [] } = await api('/v1/epochs');
+    $('epochs-table').querySelector('tbody').innerHTML = epochs.length ? epochs.map(e => `
+      <tr>
+        <td class="num">${e.id}</td>
+        <td class="mono" title="${e.merkle_root}">${short(e.merkle_root, 8)}</td>
+        <td class="num">${e.leaf_count}</td>
+        <td class="num">${e.from_block}–${e.to_block}</td>
+        <td>${e.status}</td>
+        <td class="mono" title="${e.tx_hash || ''}">${e.tx_hash ? short(e.tx_hash) : '<span class="empty">local</span>'}</td>
+      </tr>`).join('') : `<tr><td colspan="6" class="empty">No commitments built yet.</td></tr>`;
+  } catch (e) { showErr('epoch-err', e); }
+}
+
+async function buildEpoch() {
+  showErr('epoch-err', null);
+  $('build').disabled = true;
+  $('proof').hidden = true;
+  try {
+    const e = await api('/v1/epochs', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ publish: true }),
+    });
+    await loadEpochs();
+
+    // If an account is loaded, immediately show its inclusion proof: the commitment
+    // is only interesting if you can prove membership in it.
+    const addr = $('account').value.trim();
+    if (addr) {
+      try {
+        const p = await api(`/v1/epochs/${e.id}/proof?account=${encodeURIComponent(addr)}`);
+        $('proof').hidden = false;
+        $('proof').textContent = JSON.stringify(p, null, 2);
+      } catch { /* account simply may not be in this commitment */ }
+    }
+  } catch (e) { showErr('epoch-err', e); }
+  finally { $('build').disabled = false; }
+}
+
+$('lookup').addEventListener('click', lookup);
+$('account').addEventListener('keydown', e => { if (e.key === 'Enter') lookup(); });
+$('register').addEventListener('click', register);
+$('new-asset').addEventListener('keydown', e => { if (e.key === 'Enter') register(); });
+$('build').addEventListener('click', buildEpoch);
+$('refresh-epochs').addEventListener('click', loadEpochs);
+
+loadStatus(); loadAssets(); loadEpochs();
+setInterval(() => { loadStatus(); loadAssets(); }, 5000);
+</script>
+</body>
+</html>

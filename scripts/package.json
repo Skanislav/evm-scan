@@ -1,0 +1,11 @@
+{
+  "name": "evm-scan-contracts",
+  "private": true,
+  "description": "Solidity toolchain for evm-scan. Only needed to recompile contracts.",
+  "scripts": {
+    "compile": "node compile.js"
+  },
+  "dependencies": {
+    "solc": "0.8.28"
+  }
+}

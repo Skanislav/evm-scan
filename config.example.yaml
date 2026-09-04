@@ -1,0 +1,43 @@
+# evm-scan configuration.
+#
+# Copy to config.yaml and edit. Secrets are better supplied via the environment:
+#   EVMSCAN_DATABASE_DSN, EVMSCAN_PUBLISHER_KEY, EVMSCAN_REGISTRY_ADDRESS, EVMSCAN_NODE
+
+database:
+  dsn: "postgres://evmscan:evmscan@127.0.0.1:5432/evmscan?sslmode=disable"
+  auto_migrate: true
+
+api:
+  listen: "127.0.0.1:8080"
+  cors_origin: ""
+  # Lets the HTTP API add asset hints directly, bypassing the on-chain registry.
+  # Handy locally; the on-chain HintRegistry is the real, auditable way in.
+  allow_registration: false
+
+registry:
+  # The chain the HintRegistry is deployed on. It must also appear under `chains`.
+  chain_id: 1
+  address: ""
+  # Signs index commitments. Prefer EVMSCAN_PUBLISHER_KEY over writing it here.
+  publisher_key: ""
+  sync_interval: 30s
+  # Set > 0 to build and post a commitment on a timer.
+  auto_publish_interval: 0
+  commitment_uri: ""
+
+chains:
+  - chain_id: 1
+    name: mainnet
+    # YOUR OWN node: an IPC path, or ws:// / http:// on loopback.
+    # A snap-synced geth is enough — this design never asks for historical state.
+    node: "/var/lib/geth/geth.ipc"
+    # Refuses to start against a non-loopback endpoint. Leave on unless you have
+    # deliberately decided to depend on a third-party RPC.
+    require_local_node: true
+    # Depth at which events are folded into the rollup. Events shallower than this
+    # stay in a buffer, so a reorg up to this depth cannot corrupt the index.
+    confirmations: 12
+    backfill_window: 5000
+    tail_window: 1000
+    poll_interval: 6s
+    backfill_interval: 1s
