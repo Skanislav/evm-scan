@@ -78,7 +78,7 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 
 	sources := map[uint64]chain.Source{}
 	services := map[uint64]*indexer.Service{}
-	nudgers := map[uint64]api.Nudger{}
+	workers := map[uint64]api.Worker{}
 	defer func() {
 		for _, s := range sources {
 			s.Close()
@@ -111,13 +111,24 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 			TailWindow:       c.TailWindow,
 			PollInterval:     c.PollInterval.D(),
 			BackfillInterval: c.BackfillInterval.D(),
+			Discovery: indexer.DiscoveryOptions{
+				Enabled:              c.Discovery.Enabled,
+				Lookback:             c.Discovery.Lookback,
+				MaxBlocksPerTick:     c.Discovery.MaxBlocksPerTick,
+				Interval:             c.Discovery.Interval.D(),
+				AutoPromote:          c.Discovery.AutoPromote,
+				MinEvents:            c.Discovery.MinEvents,
+				MinBlocks:            c.Discovery.MinBlocks,
+				MaxPromotionsPerTick: c.Discovery.MaxPromotionsPerTick,
+			},
 		}, log)
 		services[c.ChainID] = svc
-		nudgers[c.ChainID] = svc
+		workers[c.ChainID] = svc
 
 		log.Info("chain ready",
 			"chain_id", c.ChainID, "name", c.Name,
-			"node", node.Endpoint().String(), "confirmations", c.Confirmations)
+			"node", node.Endpoint().String(), "confirmations", c.Confirmations,
+			"discovery", c.Discovery.Enabled, "auto_promote", c.Discovery.AutoPromote)
 	}
 
 	var (
@@ -168,7 +179,7 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 		Handler: api.New(api.Deps{
 			Store:             st,
 			Sources:           sources,
-			Nudgers:           nudgers,
+			Workers:           workers,
 			Registry:          regClient,
 			RegistryChainID:   cfg.Registry.ChainID,
 			Publisher:         publisher,

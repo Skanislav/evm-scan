@@ -19,8 +19,9 @@ const (
 
 // Asset hint sources.
 const (
-	SourceOnchain = "onchain" // mirrored from HintRegistry
-	SourceLocal   = "local"   // added directly via the API
+	SourceOnchain    = "onchain"    // mirrored from HintRegistry
+	SourceLocal      = "local"      // added directly via the API
+	SourceDiscovered = "discovered" // observed at the head and promoted
 )
 
 // Asset is a registered contract that we are willing to scan.
@@ -36,6 +37,9 @@ type Asset struct {
 	RegistryKey   []byte
 	Source        string
 	Status        string
+	// Promoted marks an asset the indexer chose to index after observing it at the
+	// head, rather than one someone registered.
+	Promoted bool
 }
 
 // Cursor is an asset's two-pointer scan progress.
@@ -47,6 +51,9 @@ type Cursor struct {
 	BackfillDone bool
 	TailBlock    uint64
 	LogsSeen     uint64
+	// BackfillFloor is the block the backfill will stop at, which is the node's
+	// history horizon when that sits above the requested from_block.
+	BackfillFloor uint64
 }
 
 // UpsertChain records a chain we are indexing.
@@ -80,24 +87,26 @@ func (s *Store) RegisterAsset(ctx context.Context, a Asset, anchorBlock uint64) 
 			registrant = a.Registrant.Bytes()
 		}
 
-		tag, err := tx.Exec(ctx, `
+		if _, err := tx.Exec(ctx, `
 			INSERT INTO assets (chain_id, address, standard, symbol, name, decimals,
-			                    hint_from_block, registrant, registry_key, source, status)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+			                    hint_from_block, registrant, registry_key, source, status,
+			                    promoted_from_candidate)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
 			ON CONFLICT (chain_id, address) DO UPDATE SET
 				standard     = CASE WHEN assets.standard = 0 THEN EXCLUDED.standard ELSE assets.standard END,
 				symbol       = COALESCE(NULLIF(EXCLUDED.symbol, ''), assets.symbol),
 				name         = COALESCE(NULLIF(EXCLUDED.name, ''), assets.name),
 				decimals     = COALESCE(EXCLUDED.decimals, assets.decimals),
 				registry_key = COALESCE(EXCLUDED.registry_key, assets.registry_key),
-				source       = EXCLUDED.source,
+				-- An on-chain registration outranks a local or discovered one: it is the
+				-- bonded, publicly auditable claim on this contract.
+				source       = CASE WHEN EXCLUDED.source = 'onchain' THEN EXCLUDED.source ELSE assets.source END,
 				status       = CASE WHEN assets.status = 'revoked' THEN 'pending' ELSE assets.status END`,
 			int64(a.ChainID), a.Address.Bytes(), int16(a.Standard), a.Symbol, a.Name, a.Decimals,
-			int64(a.HintFromBlock), registrant, a.RegistryKey, a.Source, StatusPending)
-		if err != nil {
+			int64(a.HintFromBlock), registrant, a.RegistryKey, a.Source, StatusPending,
+			a.Promoted); err != nil {
 			return err
 		}
-		_ = tag
 
 		// Seed the cursor only on first registration; DO NOTHING protects progress.
 		ct, err := tx.Exec(ctx, `
@@ -126,7 +135,7 @@ func backfillStart(anchor uint64) uint64 {
 func (s *Store) GetAsset(ctx context.Context, chainID uint64, addr common.Address) (Asset, error) {
 	row := s.pool.QueryRow(ctx, `
 		SELECT chain_id, address, standard, COALESCE(symbol,''), COALESCE(name,''), decimals,
-		       hint_from_block, registrant, registry_key, source, status
+		       hint_from_block, registrant, registry_key, source, status, promoted_from_candidate
 		FROM assets WHERE chain_id = $1 AND address = $2`,
 		int64(chainID), addr.Bytes())
 	a, err := scanAsset(row)
@@ -140,7 +149,7 @@ func (s *Store) GetAsset(ctx context.Context, chainID uint64, addr common.Addres
 func (s *Store) ListAssets(ctx context.Context, chainID uint64, includeRevoked bool) ([]Asset, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT chain_id, address, standard, COALESCE(symbol,''), COALESCE(name,''), decimals,
-		       hint_from_block, registrant, registry_key, source, status
+		       hint_from_block, registrant, registry_key, source, status, promoted_from_candidate
 		FROM assets
 		WHERE ($1 = 0 OR chain_id = $1)
 		  AND ($2 OR status <> 'revoked')
@@ -174,7 +183,7 @@ func scanAsset(r scannable) (Asset, error) {
 		registrant []byte
 	)
 	if err := r.Scan(&chainID, &addr, &standard, &a.Symbol, &a.Name, &a.Decimals,
-		&hintFrom, &registrant, &a.RegistryKey, &a.Source, &a.Status); err != nil {
+		&hintFrom, &registrant, &a.RegistryKey, &a.Source, &a.Status, &a.Promoted); err != nil {
 		return Asset{}, err
 	}
 	a.ChainID = uint64(chainID)
@@ -220,12 +229,14 @@ func (s *Store) GetCursor(ctx context.Context, chainID uint64, addr common.Addre
 		next     int64
 		tail     int64
 		logsSeen int64
+		floor    int64
 	)
 	err := s.pool.QueryRow(ctx, `
-		SELECT chain_id, address, anchor_block, backfill_next, backfill_done, tail_block, logs_seen
+		SELECT chain_id, address, anchor_block, backfill_next, backfill_done, tail_block, logs_seen,
+		       backfill_floor
 		FROM asset_cursors WHERE chain_id = $1 AND address = $2`,
 		int64(chainID), addr.Bytes()).
-		Scan(&cid, &a, &anchor, &next, &c.BackfillDone, &tail, &logsSeen)
+		Scan(&cid, &a, &anchor, &next, &c.BackfillDone, &tail, &logsSeen, &floor)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Cursor{}, ErrNotFound
 	}
@@ -238,6 +249,7 @@ func (s *Store) GetCursor(ctx context.Context, chainID uint64, addr common.Addre
 	c.BackfillNext = uint64(next)
 	c.TailBlock = uint64(tail)
 	c.LogsSeen = uint64(logsSeen)
+	c.BackfillFloor = uint64(floor)
 	return c, nil
 }
 
@@ -245,7 +257,7 @@ func (s *Store) GetCursor(ctx context.Context, chainID uint64, addr common.Addre
 func (s *Store) ListCursors(ctx context.Context, chainID uint64) ([]Cursor, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT c.chain_id, c.address, c.anchor_block, c.backfill_next, c.backfill_done,
-		       c.tail_block, c.logs_seen
+		       c.tail_block, c.logs_seen, c.backfill_floor
 		FROM asset_cursors c
 		JOIN assets a ON a.chain_id = c.chain_id AND a.address = c.address
 		WHERE c.chain_id = $1 AND a.status <> 'revoked'
@@ -258,12 +270,12 @@ func (s *Store) ListCursors(ctx context.Context, chainID uint64) ([]Cursor, erro
 	var out []Cursor
 	for rows.Next() {
 		var (
-			c                            Cursor
-			cid                          int64
-			a                            []byte
-			anchor, next, tail, logsSeen int64
+			c                                   Cursor
+			cid                                 int64
+			a                                   []byte
+			anchor, next, tail, logsSeen, floor int64
 		)
-		if err := rows.Scan(&cid, &a, &anchor, &next, &c.BackfillDone, &tail, &logsSeen); err != nil {
+		if err := rows.Scan(&cid, &a, &anchor, &next, &c.BackfillDone, &tail, &logsSeen, &floor); err != nil {
 			return nil, err
 		}
 		c.ChainID = uint64(cid)
@@ -272,6 +284,7 @@ func (s *Store) ListCursors(ctx context.Context, chainID uint64) ([]Cursor, erro
 		c.BackfillNext = uint64(next)
 		c.TailBlock = uint64(tail)
 		c.LogsSeen = uint64(logsSeen)
+		c.BackfillFloor = uint64(floor)
 		out = append(out, c)
 	}
 	return out, rows.Err()

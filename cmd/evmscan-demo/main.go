@@ -103,9 +103,16 @@ func run(ctx context.Context, nodeURL string, userCount int, outPath, dsn, liste
 	if err != nil {
 		return fmt.Errorf("deploy DemoERC721: %w", err)
 	}
+	// Deliberately never registered in HintRegistry. Runtime discovery has to find
+	// this one on its own, which is the whole point of watching the head.
+	stealth, err := d.deploy(ctx, "DemoERC20", "Demo Stealth Token", "dSTEALTH")
+	if err != nil {
+		return fmt.Errorf("deploy DemoERC20: %w", err)
+	}
 	fmt.Printf("DemoERC20     %s  (dUSDC)\n", usdc.Hex())
 	fmt.Printf("DemoERC20     %s  (dWETH)\n", weth.Hex())
 	fmt.Printf("DemoERC721    %s  (dPUNK)\n", nft.Hex())
+	fmt.Printf("DemoERC20     %s  (dSTEALTH, NOT registered - for discovery)\n", stealth.Hex())
 
 	// ------------------------------------------------------------ publisher
 	publisherKey, err := deriveKey("evm-scan demo publisher")
@@ -152,7 +159,7 @@ func run(ctx context.Context, nodeURL string, userCount int, outPath, dsn, liste
 	// Mints from the faucet: every user receives both tokens and an NFT, which is
 	// what makes them discoverable at all.
 	for _, w := range wallets {
-		for _, tok := range []common.Address{usdc, weth} {
+		for _, tok := range []common.Address{usdc, weth, stealth} {
 			data, err := erc20ABI.Pack("mint", w.addr, ether(1000))
 			if err != nil {
 				return err
@@ -203,9 +210,35 @@ func run(ctx context.Context, nodeURL string, userCount int, outPath, dsn, liste
 		if _, err := d.sendFrom(ctx, w, &nft, nil, data, callGas); err != nil {
 			return err
 		}
+
+		data, err = erc20ABI.Pack("transfer", peer, ether(1))
+		if err != nil {
+			return err
+		}
+		if _, err := d.sendFrom(ctx, w, &stealth, nil, data, callGas); err != nil {
+			return err
+		}
 	}
 	if err := d.wait(ctx); err != nil {
 		return err
+	}
+
+	// Spread more stealth-token activity over several blocks so it accumulates the
+	// blocks_seen a promotion threshold looks for.
+	for round := 0; round < 3; round++ {
+		for i, w := range wallets {
+			peer := wallets[(i+round+2)%len(wallets)].addr
+			data, err := erc20ABI.Pack("transfer", peer, ether(1))
+			if err != nil {
+				return err
+			}
+			if _, err := d.sendFrom(ctx, w, &stealth, nil, data, callGas); err != nil {
+				return err
+			}
+		}
+		if err := d.wait(ctx); err != nil {
+			return err
+		}
 	}
 
 	// ------------------------------------------------------- register hints
@@ -428,6 +461,20 @@ chains:
     tail_window: 1000
     poll_interval: 2s
     backfill_interval: 1s
+
+    # Watch the head for contracts nobody registered. dSTEALTH above is deployed but
+    # never registered, so it should show up under /v1/candidates.
+    discovery:
+      enabled: true
+      lookback: 100000
+      max_blocks_per_tick: 5000
+      interval: 3s
+      # Low thresholds so the demo promotes something within a minute. Production
+      # wants these far higher, or auto_promote off entirely.
+      auto_promote: true
+      min_events: 10
+      min_blocks: 3
+      max_promotions_per_tick: 5
 `, dsn, listen, chainID, registry.Hex(),
 		fmt.Sprintf("0x%x", crypto.FromECDSA(key)), chainID, node)
 

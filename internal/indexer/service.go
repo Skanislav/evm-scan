@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -30,6 +31,10 @@ type Options struct {
 	// PollInterval is the follower's floor cadence; a log subscription wakes it sooner.
 	PollInterval     time.Duration
 	BackfillInterval time.Duration
+
+	// Discovery controls the head-watching sweep that finds contracts nobody has
+	// registered yet.
+	Discovery DiscoveryOptions
 }
 
 func (o Options) withDefaults() Options {
@@ -45,6 +50,7 @@ func (o Options) withDefaults() Options {
 	if o.BackfillInterval <= 0 {
 		o.BackfillInterval = time.Second
 	}
+	o.Discovery = o.Discovery.withDefaults()
 	return o
 }
 
@@ -56,6 +62,11 @@ type Service struct {
 	opt     Options
 	log     *slog.Logger
 	wake    chan struct{}
+
+	// historyFloor is the oldest block this node can serve logs for. Backfills stop
+	// here rather than at genesis, so the deployment never depends on a node that
+	// kept all history.
+	historyFloor atomic.Uint64
 }
 
 // New builds a Service for an already-dialled source.
@@ -75,9 +86,13 @@ func (s *Service) Run(ctx context.Context) error {
 	if err := s.st.UpsertChain(ctx, s.chainID, s.opt.ChainName); err != nil {
 		return err
 	}
+	if err := s.resolveHistoryFloor(ctx); err != nil {
+		return err
+	}
 
 	go s.subscribe(ctx)
 	go s.runBackfill(ctx)
+	go s.runDiscovery(ctx)
 
 	ticker := time.NewTicker(s.opt.PollInterval)
 	defer ticker.Stop()
@@ -344,9 +359,14 @@ func (s *Service) backfillAsset(ctx context.Context, c store.Cursor) error {
 		return err
 	}
 
-	floor := asset.HintFromBlock
+	floor := resolveBackfillFloor(asset.HintFromBlock, s.HistoryFloor())
 	if c.AnchorBlock == 0 || c.BackfillNext < floor {
-		return s.finishBackfill(ctx, c.Address)
+		return s.finishBackfill(ctx, c.Address, floor)
+	}
+	if c.BackfillFloor != floor {
+		if err := s.st.SetBackfillFloor(ctx, s.chainID, c.Address, floor); err != nil {
+			return err
+		}
 	}
 
 	to := c.BackfillNext
@@ -368,6 +388,13 @@ func (s *Service) backfillAsset(ctx context.Context, c store.Cursor) error {
 		Topics:    evmlog.WatchedTopics(),
 	})
 	if err != nil {
+		// A node that pruned further while we were running would fail here forever,
+		// so re-probe the horizon before giving up on this window.
+		if reprobed := s.reprobeHistoryFloor(ctx); reprobed > floor {
+			s.log.Warn("node history horizon moved up; raising backfill floor",
+				"asset", c.Address.Hex(), "old_floor", floor, "new_floor", reprobed)
+			return nil
+		}
 		return fmt.Errorf("backfill getLogs [%d,%d]: %w", from, to, err)
 	}
 
@@ -411,15 +438,68 @@ func (s *Service) backfillAsset(ctx context.Context, c store.Cursor) error {
 		"from", from, "to", to, "logs", len(logs), "done", done)
 
 	if done {
-		return s.finishBackfill(ctx, c.Address)
+		return s.finishBackfill(ctx, c.Address, floor)
 	}
 	return nil
 }
 
-func (s *Service) finishBackfill(ctx context.Context, addr common.Address) error {
+func (s *Service) finishBackfill(ctx context.Context, addr common.Address, floor uint64) error {
 	if err := s.st.AdvanceBackfill(ctx, s.chainID, addr, 0, true, 0); err != nil {
 		return err
 	}
-	s.log.Info("backfill complete", "asset", addr.Hex())
+	if err := s.st.SetBackfillFloor(ctx, s.chainID, addr, floor); err != nil {
+		return err
+	}
+	s.log.Info("backfill complete", "asset", addr.Hex(), "floor", floor)
 	return s.st.SetAssetStatus(ctx, s.chainID, addr, store.StatusLive)
+}
+
+// resolveBackfillFloor picks the block a history walk stops at.
+//
+// The requested from_block is what someone asked for; the node's history horizon is
+// what is actually reachable. The stricter of the two wins, which is what keeps this
+// design from depending on a node that retained history back to genesis — walking
+// below the horizon would just fail on every tick, forever.
+func resolveBackfillFloor(requested, historyFloor uint64) uint64 {
+	if historyFloor > requested {
+		return historyFloor
+	}
+	return requested
+}
+
+// HistoryFloor is the oldest block this chain's node can serve logs for.
+func (s *Service) HistoryFloor() uint64 { return s.historyFloor.Load() }
+
+// resolveHistoryFloor probes the node once at startup and caches the result.
+func (s *Service) resolveHistoryFloor(ctx context.Context) error {
+	head, err := s.src.HeadBlock(ctx)
+	if err != nil {
+		return fmt.Errorf("history floor: head: %w", err)
+	}
+	floor, err := chain.HistoryFloor(ctx, s.src, head)
+	if err != nil {
+		return fmt.Errorf("history floor: %w", err)
+	}
+
+	s.historyFloor.Store(floor)
+	if err := s.st.SetHistoryFloor(ctx, s.chainID, floor); err != nil {
+		return err
+	}
+
+	if floor == 0 {
+		s.log.Info("node serves logs back to genesis", "head", head)
+	} else {
+		s.log.Info("node history horizon probed; backfills will stop here, not at genesis",
+			"floor", floor, "head", head)
+	}
+	return nil
+}
+
+// reprobeHistoryFloor re-runs the probe after a backfill failure and returns the new
+// floor. Errors are swallowed: the caller only wants to know whether the horizon moved.
+func (s *Service) reprobeHistoryFloor(ctx context.Context) uint64 {
+	if err := s.resolveHistoryFloor(ctx); err != nil {
+		s.log.Debug("history floor re-probe failed", "err", err)
+	}
+	return s.HistoryFloor()
 }

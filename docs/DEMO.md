@@ -50,6 +50,10 @@ This deploys `HintRegistry`, two ERC-20s and an ERC-721, funds six deterministic
 accounts, generates mints / transfers / approvals between them, registers the three
 tokens as hints, and writes a ready-to-run config.
 
+It also deploys a fourth token, **dSTEALTH**, and deliberately *never registers it*.
+Runtime discovery has to find that one by watching the head — which is the behaviour
+worth watching in step 5.
+
 Note the printed user addresses — you'll paste one into the UI.
 
 > `config.demo.yaml` contains a dev-chain private key derived from a fixed seed. It is
@@ -70,9 +74,33 @@ the backfill complete, and the index fill in.
 tokens; it read them out of `HintRegistry`. Register another contract from any account
 and the indexer picks it up within `registry.sync_interval`.
 
+**Runtime discovery is the interesting part.** Nothing registered dSTEALTH, yet it
+appears under "Discovered at the head" within a few seconds, and — because the generated
+config sets deliberately low thresholds — gets promoted to a real indexed asset. Check:
+
+```bash
+curl 'localhost:8080/v1/candidates?include_promoted=true'
+```
+
+The promotion reason records why (`auto: N events across M blocks`). In the assets table
+it shows up with `source: discovered`. Promote one by hand instead with:
+
+```bash
+curl -XPOST localhost:8080/v1/candidates/0xADDR/promote -d '{"reason":"looks useful"}'
+```
+
+Production configs should set `auto_promote: false` and let the on-chain registry decide;
+the demo turns it on so there is something to watch.
+
+**The history floor.** `/v1/status` reports `history_floor`: the oldest block this node
+can serve logs for, found by probing rather than assumed. A dev chain reports genesis. A
+node synced without ancient receipts reports wherever its receipts begin, and backfills
+stop there — assets then report `history_complete: false` rather than implying coverage
+they do not have.
+
 **The two-pointer scan.** In the assets table, watch `backfill` while the head keeps
-moving. The follower is already producing data from the registration anchor forward
-while history fills in behind it.
+moving. The follower is already producing data from the promotion anchor forward while
+history fills in behind it.
 
 **Commit the index on-chain**, then verify it without trusting the API:
 

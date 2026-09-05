@@ -64,6 +64,32 @@ type Chain struct {
 	TailWindow       uint64   `yaml:"tail_window"`
 	PollInterval     Duration `yaml:"poll_interval"`
 	BackfillInterval Duration `yaml:"backfill_interval"`
+	// Discovery finds contracts by watching the head, rather than requiring every
+	// contract to be registered up front.
+	Discovery Discovery `yaml:"discovery"`
+}
+
+// Discovery configures the head-watching sweep.
+//
+// Discovery is intentionally forward-looking: it never walks history. History is the
+// expensive resource, and this design only spends it on contracts something has
+// already decided are worth indexing.
+type Discovery struct {
+	// Enabled turns on the sweep. Off means only registered assets are ever indexed.
+	Enabled bool `yaml:"enabled"`
+	// Lookback is how far behind the head a cold start begins.
+	Lookback uint64 `yaml:"lookback"`
+	// MaxBlocksPerTick bounds catch-up so discovery cannot starve the indexer.
+	MaxBlocksPerTick uint64   `yaml:"max_blocks_per_tick"`
+	Interval         Duration `yaml:"interval"`
+
+	// AutoPromote lets activity thresholds alone commit a contract to being indexed.
+	// Off by default: promotion costs a full backfill, and the on-chain registry is
+	// the authoritative signal for "this contract matters".
+	AutoPromote          bool   `yaml:"auto_promote"`
+	MinEvents            uint64 `yaml:"min_events"`
+	MinBlocks            uint64 `yaml:"min_blocks"`
+	MaxPromotionsPerTick int    `yaml:"max_promotions_per_tick"`
 }
 
 // RequireLocal resolves the tri-state flag, defaulting to true.

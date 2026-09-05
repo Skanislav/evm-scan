@@ -41,3 +41,24 @@ chains:
     tail_window: 1000
     poll_interval: 6s
     backfill_interval: 1s
+
+    # Runtime discovery: watch the head for contracts nobody has registered.
+    #
+    # This is the only query that looks at every contract on the chain, and it stores
+    # counters only — never per-account rows. A contract becomes expensive to index
+    # exactly when it is promoted, not when it is noticed.
+    discovery:
+      enabled: true
+      # Cold starts begin this far behind the head. Discovery never walks history:
+      # history is what we spend *after* deciding a contract is worth indexing.
+      lookback: 10000
+      max_blocks_per_tick: 5000
+      interval: 5s
+
+      # Promote on activity alone. Off by default — promotion commits a full backfill,
+      # and the on-chain HintRegistry is the authoritative "this contract matters"
+      # signal. Turn it on to let the indexer bootstrap itself.
+      auto_promote: false
+      min_events: 100
+      min_blocks: 25
+      max_promotions_per_tick: 5

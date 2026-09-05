@@ -12,46 +12,60 @@ for, and publish the result back on-chain so nobody has to trust the indexer.
 
 ## The idea
 
-Three moves, each of which removes a dependency:
+Four moves, each of which removes a dependency:
 
-**1. Index an allowlist, not a chain.** A general indexer must process every log ever
-emitted. evm-scan only scans contracts that appear in an on-chain `HintRegistry`. The
-index is bounded by the registered asset set rather than by chain size, which is what
-makes it small enough to run yourself.
+**1. Discover contracts at runtime, don't demand a list.** The indexer watches the head
+with a topic filter and records every contract emitting identity-carrying token events.
+That costs a counter per contract — no per-account rows, no history reads. Nothing has
+to be known up front.
 
-**2. Registration is permissionless and optimistic.** Anyone can register a
-`(chainId, contract)` pair. There is no allowlist committee and no review. That is safe
-because a hint confers nothing: it only asks the indexer to read logs that are already
-public. A bad hint wastes our disk, not your trust. Registration buys exactly one
-guarantee — that contract's full log history gets read **at least once**, which is
-enough to build a complete per-account index for it.
+**2. Spend history only on what earns it.** A discovered contract is just a *candidate*.
+Only when one is promoted — because it was registered on-chain, because an operator
+said so, or because it crossed an activity threshold — does it get a per-account index
+and a walk back through its history. Discovery is cheap and wide; indexing is expensive
+and narrow. Keeping those separate is what makes the whole thing fit on one machine.
 
-**3. The output is a hint, not an oracle.** The derived `account → contracts` table is
+**3. Registration is permissionless and optimistic.** Anyone can register a
+`(chainId, contract)` pair in the on-chain `HintRegistry`. There is no allowlist
+committee and no review. That is safe because a hint confers nothing: it only asks the
+indexer to read logs that are already public. A bad hint wastes our disk, not your
+trust. Registration is the authoritative "this contract is worth indexing" signal, and
+it buys one guarantee — that contract's available log history gets read **at least
+once**, which is enough to build a complete per-account index for it.
+
+**4. The output is a hint, not an oracle.** The derived `account → contracts` table is
 committed on-chain as a merkle root with a challenge window. A wallet uses it to learn
 *which contracts are worth pulling history for*, then fetches that history from whatever
 source it trusts — including its own node. Nothing here has to be believed, which is why
 publishing it permissionlessly is safe.
 
-## Why snap sync is enough
+## Why a snap-synced node is enough
 
 The node requirement is the difference between "you could run this" and "you won't".
-An archive node is terabytes; a snap-synced geth is not, and it is sufficient here.
+This design uses exactly two node operations, and neither needs an archive:
 
-Snap sync backfills every header, body and **receipt** to genesis while keeping state
-only at the head. So it serves exactly the two operations this design uses:
-
-| Need | Call | Available after snap sync |
+| Need | Call | Requires |
 | --- | --- | --- |
-| Which accounts touched a contract | `eth_getLogs` over all history | yes — receipts are backfilled |
-| What does this account hold now | `eth_call` at head | yes — head state is present |
+| Which accounts touched a contract | `eth_getLogs` | receipts, for the range being read |
+| What does this account hold now | `eth_call` at head | head state |
 
-What it cannot serve is **historical state**, so nothing in this codebase asks for a
-balance at an old block. That constraint is deliberate and load-bearing: it is the reason
-the node requirement stays at snap sync.
+Two things follow, and both are load-bearing:
 
-Balances are read live rather than summed from `Transfer` events, which also happens to
-be the *correct* choice — rebasing, fee-on-transfer and upgradeable tokens all make
-event-derived balances wrong.
+**No historical state, ever.** Nothing in this codebase asks for a balance at an old
+block, so no archive node. Balances are read live from head — which is also the *correct*
+answer, since rebasing, fee-on-transfer and upgradeable tokens all make balances derived
+from summed `Transfer` events wrong.
+
+**No assumption that history reaches genesis.** A node may have been synced without
+ancient receipts, or may prune them later. So the indexer *probes* its node for the
+oldest block whose logs it can actually serve (a binary search over `eth_getLogs`, since
+there is no RPC for this) and treats that as a hard floor. Backfills stop there. An asset
+whose history is truncated by the floor reports `history_complete: false` rather than
+implying coverage it does not have.
+
+That is why discovery runs forward from the head rather than backward from genesis:
+history is the scarce resource, and the system only spends it on contracts something has
+already decided are worth indexing.
 
 ## Architecture
 
@@ -64,19 +78,31 @@ event-derived balances wrong.
               ▼  │
     ┌──────────────────────┐        ┌─────────────────────────┐
     │      evmscand        │        │  your own geth          │
-    │                      │        │  (snap sync)            │
-    │  backfiller  ────────┼───────►│  eth_getLogs            │
+    │                      │        │  (snap sync, any depth) │
+    │  discovery   ────────┼───────►│  eth_getLogs (all)      │
     │  follower    ────────┼───────►│  eth_subscribe          │
+    │  backfiller  ────────┼───────►│  eth_getLogs (promoted) │
     │  api         ────────┼───────►│  eth_call (head)        │
     └──────────┬───────────┘  IPC   └─────────────────────────┘
                │
-          PostgreSQL          interactions rollup + pending buffer
+          PostgreSQL     candidates (counters) + interactions rollup
 ```
 
-**Two workers per chain, splitting at the registration anchor.** When an asset is
-registered at block *N*, the **follower** walks forward from *N* and the **backfiller**
-walks backward toward its deploy block. A newly registered contract produces useful data
-within one block instead of after a full history scan, while history fills in behind it.
+**Discovery is wide and shallow; indexing is narrow and deep.** The discovery sweep is
+the one query with no address filter — it looks at every contract on the chain — but it
+only ever writes counters (`event_count`, `blocks_seen`) to a `candidates` table. The
+per-account index, and any history read, is reserved for promoted contracts. That
+asymmetry is what lets a single machine watch a whole chain.
+
+**Three ways in.** A contract becomes indexed by being registered in the on-chain
+registry, by an operator promoting it (`POST /v1/candidates/{addr}/promote`), or by
+crossing activity thresholds when `auto_promote` is on. The last is off by default:
+promotion commits a real backfill, and the registry is the authoritative signal.
+
+**Two workers per promoted asset, splitting at the promotion anchor.** From block *N*,
+the **follower** walks forward and the **backfiller** walks backward toward the node's
+history floor. A newly promoted contract produces useful data within one block instead of
+after a full history scan, while history fills in behind it.
 
 **Reorgs cannot corrupt the index.** `interactions` is a rollup, and events only enter it
 once they are deeper than the configured confirmation lag. Shallower events sit in a small
@@ -142,6 +168,8 @@ snap-synced geth's IPC path, and raise `confirmations` to your reorg tolerance.
 | `GET` | `/v1/assets` | Registered hints and their scan progress. |
 | `POST` | `/v1/assets` | Register a hint locally (gated by `api.allow_registration`). |
 | `GET` | `/v1/assets/{addr}/accounts` | Accounts known to have touched a contract. |
+| `GET` | `/v1/candidates` | Contracts discovered at the head, ranked by activity. |
+| `POST` | `/v1/candidates/{addr}/promote` | Commit a discovered contract to being indexed. |
 | `GET` | `/v1/epochs` · `POST /v1/epochs` | List / build + publish commitments. |
 | `GET` | `/v1/epochs/{id}/proof?account=` | Inclusion proof for `verifyInclusion`. |
 | `GET` | `/v1/status` · `/v1/health` | Sync state, node locality, index size. |
@@ -154,7 +182,7 @@ Every account response carries `as_of_block` so a caller can pin what it saw.
 contracts/src/       HintRegistry.sol + demo tokens; artifacts committed to contracts/out
 internal/chain/      the only place that touches a node (Source read / Sender write)
 internal/evmlog/     log decoding — which topics we watch and who is in them
-internal/indexer/    backfiller, follower, reorg handling, rollup aggregation
+internal/indexer/    discovery, backfiller, follower, reorg handling, rollup aggregation
 internal/store/      PostgreSQL: rollup, pending buffer, commitments
 internal/merkle/     commitment tree; must match HintRegistry byte-for-byte
 internal/hintreg/    registry mirror (pull hints) + publisher (push commitments)
@@ -177,6 +205,12 @@ Being explicit about what this does *not* do:
   hard and out of scope here. The honest path forward is an optimistic oracle.
 - **Reorgs deeper than `confirmations` are not repaired.** Same as every indexer of this
   shape; the lag is configurable.
+- **History is only as deep as your node.** The floor is probed, respected and reported,
+  but an asset promoted on a node without ancient receipts simply has shallower history.
+  `history_complete` on the asset says whether the walk reached what was asked for.
+- **Candidate ranking is crude** — event count and distinct blocks. It separates active
+  contracts from idle ones, but not a widely-held token from a large spam airdrop. That
+  is why `auto_promote` defaults to off and the on-chain registry stays authoritative.
 - **Only identity-carrying token events are decoded** (`Transfer`, `Approval`,
   `ApprovalForAll`, `TransferSingle`, `TransferBatch`). A contract whose interactions
   never surface an address in an indexed topic will not produce hints.

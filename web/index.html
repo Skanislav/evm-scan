@@ -71,9 +71,10 @@
 <header>
   <h1>evm-scan</h1>
   <p class="sub">
-    Permissionless asset indexing over your own node. Contracts are registered on-chain
-    as <em>hints</em>; only those are scanned. The result is a per-account discovery
-    index, committed back on-chain as a merkle root.
+    Permissionless asset indexing over your own node. Contracts are found by watching
+    the head, or registered on-chain as <em>hints</em>. Only promoted ones get a full
+    history walk — down to whatever history the node kept, never assuming genesis.
+    The result is a per-account discovery index, committed back on-chain as a merkle root.
   </p>
 </header>
 
@@ -114,6 +115,26 @@
     <thead><tr>
       <th>Contract</th><th>Token</th><th>Std</th><th>Status</th><th>Source</th>
       <th class="num">Logs</th><th>Backfill</th>
+    </tr></thead>
+    <tbody></tbody>
+  </table></div>
+</section>
+
+<section>
+  <h2>Discovered at the head</h2>
+  <p class="hint" style="margin-top:0">
+    Contracts nobody registered, found by watching new blocks. These are counters only —
+    no per-account data exists for a contract until it is promoted, which is what keeps
+    watching the whole chain cheap.
+  </p>
+  <div class="row" style="margin-bottom:12px">
+    <button id="refresh-cands" class="ghost">Refresh</button>
+  </div>
+  <div class="err" id="cand-err" hidden></div>
+  <div class="scroll"><table id="cand-table">
+    <thead><tr>
+      <th>Contract</th><th>Std</th><th class="num">Events</th>
+      <th class="num">Blocks</th><th class="num">Range</th><th>State</th><th></th>
     </tr></thead>
     <tbody></tbody>
   </table></div>
@@ -177,8 +198,10 @@ async function loadStatus() {
     if (!c) return;
     $('stats').innerHTML = [
       ['chain', c.chain_id], ['head block', c.head_block],
+      ['history floor', c.history_floor === 0 ? 'genesis' : c.history_floor],
       ['assets', c.assets], ['accounts', c.accounts],
-      ['interactions', c.interactions], ['unconfirmed', c.pending_events],
+      ['interactions', c.interactions],
+      ['discovered', c.candidates_observed ?? 0],
     ].map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
 
     const note = $('node-note');
@@ -293,6 +316,50 @@ async function buildEpoch() {
   finally { $('build').disabled = false; }
 }
 
+async function loadCandidates() {
+  try {
+    const { candidates = [], thresholds = {} } = await api('/v1/candidates?include_promoted=true&limit=50');
+    const tbody = $('cand-table').querySelector('tbody');
+    tbody.innerHTML = candidates.length ? candidates.map(c => `
+      <tr>
+        <td class="mono" title="${c.address}">${short(c.address)}</td>
+        <td><span class="tag">${c.standard}</span></td>
+        <td class="num">${c.event_count}</td>
+        <td class="num">${c.blocks_seen}</td>
+        <td class="num">${c.first_seen_block}–${c.last_seen_block}</td>
+        <td>${c.promoted
+              ? `<span class="ok">indexed</span>`
+              : (c.promotable ? 'ready' : `below threshold`)}</td>
+        <td>${c.promoted ? '' :
+              `<button class="ghost promote" data-addr="${c.address}">Promote</button>`}</td>
+      </tr>`).join('')
+      : `<tr><td colspan="7" class="empty">Nothing discovered yet — waiting for head activity.</td></tr>`;
+
+    tbody.querySelectorAll('button.promote').forEach(b => {
+      b.addEventListener('click', () => promote(b.dataset.addr, b));
+    });
+    $('cand-table').dataset.thresholds =
+      `${thresholds.min_events ?? 0} events / ${thresholds.min_blocks ?? 0} blocks`;
+  } catch (e) { showErr('cand-err', e); }
+}
+
+async function promote(address, btn) {
+  showErr('cand-err', null);
+  if (btn) btn.disabled = true;
+  try {
+    await api(`/v1/candidates/${address}/promote`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ reason: 'manual: promoted from the demo UI' }),
+    });
+    await Promise.all([loadCandidates(), loadAssets()]);
+  } catch (e) {
+    showErr('cand-err', e);
+    if (btn) btn.disabled = false;
+  }
+}
+
+$('refresh-cands').addEventListener('click', loadCandidates);
 $('lookup').addEventListener('click', lookup);
 $('account').addEventListener('keydown', e => { if (e.key === 'Enter') lookup(); });
 $('register').addEventListener('click', register);
@@ -300,8 +367,8 @@ $('new-asset').addEventListener('keydown', e => { if (e.key === 'Enter') registe
 $('build').addEventListener('click', buildEpoch);
 $('refresh-epochs').addEventListener('click', loadEpochs);
 
-loadStatus(); loadAssets(); loadEpochs();
-setInterval(() => { loadStatus(); loadAssets(); }, 5000);
+loadStatus(); loadAssets(); loadEpochs(); loadCandidates();
+setInterval(() => { loadStatus(); loadAssets(); loadCandidates(); }, 5000);
 </script>
 </body>
 </html>

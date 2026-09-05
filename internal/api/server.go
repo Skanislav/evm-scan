@@ -8,6 +8,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -23,14 +24,27 @@ import (
 	"github.com/Skanislav/evm-scan/internal/store"
 )
 
-// Nudger wakes a chain's follower.
-type Nudger interface{ Nudge() }
+// Worker is the slice of a chain's indexer the HTTP layer needs.
+//
+// Kept as an interface so the API depends on behaviour rather than on the indexer
+// package, and so promotion goes through the same path the discovery sweep uses.
+type Worker interface {
+	// Nudge asks the follower to run a tick promptly.
+	Nudge()
+	// Promote turns an observed contract into an indexed asset.
+	Promote(ctx context.Context, addr common.Address, reason string) error
+	// HistoryFloor is the oldest block this chain's node can serve logs for.
+	HistoryFloor() uint64
+	// DiscoveryThresholds are the activity levels at which a candidate qualifies
+	// for promotion.
+	DiscoveryThresholds() (minEvents, minBlocks uint64)
+}
 
 // Deps is everything the HTTP layer needs.
 type Deps struct {
 	Store             *store.Store
 	Sources           map[uint64]chain.Source
-	Nudgers           map[uint64]Nudger
+	Workers           map[uint64]Worker
 	Registry          *hintreg.Client
 	RegistryChainID   uint64
 	Publisher         *hintreg.Publisher
@@ -62,6 +76,8 @@ func New(d Deps) *Server {
 	s.mux.HandleFunc("GET /v1/assets/{address}/accounts", s.assetAccounts)
 	s.mux.HandleFunc("GET /v1/accounts/{address}", s.accountAssets)
 	s.mux.HandleFunc("GET /v1/accounts/{address}/contracts", s.accountContracts)
+	s.mux.HandleFunc("GET /v1/candidates", s.listCandidates)
+	s.mux.HandleFunc("POST /v1/candidates/{address}/promote", s.promoteCandidate)
 	s.mux.HandleFunc("GET /v1/epochs", s.listEpochs)
 	s.mux.HandleFunc("POST /v1/epochs", s.createEpoch)
 	s.mux.HandleFunc("GET /v1/epochs/{id}", s.getEpoch)
@@ -160,12 +176,18 @@ type chainStatus struct {
 	NodeTransport string `json:"node_transport"`
 	NodeLocal     bool   `json:"node_local"`
 	Head          uint64 `json:"head_block"`
-	Assets        int64  `json:"assets"`
-	Accounts      int64  `json:"accounts"`
-	Interactions  int64  `json:"interactions"`
-	PendingEvents int64  `json:"pending_events"`
-	BackfillDone  int    `json:"assets_backfilled"`
-	Error         string `json:"error,omitempty"`
+	// HistoryFloor is the oldest block this node can serve logs for. Backfills stop
+	// here, so it bounds how complete any account's history can be.
+	HistoryFloor    uint64 `json:"history_floor"`
+	DiscoveryCursor uint64 `json:"discovery_cursor"`
+	Assets          int64  `json:"assets"`
+	Accounts        int64  `json:"accounts"`
+	Interactions    int64  `json:"interactions"`
+	PendingEvents   int64  `json:"pending_events"`
+	BackfillDone    int    `json:"assets_backfilled"`
+	Candidates      int64  `json:"candidates_observed"`
+	CandidatesReady int64  `json:"candidates_promotable"`
+	Error           string `json:"error,omitempty"`
 }
 
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {
@@ -202,6 +224,16 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 				if c.BackfillDone {
 					cs.BackfillDone++
 				}
+			}
+		}
+		if cur, err := s.d.Store.DiscoveryCursor(ctx, id); err == nil {
+			cs.DiscoveryCursor = cur
+		}
+		if w, ok := s.d.Workers[id]; ok {
+			cs.HistoryFloor = w.HistoryFloor()
+			minEvents, minBlocks := w.DiscoveryThresholds()
+			if cst, err := s.d.Store.CandidateStats(ctx, id, minEvents, minBlocks); err == nil {
+				cs.Candidates, cs.CandidatesReady = cst.Observed, cst.Promotable
 			}
 		}
 		out.Chains = append(out.Chains, cs)

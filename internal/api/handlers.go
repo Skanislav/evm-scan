@@ -38,6 +38,12 @@ type assetJSON struct {
 	BackfillDone  bool   `json:"backfill_done"`
 	TailBlock     uint64 `json:"tail_block,omitempty"`
 	LogsSeen      uint64 `json:"logs_seen,omitempty"`
+	// BackfillFloor is where the history walk stops. When it is above the requested
+	// from_block the node no longer holds the rest, and HistoryComplete says so
+	// rather than letting the response imply full coverage.
+	BackfillFloor   uint64 `json:"backfill_floor"`
+	HistoryComplete bool   `json:"history_complete"`
+	Promoted        bool   `json:"promoted_from_discovery,omitempty"`
 }
 
 func (s *Server) assetView(ctx context.Context, a store.Asset) assetJSON {
@@ -51,6 +57,7 @@ func (s *Server) assetView(ctx context.Context, a store.Asset) assetJSON {
 		Status:        a.Status,
 		Source:        a.Source,
 		HintFromBlock: a.HintFromBlock,
+		Promoted:      a.Promoted,
 	}
 	if a.Registrant != nil {
 		v.Registrant = a.Registrant.Hex()
@@ -61,6 +68,10 @@ func (s *Server) assetView(ctx context.Context, a store.Asset) assetJSON {
 		v.BackfillDone = c.BackfillDone
 		v.TailBlock = c.TailBlock
 		v.LogsSeen = c.LogsSeen
+		v.BackfillFloor = c.BackfillFloor
+		// Complete means the walk reached as far back as was asked for, not that it
+		// reached genesis: genesis may simply not be available on this node.
+		v.HistoryComplete = c.BackfillDone && c.BackfillFloor <= a.HintFromBlock
 	}
 	return v
 }
@@ -185,8 +196,8 @@ func (s *Server) registerAsset(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "registration failed", err)
 		return
 	}
-	if n, ok := s.d.Nudgers[chainID]; ok {
-		n.Nudge()
+	if wk, ok := s.d.Workers[chainID]; ok {
+		wk.Nudge()
 	}
 
 	a, err := s.d.Store.GetAsset(ctx, chainID, addr)
@@ -607,5 +618,126 @@ func (s *Server) epochProof(w http.ResponseWriter, r *http.Request) {
 		"assets":           addrs,
 		"verify_with":      "HintRegistry.verifyInclusion(epochId, account, assetsHash, proof)",
 		"onchain_epoch_id": e.OnchainID,
+	})
+}
+
+// --------------------------------------------------------------------------
+// Candidates: contracts discovered at the head
+// --------------------------------------------------------------------------
+
+type candidateJSON struct {
+	Address         string  `json:"address"`
+	Standard        string  `json:"standard"`
+	FirstSeenBlock  uint64  `json:"first_seen_block"`
+	LastSeenBlock   uint64  `json:"last_seen_block"`
+	EventCount      uint64  `json:"event_count"`
+	BlocksSeen      uint64  `json:"blocks_seen"`
+	Promotable      bool    `json:"promotable"`
+	Promoted        bool    `json:"promoted"`
+	PromotedAt      *string `json:"promoted_at,omitempty"`
+	PromotionReason string  `json:"promotion_reason,omitempty"`
+}
+
+// listCandidates returns contracts seen at the head that are not indexed yet.
+//
+// These are counters only — no per-account data exists for a candidate. That is the
+// trade this design makes: watching every contract is cheap, indexing one is not.
+func (s *Server) listCandidates(w http.ResponseWriter, r *http.Request) {
+	chainID, _, err := s.chainOf(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad chain", err)
+		return
+	}
+
+	ctx := r.Context()
+	rows, err := s.d.Store.ListCandidates(ctx, chainID,
+		r.URL.Query().Get("include_promoted") == "true",
+		intParam(r, "limit", 50, 1, 500))
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "query failed", err)
+		return
+	}
+
+	var minEvents, minBlocks uint64
+	if wk, ok := s.d.Workers[chainID]; ok {
+		minEvents, minBlocks = wk.DiscoveryThresholds()
+	}
+
+	out := make([]candidateJSON, len(rows))
+	for i, c := range rows {
+		out[i] = candidateJSON{
+			Address:         c.Address.Hex(),
+			Standard:        standardName(c.Standard),
+			FirstSeenBlock:  c.FirstSeenBlock,
+			LastSeenBlock:   c.LastSeenBlock,
+			EventCount:      c.EventCount,
+			BlocksSeen:      c.BlocksSeen,
+			Promotable:      c.EventCount >= minEvents && c.BlocksSeen >= minBlocks,
+			Promoted:        c.PromotedAt != nil,
+			PromotionReason: c.PromotionReason,
+		}
+		if c.PromotedAt != nil {
+			ts := c.PromotedAt.UTC().Format(time.RFC3339)
+			out[i].PromotedAt = &ts
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"chain_id":   chainID,
+		"candidates": out,
+		"thresholds": map[string]uint64{"min_events": minEvents, "min_blocks": minBlocks},
+	})
+}
+
+type promoteRequest struct {
+	Reason string `json:"reason"`
+}
+
+// promoteCandidate commits a discovered contract to being indexed, which starts its
+// backfill down to the node's history horizon.
+func (s *Server) promoteCandidate(w http.ResponseWriter, r *http.Request) {
+	chainID, _, err := s.chainOf(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad chain", err)
+		return
+	}
+	addr, err := parseAddress(r.PathValue("address"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad address", err)
+		return
+	}
+	worker, ok := s.d.Workers[chainID]
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "unknown chain", nil)
+		return
+	}
+
+	var req promoteRequest
+	if r.ContentLength > 0 {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req); err != nil {
+			writeErr(w, http.StatusBadRequest, "bad request body", err)
+			return
+		}
+	}
+	reason := req.Reason
+	if reason == "" {
+		reason = "manual: promoted via API"
+	}
+
+	ctx := r.Context()
+	if err := worker.Promote(ctx, addr, reason); err != nil {
+		writeErr(w, http.StatusBadRequest, "promotion failed", err)
+		return
+	}
+
+	a, err := s.d.Store.GetAsset(ctx, chainID, addr)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "query failed", err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"promoted": true,
+		"reason":   reason,
+		"asset":    s.assetView(ctx, a),
 	})
 }
