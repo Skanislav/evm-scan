@@ -13,7 +13,8 @@ build:
 	$(GO) build -o $(BIN)/evmscand       ./cmd/evmscand
 	$(GO) build -o $(BIN)/evmscan-demo   ./cmd/evmscan-demo
 	$(GO) build -o $(BIN)/evmscan-verify ./cmd/evmscan-verify
-	@echo "built: $(BIN)/evmscand $(BIN)/evmscan-demo $(BIN)/evmscan-verify"
+	$(GO) build -o $(BIN)/evmscan-deploy ./cmd/evmscan-deploy
+	@echo "built: $(BIN)/evmscand $(BIN)/evmscan-demo $(BIN)/evmscan-verify $(BIN)/evmscan-deploy"
 
 ## test: run unit tests (integration tests skip unless EVMSCAN_TEST_NODE is set)
 test:

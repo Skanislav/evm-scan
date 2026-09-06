@@ -30,7 +30,8 @@ import (
 )
 
 const (
-	deployGas = 3_000_000
+	// Enough for the registry, which is the largest contract here by a wide margin.
+	deployGas = 6_000_000
 	callGas   = 300_000
 	// Fixed seed: the demo's user keys must be reproducible across runs, and they
 	// only ever hold play money on a throwaway dev chain.
@@ -44,8 +45,9 @@ func main() {
 		out       = flag.String("out", "", "write a ready-to-run evmscand config to this path")
 		dsn       = flag.String("dsn", "postgres://evmscan:evmscan@127.0.0.1:5432/evmscan?sslmode=disable", "database DSN to write into the generated config")
 		listen    = flag.String("listen", "127.0.0.1:8080", "API listen address for the generated config")
-		bondWei   = flag.Int64("bond", 0, "asset and publisher bond in wei")
+		bondWei   = flag.Int64("bond", 0, "asset and publisher bond in wei (bond-token units for the publisher in -oracle mode)")
 		challenge = flag.Int64("challenge-window", 60, "challenge window in seconds")
+		oracle    = flag.Bool("oracle", false, "deploy in oracle mode against a mock optimistic oracle instead of a local arbiter")
 	)
 	flag.Parse()
 
@@ -56,12 +58,12 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
-	if err := run(ctx, *nodeURL, *users, *out, *dsn, *listen, *bondWei, *challenge); err != nil {
+	if err := run(ctx, *nodeURL, *users, *out, *dsn, *listen, *bondWei, *challenge, *oracle); err != nil {
 		log.Fatal(err)
 	}
 }
 
-func run(ctx context.Context, nodeURL string, userCount int, outPath, dsn, listen string, bond, challengeWindow int64) error {
+func run(ctx context.Context, nodeURL string, userCount int, outPath, dsn, listen string, bond, challengeWindow int64, oracleMode bool) error {
 	node, err := chain.Dial(ctx, nodeURL, true)
 	if err != nil {
 		return err
@@ -84,12 +86,39 @@ func run(ctx context.Context, nodeURL string, userCount int, outPath, dsn, liste
 	fmt.Printf("faucet        %s\n", faucet.Hex())
 
 	// ---------------------------------------------------------------- deploy
-	registry, err := d.deploy(ctx, "HintRegistry", faucet,
+	//
+	// Two adjudication modes, the same as a real deployment has: a local arbiter (the
+	// faucet key settles disputes) or an optimistic oracle. No chain this small has a
+	// UMA deployment, so -oracle wires up the mock one, which keeps the registry's
+	// oracle path exercisable end to end.
+	var oracleAddr, bondToken, arbiter common.Address
+	arbiter = faucet
+	if oracleMode {
+		bondToken, err = d.deploy(ctx, "DemoERC20", "Demo Bond Token", "dBOND")
+		if err != nil {
+			return fmt.Errorf("deploy bond token: %w", err)
+		}
+		// The faucet stands in for UMA's DVM: it votes on disputed assertions.
+		oracleAddr, err = d.deploy(ctx, "MockOptimisticOracleV3", faucet, big.NewInt(0))
+		if err != nil {
+			return fmt.Errorf("deploy MockOptimisticOracleV3: %w", err)
+		}
+		arbiter = common.Address{}
+		fmt.Printf("bond token    %s  (dBOND)\n", bondToken.Hex())
+		fmt.Printf("mock oracle   %s  (voter %s)\n", oracleAddr.Hex(), faucet.Hex())
+	}
+
+	registry, err := d.deploy(ctx, "HintRegistry", oracleAddr, bondToken, arbiter,
 		big.NewInt(bond), big.NewInt(bond), big.NewInt(challengeWindow))
 	if err != nil {
 		return fmt.Errorf("deploy HintRegistry: %w", err)
 	}
 	fmt.Printf("HintRegistry  %s\n", registry.Hex())
+	if oracleMode {
+		fmt.Printf("mode          optimistic-oracle (mock)\n")
+	} else {
+		fmt.Printf("mode          local-arbiter (arbiter %s)\n", arbiter.Hex())
+	}
 
 	usdc, err := d.deploy(ctx, "DemoERC20", "Demo USD Coin", "dUSDC")
 	if err != nil {
@@ -124,6 +153,22 @@ func run(ctx context.Context, nodeURL string, userCount int, outPath, dsn, liste
 		return fmt.Errorf("fund publisher: %w", err)
 	}
 	fmt.Printf("publisher     %s\n", publisher.Hex())
+
+	if oracleMode {
+		// Oracle bonds are ERC-20, so the publisher needs a balance of the bond token
+		// before it can assert anything.
+		mintABI, err := abiOf("DemoERC20")
+		if err != nil {
+			return err
+		}
+		data, err := mintABI.Pack("mint", publisher, ether(1000))
+		if err != nil {
+			return err
+		}
+		if _, err := d.sendFaucet(ctx, &bondToken, nil, data, callGas); err != nil {
+			return fmt.Errorf("fund publisher bond balance: %w", err)
+		}
+	}
 
 	// ----------------------------------------------------------- demo users
 	wallets := make([]*wallet, userCount)

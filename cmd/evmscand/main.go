@@ -158,7 +158,20 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 			nudgeMap[id] = svc
 		}
 		mirror = hintreg.NewMirror(regClient, st, cfg.Registry.ChainID, head, nudgeMap, log)
-		log.Info("hint registry mirrored", "address", addr.Hex(), "chain_id", cfg.Registry.ChainID)
+
+		// How this registry settles disputes is fixed at its deployment and is not
+		// something an operator can change, so it belongs in the startup log where it
+		// can be read off a running deployment.
+		adjudication := "unknown"
+		if mode, err := regClient.Mode(ctx); err != nil {
+			// Not fatal: the mirror retries, and a registry we cannot read yet is a
+			// node problem rather than a misconfiguration.
+			log.Warn("could not read registry adjudication mode", "err", err)
+		} else {
+			adjudication = mode.String()
+		}
+		log.Info("hint registry mirrored",
+			"address", addr.Hex(), "chain_id", cfg.Registry.ChainID, "adjudication", adjudication)
 
 		if cfg.Registry.PublisherKey != "" {
 			key, err := parseKey(cfg.Registry.PublisherKey)
@@ -267,6 +280,12 @@ func autoPublish(ctx context.Context, p *hintreg.Publisher, cfg *config.Config, 
 			if _, err := p.Publish(ctx, e.ID); err != nil {
 				log.Error("auto-publish failed", "chain_id", c.ChainID, "epoch", e.ID, "err", err)
 			}
+		}
+
+		// Publishing is only half of the loop: a commitment stays challengeable, and
+		// its bond stays locked, until someone settles it.
+		if err := p.FinalizeDue(ctx); err != nil && ctx.Err() == nil {
+			log.Error("finalize sweep failed", "err", err)
 		}
 	}
 }

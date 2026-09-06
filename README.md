@@ -70,9 +70,12 @@ already decided are worth indexing.
 ## Architecture
 
 ```
-    HintRegistry (on-chain)
-    ├── registerAsset(chainId, token, kind, fromBlock)   permissionless, bonded
-    └── publishIndex(chainId, from, to, root, uri)       optimistic, challengeable
+    HintRegistry (on-chain)                       Optimistic Oracle V3
+    ├── registerAsset(chainId, token, kind)       permissionless, bonded
+    ├── publishIndex(chainId, from, to, root) ──► assertTruth
+    ├── challengeIndex(epochId) ──────────────►   disputeAssertion
+    ├── finalizeIndex(epochId) ───────────────►   settleAndGetAssertionResult
+    └── resolved / disputed callbacks ◄───────  (the oracle calls back)
               │  ▲
        mirror │  │ commitments
               ▼  │
@@ -159,6 +162,41 @@ Both verifiers have to agree.
 To point at a real network, copy `config.example.yaml`, set `node` to your own
 snap-synced geth's IPC path, and raise `confirmations` to your reorg tolerance.
 
+## Who settles a disputed commitment
+
+A commitment is optimistic: it finalizes on its own unless someone bonds a challenge
+against it inside the window. What happens *after* a challenge is the whole trust
+question, and a registry answers it in one of two modes, fixed at deployment and
+readable on-chain from `oracle()` / `arbiter()`:
+
+**Oracle mode** — `publishIndex` asserts `(chainId, fromBlock, toBlock, root, uri)` to
+UMA's Optimistic Oracle V3, bonding an ERC-20 the deployment names. Anyone disputes it,
+either at the oracle or through `challengeIndex`, which is a thin wrapper over
+`disputeAssertion`. UMA's vote decides; the registry only reacts to the oracle's
+callbacks. There is no arbiter and no reachable admin setter — `setArbiter`, `setBonds`
+and `resolveChallenge` all revert permanently, because the arbiter is the zero address
+and the oracle is not.
+
+**Local-arbiter mode** — the fallback for a chain with no oracle deployment. Bonds are
+in wei and one `arbiter` key settles challenges. It is a trusted deployment wearing a
+permissionless write path, which is why the deploy tool says so in capitals.
+
+```bash
+# neutral: UMA settles, nobody administers
+./bin/evmscan-deploy -node "$PWD/.devchain/geth.ipc" \
+    -oracle 0xOOv3… -bond-currency 0xUSDC… \
+    -publisher-bond 500000000000000000 -challenge-window 7200
+
+# fallback: one key settles
+./bin/evmscan-deploy -node "$PWD/.devchain/geth.ipc" -arbiter 0xyou…
+```
+
+The publisher settles its own commitments: `evmscand` sweeps published epochs each
+auto-publish tick and calls `finalizeIndex` on the ones the chain will let it settle,
+which is what returns the bond. `evmscan-verify` prints the mode and the commitment's
+on-chain status alongside every proof it checks, so a consumer sees who could still
+overturn the root it just verified.
+
 ## API
 
 | Method | Path | Purpose |
@@ -190,6 +228,7 @@ internal/api/        HTTP surface
 cmd/evmscand/        the daemon
 cmd/evmscan-demo/    devnet bootstrapper
 cmd/evmscan-verify/  independent proof checker
+cmd/evmscan-deploy/  registry deployer; prints the adjudication mode it just fixed
 ```
 
 `make check` runs fmt, vet and tests. Integration tests skip unless `EVMSCAN_TEST_NODE`
@@ -199,10 +238,15 @@ points at a node.
 
 Being explicit about what this does *not* do:
 
-- **Challenge adjudication is centralised.** `resolveChallenge` is settled by an
-  `arbiter`. A real fraud proof would need to prove a log's existence on the source chain
-  from another chain — receipt proofs against a known block hash — which is genuinely
-  hard and out of scope here. The honest path forward is an optimistic oracle.
+- **Disputes are adjudicated socially, not by proof.** In oracle mode a dispute goes to
+  UMA's DVM, which is a human vote, not a fraud proof. A real fraud proof would need to
+  prove a log's existence on the source chain from another chain — receipt proofs against
+  a known block hash — which is genuinely hard and out of scope here. What the oracle
+  buys is that no single key decides, and the deployment has no admin path at all.
+- **Local-arbiter mode is one key.** On a chain with no oracle deployment the registry
+  falls back to an `arbiter` that settles disputes and can retune the bonds.
+  `evmscan-deploy` prints a warning when it deploys in that mode; treat such a deployment
+  as trusted, not neutral.
 - **Reorgs deeper than `confirmations` are not repaired.** Same as every indexer of this
   shape; the lag is configurable.
 - **History is only as deep as your node.** The floor is probed, respected and reported,
