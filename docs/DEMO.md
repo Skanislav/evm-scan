@@ -44,6 +44,9 @@ The IPC socket is what evmscand connects to; loopback HTTP/WS also work.
 ```bash
 make build
 ./bin/evmscan-demo -node "$PWD/.devchain/geth.ipc" -out config.demo.yaml
+
+# or, to exercise the oracle dispute path against a mock Optimistic Oracle V3:
+./bin/evmscan-demo -node "$PWD/.devchain/geth.ipc" -out config.demo.yaml -oracle
 ```
 
 This deploys `HintRegistry`, two ERC-20s and an ERC-721, funds six deterministic demo

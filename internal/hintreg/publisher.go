@@ -22,6 +22,10 @@ import (
 // ErrEmptyIndex is returned when there is nothing to commit to.
 var ErrEmptyIndex = errors.New("hintreg: index is empty, nothing to commit")
 
+// finalizeScanLimit caps how many recent commitments one FinalizeDue pass looks at.
+// Anything older than this has either settled or been abandoned.
+const finalizeScanLimit = 50
+
 // Publisher builds merkle commitments over the local index and posts them on-chain.
 type Publisher struct {
 	client   *Client
@@ -113,9 +117,21 @@ func (p *Publisher) Publish(ctx context.Context, epochID int64) (common.Hash, er
 		return common.Hash{}, fmt.Errorf("hintreg: epoch %d is %s, expected %s", epochID, e.Status, store.EpochBuilt)
 	}
 
-	bond, err := p.client.PublisherBond(ctx)
+	mode, err := p.client.Mode(ctx)
 	if err != nil {
 		return common.Hash{}, err
+	}
+
+	// The bond is wei in local-arbiter mode. In oracle mode it is an ERC-20 balance the
+	// registry pulls from us and forwards to the oracle, so the value sent must be zero
+	// and the allowance must already be there.
+	value := new(big.Int)
+	if mode.OracleMode() {
+		if err := p.ensureBondAllowance(ctx, mode); err != nil {
+			return common.Hash{}, err
+		}
+	} else {
+		value = mode.PublisherBond
 	}
 
 	data, err := p.client.abi.Pack("publishIndex",
@@ -124,7 +140,7 @@ func (p *Publisher) Publish(ctx context.Context, epochID int64) (common.Hash, er
 		return common.Hash{}, fmt.Errorf("hintreg: pack publishIndex: %w", err)
 	}
 
-	tx, err := p.signedTx(ctx, p.client.Address(), bond, data)
+	tx, err := p.signedTx(ctx, p.client.Address(), value, data)
 	if err != nil {
 		return common.Hash{}, err
 	}
@@ -148,10 +164,150 @@ func (p *Publisher) Publish(ctx context.Context, epochID int64) (common.Hash, er
 		return tx.Hash(), err
 	}
 
-	p.log.Info("published index commitment",
+	args := []any{
 		"epoch", epochID, "onchain_epoch", onchainID,
-		"root", e.MerkleRoot.Hex(), "tx", tx.Hash().Hex())
+		"root", e.MerkleRoot.Hex(), "tx", tx.Hash().Hex(),
+	}
+	if mode.OracleMode() {
+		// The assertion id is what a disputer needs to challenge us at the oracle, so
+		// it belongs in the log even though nothing local keys off it.
+		if on, err := p.client.GetEpoch(ctx, onchainID); err == nil {
+			args = append(args, "assertion", on.AssertionID.Hex())
+		}
+	}
+	p.log.Info("published index commitment", args...)
 	return tx.Hash(), nil
+}
+
+// ensureBondAllowance approves the registry to move one bond of the oracle's currency.
+//
+// The approval is for exactly one bond rather than unlimited: the registry is the thing
+// we are bonding against, and an unlimited allowance would let a future upgrade of it
+// drain the publisher's balance.
+func (p *Publisher) ensureBondAllowance(ctx context.Context, mode Mode) error {
+	have, err := p.client.Allowance(ctx, mode.BondCurrency, p.from, p.client.Address())
+	if err != nil {
+		return err
+	}
+	if have.Cmp(mode.PublisherBond) >= 0 {
+		return nil
+	}
+
+	erc20, err := ERC20ABI()
+	if err != nil {
+		return err
+	}
+	data, err := erc20.Pack("approve", p.client.Address(), mode.PublisherBond)
+	if err != nil {
+		return fmt.Errorf("hintreg: pack approve: %w", err)
+	}
+
+	tx, err := p.signedTx(ctx, mode.BondCurrency, new(big.Int), data)
+	if err != nil {
+		return err
+	}
+	if err := p.sender.SendTransaction(ctx, tx); err != nil {
+		return fmt.Errorf("hintreg: send approve: %w", err)
+	}
+	rcpt, err := p.waitReceipt(ctx, tx.Hash())
+	if err != nil {
+		return err
+	}
+	if rcpt.Status != types.ReceiptStatusSuccessful {
+		return fmt.Errorf("hintreg: bond approval reverted (tx %s)", tx.Hash().Hex())
+	}
+
+	p.log.Info("approved oracle bond",
+		"currency", mode.BondCurrency.Hex(), "amount", mode.PublisherBond.String(), "tx", tx.Hash().Hex())
+	return nil
+}
+
+// FinalizeDue settles every locally published commitment the chain is ready to settle.
+//
+// Publishing is only half of the optimistic loop: a commitment stays challengeable
+// until someone calls finalizeIndex, and in oracle mode that call is what settles the
+// assertion and returns the bond. Nobody else has a reason to pay that gas for us, so
+// the publisher does it.
+//
+// Commitments that are not ready yet — window still open, dispute still being voted on
+// — are left alone. The call is simulated first so that polling costs no gas.
+func (p *Publisher) FinalizeDue(ctx context.Context) error {
+	epochs, err := p.st.ListEpochs(ctx, 0, finalizeScanLimit)
+	if err != nil {
+		return err
+	}
+
+	for _, e := range epochs {
+		if e.Status != store.EpochPublished || e.OnchainID == nil {
+			continue
+		}
+		if err := p.reconcile(ctx, e); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			p.log.Error("finalize failed", "epoch", e.ID, "onchain_epoch", *e.OnchainID, "err", err)
+		}
+	}
+	return nil
+}
+
+// reconcile brings one commitment's local status in line with the chain, finalizing it
+// first if the chain will let us.
+func (p *Publisher) reconcile(ctx context.Context, e store.Epoch) error {
+	on, err := p.client.GetEpoch(ctx, *e.OnchainID)
+	if err != nil {
+		return err
+	}
+
+	if on.Status == EpochProposed || on.Status == EpochChallenged {
+		// Reverts here are the normal case, not an error: the window is still open, or
+		// the oracle has not resolved the dispute yet.
+		if err := p.client.Simulate(ctx, p.from, "finalizeIndex", big.NewInt(*e.OnchainID)); err != nil {
+			return nil
+		}
+		if err := p.sendFinalize(ctx, e, *e.OnchainID); err != nil {
+			return err
+		}
+		if on, err = p.client.GetEpoch(ctx, *e.OnchainID); err != nil {
+			return err
+		}
+	}
+
+	switch on.Status {
+	case EpochFinalized:
+		return p.st.SetEpochStatus(ctx, e.ID, store.EpochFinalized)
+	case EpochRejected:
+		p.log.Warn("commitment rejected on-chain",
+			"epoch", e.ID, "onchain_epoch", *e.OnchainID, "challenger", on.Challenger.Hex())
+		return p.st.SetEpochStatus(ctx, e.ID, store.EpochRejected)
+	default:
+		return nil
+	}
+}
+
+func (p *Publisher) sendFinalize(ctx context.Context, e store.Epoch, onchainID int64) error {
+	data, err := p.client.abi.Pack("finalizeIndex", big.NewInt(onchainID))
+	if err != nil {
+		return fmt.Errorf("hintreg: pack finalizeIndex: %w", err)
+	}
+	tx, err := p.signedTx(ctx, p.client.Address(), new(big.Int), data)
+	if err != nil {
+		return err
+	}
+	if err := p.sender.SendTransaction(ctx, tx); err != nil {
+		return fmt.Errorf("hintreg: send finalizeIndex: %w", err)
+	}
+	rcpt, err := p.waitReceipt(ctx, tx.Hash())
+	if err != nil {
+		return err
+	}
+	if rcpt.Status != types.ReceiptStatusSuccessful {
+		return fmt.Errorf("hintreg: finalizeIndex reverted (tx %s)", tx.Hash().Hex())
+	}
+
+	p.log.Info("finalized index commitment",
+		"epoch", e.ID, "onchain_epoch", onchainID, "tx", tx.Hash().Hex())
+	return nil
 }
 
 // epochIDFromReceipt reads the registry's epoch id out of the IndexPublished log.

@@ -30,6 +30,7 @@ import (
 
 	"github.com/Skanislav/evm-scan/contracts"
 	"github.com/Skanislav/evm-scan/internal/chain"
+	"github.com/Skanislav/evm-scan/internal/hintreg"
 	"github.com/Skanislav/evm-scan/internal/merkle"
 )
 
@@ -132,10 +133,12 @@ func run(apiURL, nodeURL, registryAddr string, epochID int64, accountHex string)
 	}
 	defer node.Close()
 
+	to := common.HexToAddress(registryAddr)
 	regABI, err := contracts.HintRegistryABI()
 	if err != nil {
 		return err
 	}
+
 	proofArr := make([][32]byte, len(proof))
 	for i, p := range proof {
 		proofArr[i] = p
@@ -146,7 +149,6 @@ func run(apiURL, nodeURL, registryAddr string, epochID int64, accountHex string)
 		return fmt.Errorf("pack verifyInclusion: %w", err)
 	}
 
-	to := common.HexToAddress(registryAddr)
 	out, err := node.CallAtHead(ctx, ethereum.CallMsg{To: &to, Data: data})
 	if err != nil {
 		return fmt.Errorf("call verifyInclusion: %w", err)
@@ -164,6 +166,41 @@ func run(apiURL, nodeURL, registryAddr string, epochID int64, accountHex string)
 		to.Hex(), *pr.Epoch.OnchainID)
 	fmt.Printf("\n%s is provably committed to %d assets in an on-chain root.\n",
 		account.Hex(), len(assets))
+
+	// Who settles a dispute over this root decides what the root is worth, so report it
+	// alongside the proof rather than leaving the consumer to go and look it up.
+	client, err := hintreg.NewClient(node, to)
+	if err != nil {
+		return err
+	}
+	return reportAdjudication(ctx, client, *pr.Epoch.OnchainID)
+}
+
+// reportAdjudication prints how the registry settles disputes and where the commitment
+// stands in that process.
+func reportAdjudication(ctx context.Context, client *hintreg.Client, onchainID int64) error {
+	mode, err := client.Mode(ctx)
+	if err != nil {
+		return err
+	}
+	on, err := client.GetEpoch(ctx, onchainID)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("\nregistry adjudication: %s\n", mode.String())
+	fmt.Printf("on-chain epoch %d: status %s", onchainID, on.Status)
+	switch {
+	case mode.OracleMode() && on.AssertionID != (common.Hash{}):
+		fmt.Printf(", oracle assertion %s\n", on.AssertionID.Hex())
+	case on.Status == hintreg.EpochProposed:
+		fmt.Printf(", challengeable until unix %d\n", on.ChallengeDeadline)
+	default:
+		fmt.Println()
+	}
+	if on.Status != hintreg.EpochFinalized {
+		fmt.Println("note: this root is not final yet — it can still be disputed and rejected.")
+	}
 	return nil
 }
 
