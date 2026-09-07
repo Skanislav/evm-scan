@@ -67,6 +67,9 @@ type Chain struct {
 	// Discovery finds contracts by watching the head, rather than requiring every
 	// contract to be registered up front.
 	Discovery Discovery `yaml:"discovery"`
+	// Pricing reads prices from on-chain oracles and DEX pools through the node,
+	// never from a quote API.
+	Pricing Pricing `yaml:"pricing"`
 }
 
 // Discovery configures the head-watching sweep.
@@ -90,6 +93,71 @@ type Discovery struct {
 	MinEvents            uint64 `yaml:"min_events"`
 	MinBlocks            uint64 `yaml:"min_blocks"`
 	MaxPromotionsPerTick int    `yaml:"max_promotions_per_tick"`
+}
+
+// Pricing configures on-chain price discovery for one chain.
+//
+// Every field is optional. A chain evm-scan knows (mainnet, Optimism, Base,
+// Arbitrum) gets its well-known Feed Registry, native/USD feed, Uniswap factories
+// and quote tokens filled in; anything set here overrides the matching default,
+// and use_defaults: false drops the built-ins entirely.
+type Pricing struct {
+	// Enabled defaults to true. Pricing that has no source at all is inert anyway.
+	Enabled *bool `yaml:"enabled"`
+	// UseDefaults merges the chain's built-in sources under this config. Default true.
+	UseDefaults *bool `yaml:"use_defaults"`
+	// FeedRegistry is Chainlink's Feed Registry (mainnet only).
+	FeedRegistry string `yaml:"feed_registry"`
+	// NativeUSDFeed is the native asset's USD aggregator (ETH/USD on Ethereum).
+	NativeUSDFeed string `yaml:"native_usd_feed"`
+	// Feeds pin aggregators to tokens, for chains without a registry.
+	Feeds []PriceFeed `yaml:"feeds"`
+	// UniswapV3Factory and UniswapV2Factory are the DEX factories to discover pools
+	// through; any getPool/getPair-compatible fork works.
+	UniswapV3Factory string `yaml:"uniswap_v3_factory"`
+	UniswapV2Factory string `yaml:"uniswap_v2_factory"`
+	// FeeTiers are the v3 fee tiers to probe. Default 100, 500, 3000, 10000.
+	FeeTiers []uint32 `yaml:"fee_tiers"`
+	// QuoteTokens are the pool counterparties to look for.
+	QuoteTokens []QuoteToken `yaml:"quote_tokens"`
+	// TWAPWindow is asked of every v3 pool. Default 30m.
+	TWAPWindow Duration `yaml:"twap_window"`
+	// MinTWAPWindow is the shortest window that still counts as a TWAP rather than
+	// a spot price. Default 10m.
+	MinTWAPWindow Duration `yaml:"min_twap_window"`
+	// MaxFeedAge is how old a Chainlink round may be before it is reported stale
+	// and outranked by a DEX TWAP. Default 25h.
+	MaxFeedAge Duration `yaml:"max_feed_age"`
+	// CacheTTL is how long a quote is reused. Default 12s, about one block.
+	CacheTTL Duration `yaml:"cache_ttl"`
+}
+
+// PriceFeed binds a token to a Chainlink aggregator.
+type PriceFeed struct {
+	Token      string `yaml:"token"`
+	Aggregator string `yaml:"aggregator"`
+	// Quote is "usd" (default) or "native" (ETH on Ethereum).
+	Quote string `yaml:"quote"`
+}
+
+// QuoteToken is a DEX pool counterparty.
+type QuoteToken struct {
+	Address string `yaml:"address"`
+	Symbol  string `yaml:"symbol"`
+	// WrappedNative prices the token off the native/USD feed.
+	WrappedNative bool `yaml:"wrapped_native"`
+	// AssumeUSDPeg treats the token as 1 USD when no feed covers it.
+	AssumeUSDPeg bool `yaml:"assume_usd_peg"`
+}
+
+// PricingEnabled resolves the tri-state flag, defaulting to true.
+func (c Chain) PricingEnabled() bool {
+	return c.Pricing.Enabled == nil || *c.Pricing.Enabled
+}
+
+// MergeDefaults resolves the use_defaults flag, defaulting to true.
+func (p Pricing) MergeDefaults() bool {
+	return p.UseDefaults == nil || *p.UseDefaults
 }
 
 // RequireLocal resolves the tri-state flag, defaulting to true.
@@ -166,6 +234,9 @@ func (c *Config) validate() error {
 		if ch.Node == "" {
 			return fmt.Errorf("config: chains[%d] (chain_id %d) needs a node endpoint", i, ch.ChainID)
 		}
+		if err := ch.Pricing.validate(); err != nil {
+			return fmt.Errorf("config: chains[%d].pricing: %w", i, err)
+		}
 	}
 
 	if c.Registry.Address != "" {
@@ -196,4 +267,37 @@ func (c *Config) RegistryAddress() (common.Address, bool) {
 		return common.Address{}, false
 	}
 	return common.HexToAddress(c.Registry.Address), true
+}
+
+func (p Pricing) validate() error {
+	check := func(name, v string) error {
+		if v != "" && !common.IsHexAddress(v) {
+			return fmt.Errorf("%s %q is not an address", name, v)
+		}
+		return nil
+	}
+	for name, v := range map[string]string{
+		"feed_registry": p.FeedRegistry, "native_usd_feed": p.NativeUSDFeed,
+		"uniswap_v3_factory": p.UniswapV3Factory, "uniswap_v2_factory": p.UniswapV2Factory,
+	} {
+		if err := check(name, v); err != nil {
+			return err
+		}
+	}
+	for i, f := range p.Feeds {
+		if !common.IsHexAddress(f.Token) || !common.IsHexAddress(f.Aggregator) {
+			return fmt.Errorf("feeds[%d] needs a token and an aggregator address", i)
+		}
+		switch strings.ToLower(f.Quote) {
+		case "", "usd", "native", "eth":
+		default:
+			return fmt.Errorf("feeds[%d].quote %q must be usd or native", i, f.Quote)
+		}
+	}
+	for i, q := range p.QuoteTokens {
+		if !common.IsHexAddress(q.Address) {
+			return fmt.Errorf("quote_tokens[%d].address %q is not an address", i, q.Address)
+		}
+	}
+	return nil
 }

@@ -53,6 +53,11 @@ This deploys `HintRegistry`, two ERC-20s and an ERC-721, funds six deterministic
 accounts, generates mints / transfers / approvals between them, registers the three
 tokens as hints, and writes a ready-to-run config.
 
+It also stands in for the price sources a real chain has: a mock Chainlink Feed
+Registry resolving ETH/USD (at $3000) and dUSDC/USD, a mock Uniswap v3 pool for
+dSTEALTH/dWETH with an hour of oracle history, and a mock v2 pair for dSTEALTH/dUSDC.
+The generated config points `pricing:` at them.
+
 It also deploys a fourth token, **dSTEALTH**, and deliberately *never registers it*.
 Runtime discovery has to find that one by watching the head — which is the behaviour
 worth watching in step 5.
@@ -111,6 +116,29 @@ it does not.
 
 The demo ERC-721 answers `supportsInterface`, so it comes back as `erc721` through
 ERC-165 rather than by guesswork, with `ids[]` resolving owners for the ids you name.
+
+**Price discovery.** Nothing in the config names a feed for dSTEALTH, because there is
+none — like most tokens on mainnet. Ask anyway:
+
+```bash
+# the dSTEALTH address is in evmscan-demo's output
+curl "localhost:8080/v1/prices?tokens=0xDSTEALTH_ADDRESS"
+```
+
+The reply shows what the `PriceLens` found on-chain in one `eth_call`: no feed, one v3
+pool against dWETH with a 30-minute TWAP, one v2 pair against dUSDC — and the route it
+chose: `dSTEALTH/dWETH 30m TWAP → ETH / USD feed`, at **medium** confidence, with the
+v2 spot listed under `alternatives` at **low**. dWETH itself is priced off the ETH/USD
+feed as the wrapped native asset; dUSDC off its own feed, found through the registry;
+dPUNK is not priced at all. In the UI, look an account up and the value column and
+total appear, each price carrying a dot for its confidence and the whole route on
+hover. Every address the lens consulted — registry, factories, feeds, pools — is in
+the `sources` and `route` fields, which is what lets a consumer decide whether to
+believe it.
+
+Move the price and watch it follow: the mock aggregator has a `setAnswer(int256)`,
+and the mock pool a `setState(sqrtPriceX96, tick, liquidity)`. Prices are cached for
+one block (`cache_ttl: 2s` in the demo config), so the next lookup reflects it.
 
 **The history floor.** `/v1/status` reports `history_floor`: the oldest block this node
 can serve logs for, found by probing rather than assumed. A dev chain reports genesis. A

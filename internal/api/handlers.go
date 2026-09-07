@@ -4,12 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math/big"
 	"net/http"
 	"strconv"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
+
 	"github.com/Skanislav/evm-scan/internal/hintreg"
 	"github.com/Skanislav/evm-scan/internal/indexer"
+	"github.com/Skanislav/evm-scan/internal/price"
 	"github.com/Skanislav/evm-scan/internal/store"
 	"github.com/Skanislav/evm-scan/internal/token"
 )
@@ -283,6 +287,10 @@ type accountAssetJSON struct {
 	IndexStatus  string   `json:"index_status"`
 	Balance      *string  `json:"balance,omitempty"`
 	BalanceError string   `json:"balance_error,omitempty"`
+	// Price and ValueUSD come from the chain's own oracles and pools, when the
+	// deployment has pricing configured and a source was found. Never zero.
+	Price    *quoteJSON `json:"price,omitempty"`
+	ValueUSD string     `json:"value_usd,omitempty"`
 }
 
 // accountAssets is the rich view: discovery hints plus live balances read from our
@@ -336,12 +344,53 @@ func (s *Server) accountAssets(w http.ResponseWriter, r *http.Request) {
 		head, _ = src.HeadBlock(ctx)
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	resp := map[string]any{
 		"account":     account.Hex(),
 		"chain_id":    chainID,
 		"as_of_block": head,
 		"assets":      out,
-	})
+	}
+	if p := s.pricerFor(chainID); p != nil && r.URL.Query().Get("prices") != "false" {
+		resp["valuation"] = s.valueAssets(ctx, p, rows, out)
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// valueAssets prices the fungible assets in an account view and sums them.
+//
+// NFTs are skipped: a floor price is a market question, not an oracle one, and a
+// number for it here would be a guess dressed as a read.
+func (s *Server) valueAssets(ctx context.Context, p *price.Pricer, rows []store.AccountAsset, out []accountAssetJSON) map[string]any {
+	var addrs []common.Address
+	for i := range rows {
+		if out[i].Standard == "erc20" && out[i].Balance != nil {
+			addrs = append(addrs, rows[i].Asset)
+		}
+	}
+	tot := newTotals()
+	if len(addrs) == 0 {
+		return tot.view(0, "")
+	}
+	res, errMsg := s.quotes(ctx, p, addrs)
+	if res == nil {
+		return tot.view(0, errMsg)
+	}
+	for i := range rows {
+		q := res.Quotes[rows[i].Asset]
+		if q == nil || out[i].Balance == nil {
+			continue
+		}
+		view := quoteView(q)
+		out[i].Price = &view
+		bal, ok := new(big.Int).SetString(*out[i].Balance, 10)
+		if !ok {
+			continue
+		}
+		v := valuation(bal, rows[i].Decimals, q)
+		out[i].ValueUSD = price.FormatValue(v)
+		tot.add(v, q)
+	}
+	return tot.view(res.AsOfBlock, errMsg)
 }
 
 // accountContracts is the minimal wallet-facing surface: just the contract list.

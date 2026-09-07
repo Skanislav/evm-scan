@@ -62,3 +62,39 @@ chains:
       min_events: 100
       min_blocks: 25
       max_promotions_per_tick: 5
+
+    # On-chain price discovery: Chainlink feeds and Uniswap pools, read through your
+    # own node by a second deployless lens. No quote API is ever consulted.
+    #
+    # Everything here is optional. Mainnet, Optimism, Base and Arbitrum get their
+    # well-known Feed Registry / native feed / factories / quote tokens filled in;
+    # anything set below overrides the matching default. On another chain, or to
+    # price through a Uniswap fork, set the addresses explicitly.
+    pricing:
+      enabled: true
+      # false drops the built-in addresses and uses only what is written here.
+      use_defaults: true
+      # feed_registry: "0x47Fb2585D2C56Fe188D0E6ec628a38b74fCeeeDf"   # mainnet only
+      # native_usd_feed: "0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419"
+      # feeds:                          # pin aggregators where there is no registry
+      #   - token: "0x…"
+      #     aggregator: "0x…"
+      #     quote: usd                  # or native
+      # uniswap_v3_factory: "0x1F98431c8aD98523631AE4a59f267346ea31F984"
+      # uniswap_v2_factory: "0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f"
+      # fee_tiers: [100, 500, 3000, 10000]
+      # quote_tokens:                   # replaces the defaults when set
+      #   - address: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
+      #     symbol: WETH
+      #     wrapped_native: true        # priced off the native/USD feed
+      #   - address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+      #     symbol: USDC
+      #     assume_usd_peg: true        # 1 USD only when no feed covers it, and flagged
+      # Averaging window asked of every v3 pool; each pool reports what it could give.
+      twap_window: 30m
+      # Shorter than this and a pool price is reported as low confidence, like a spot.
+      min_twap_window: 10m
+      # Older than this and a feed is stale: still reported, but outranked by a TWAP.
+      max_feed_age: 25h
+      # Prices change per block, so about one block time.
+      cache_ttl: 12s

@@ -110,6 +110,55 @@ Three consequences worth knowing, all handled in `internal/lens`:
   that stays silent comes back as *unknown*, never as zero: a wallet rendering a
   failed call as a balance of nought is a bug, not a rounding error.
 
+## Price discovery, from the chain
+
+A wallet that knows *what* an address holds wants to know what it is worth, and the
+usual answer is a quote API — a third party in the read path again, exactly what this
+project set out to remove. Prices do not have to come from one. Chainlink aggregators
+and DEX pools are contracts, readable at the head by the same snap-synced node, and
+the hard part — *finding* them for a token nobody configured — is a question the
+chain can answer about itself.
+
+`contracts/src/PriceLens.sol` is a second deployless lens. Given a list of tokens it
+asks, inside one `eth_call`:
+
+1. **The Chainlink Feed Registry**, where the chain has one (mainnet does):
+   `getFeed(token, USD)` and `getFeed(token, ETH)`, then `latestRoundData` on
+   whatever comes back.
+2. **Aggregators the operator pinned**, for chains without a registry.
+3. **Every Uniswap v3 pool** between the token and each quote token (WETH, USDC,
+   USDT, DAI by default) at each fee tier — reading `slot0`, `liquidity`, and the
+   pool's own TWAP oracle over the requested window, clamped to whatever history the
+   pool's observation buffer actually holds.
+4. **Every Uniswap v2 pair** between the token and each quote token.
+
+It returns all of it, raw, and `internal/price` decides. The rules are simple enough
+to state in full:
+
+| Confidence | What produced it |
+| --- | --- |
+| **high** | A fresh Chainlink feed, in USD directly or TOKEN/ETH crossed with ETH/USD. |
+| **medium** | A v3 TWAP over at least the minimum window (10m by default), crossed into USD through a fresh feed or an assumed stablecoin peg. |
+| **low** | A spot price (v3 with no oracle history, or any v2 pair), a stale feed, or anything routed through one. Movable within a block. |
+| **none** | Nothing defensible was found. The price is absent — never zero. |
+
+Within a tier the freshest feed or the deepest pool wins, where depth is the pool's
+quote-side reserve in USD (real reserves for v2, in-range virtual reserves for v3):
+the cost of moving the price, which is what two pools should be compared by. Every
+response carries the whole route (`STEALTH/WETH 30m TWAP → ETH/USD feed`), the
+feed's age, the pool's depth, everything that lost, and the addresses of the
+registry and factories it consulted — so a consumer can check them against the
+deployments it trusts. A portfolio total reports the *weakest* confidence in the sum
+next to the number.
+
+Three things this deliberately does not do: it never falls back to an off-chain
+price; it never prices NFTs (a floor is a market question, not an oracle one); and it
+never publishes or commits a price — prices are live reads, like balances, not hints.
+
+Well-known deployments are built in for mainnet, Optimism, Base and Arbitrum. Any
+other chain, or any fork of Uniswap, is a `pricing:` block away; the demo runs the
+whole path against mocks on a dev chain.
+
 ## Architecture
 
 ```
@@ -249,7 +298,8 @@ overturn the root it just verified.
 | --- | --- | --- |
 | `GET` | `/v1/accounts/{addr}/contracts` | **The discovery surface.** Contracts this account has touched. |
 | `GET` | `/v1/accounts/{addr}` | Same, enriched with token metadata and live balances. |
-| `GET` | `/v1/accounts/{addr}/portfolio` | **Live state via the deployless lens**: balances, allowances, NFT ids, nonce, 7702 delegation — one call, one block. |
+| `GET` | `/v1/accounts/{addr}/portfolio` | **Live state via the deployless lens**: balances, allowances, NFT ids, nonce, 7702 delegation — one call, one block. With pricing configured, each fungible carries `price` and `value_usd`, and `valuation` sums them with the weakest confidence. |
+| `GET` | `/v1/prices?tokens=` | **Price discovery**: every feed and pool found on-chain for each token, the route chosen, everything that lost, and the sources consulted. |
 | `GET` | `/v1/assets` | Registered hints and their scan progress. |
 | `POST` | `/v1/assets` | Register a hint locally (gated by `api.allow_registration`). |
 | `GET` | `/v1/assets/{addr}/accounts` | Accounts known to have touched a contract. |
@@ -264,10 +314,11 @@ Every account response carries `as_of_block` so a caller can pin what it saw.
 ## Layout
 
 ```
-contracts/src/       HintRegistry.sol, AssetLens.sol + demo tokens; artifacts in contracts/out
+contracts/src/       HintRegistry.sol, AssetLens.sol, PriceLens.sol + demo tokens and mock oracles/pools
 contracts/evmtest/   separate module: runs the lens in a real EVM (heavy test-only deps)
 internal/chain/      the only place that touches a node (Source read / Sender write)
 internal/lens/       the deployless AssetLens client: encode, batch, decode
+internal/price/      the deployless PriceLens client, exact tick/feed math, and the routing policy
 internal/evmlog/     log decoding — which topics we watch and who is in them
 internal/indexer/    discovery, backfiller, follower, reorg handling, rollup aggregation
 internal/store/      PostgreSQL: rollup, pending buffer, commitments
@@ -318,5 +369,12 @@ Being explicit about what this does *not* do:
   its answers are exactly as good as that node — which is the point, but it means a
   portfolio is a live read, never a commitment. Nothing about it is published or
   challengeable.
+- **Prices are only as good as the contracts behind them.** A Chainlink feed is a
+  trusted oracle network; a DEX TWAP is manipulable with enough capital and time; a
+  spot price is manipulable within a block. The confidence tier says which one you
+  are looking at, and the route says exactly which contracts produced it, but this
+  is not a fraud-proof price. Tokens with no feed and no pool against a configured
+  quote token get no price at all, and stablecoins without a feed are valued at their
+  peg only with a note saying so.
 - **Commitments are cumulative snapshots**, so cost grows with total accounts rather than
   with recent activity. Fine at this scale; deltas or an accumulator would be the fix.

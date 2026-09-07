@@ -27,6 +27,7 @@ import (
 
 	"github.com/Skanislav/evm-scan/contracts"
 	"github.com/Skanislav/evm-scan/internal/chain"
+	"github.com/Skanislav/evm-scan/internal/price"
 )
 
 const (
@@ -142,6 +143,21 @@ func run(ctx context.Context, nodeURL string, userCount int, outPath, dsn, liste
 	fmt.Printf("DemoERC20     %s  (dWETH)\n", weth.Hex())
 	fmt.Printf("DemoERC721    %s  (dPUNK)\n", nft.Hex())
 	fmt.Printf("DemoERC20     %s  (dSTEALTH, NOT registered - for discovery)\n", stealth.Hex())
+
+	// ------------------------------------------------------- price sources
+	//
+	// A dev chain has no Chainlink and no Uniswap, so stand-ins for both go in: a
+	// feed registry resolving ETH/USD and dUSDC/USD, a v3 pool and a v2 pair for
+	// dSTEALTH. Nothing tells the indexer any of this exists; the PriceLens finds it
+	// through the registry and the factories, which is the behaviour worth seeing.
+	px, err := deployPriceSources(ctx, d, weth, usdc, stealth)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("FeedRegistry  %s  (ETH/USD = $%d, dUSDC/USD = $1)\n", px.registry.Hex(), demoEthUSD)
+	fmt.Printf("UniV3Factory  %s  (dSTEALTH/dWETH 0.3%%: 1 dWETH = %d dSTEALTH, 1h of oracle history)\n",
+		px.v3Factory.Hex(), demoStealthPerWeth)
+	fmt.Printf("UniV2Factory  %s  (dSTEALTH/dUSDC: 1 dSTEALTH = %s dUSDC)\n", px.v2Factory.Hex(), demoStealthUSDCv2)
 
 	// ------------------------------------------------------------ publisher
 	publisherKey, err := deriveKey("evm-scan demo publisher")
@@ -312,11 +328,140 @@ func run(ctx context.Context, nodeURL string, userCount int, outPath, dsn, liste
 	fmt.Printf("\nregistered 3 assets in HintRegistry; head is block %d\n", head)
 
 	if outPath != "" {
-		if err := writeConfig(outPath, dsn, listen, nodeURL, chainID, registry, publisherKey); err != nil {
+		if err := writeConfig(outPath, dsn, listen, nodeURL, chainID, registry, publisherKey, px); err != nil {
 			return err
 		}
 		fmt.Printf("wrote %s\n", outPath)
 		fmt.Printf("\nnext:  ./bin/evmscand -config %s\n", outPath)
+	}
+	return nil
+}
+
+// --------------------------------------------------------------------------
+// Price sources
+// --------------------------------------------------------------------------
+
+const (
+	demoEthUSD         = 3000
+	demoStealthPerWeth = 1000
+	demoStealthUSDCv2  = "2.9"
+)
+
+// Chainlink's Feed Registry denominations, as PriceLens keys them.
+var (
+	denomUSD = common.BigToAddress(big.NewInt(840))
+	denomETH = common.HexToAddress("0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE")
+)
+
+type priceSources struct {
+	registry, ethUsd, usdcUsd common.Address
+	v3Factory, v3Pool         common.Address
+	v2Factory, v2Pair         common.Address
+	weth, usdc                common.Address
+}
+
+// deployPriceSources puts mock oracles and pools on the dev chain, shaped exactly
+// like the contracts the PriceLens reads on a real one.
+func deployPriceSources(ctx context.Context, d *deployer, weth, usdc, stealth common.Address) (*priceSources, error) {
+	px := &priceSources{weth: weth, usdc: usdc}
+	var err error
+
+	px.ethUsd, err = d.deploy(ctx, "MockAggregatorV3", uint8(8), "ETH / USD", big.NewInt(demoEthUSD*1e8))
+	if err != nil {
+		return nil, fmt.Errorf("deploy ETH/USD feed: %w", err)
+	}
+	px.usdcUsd, err = d.deploy(ctx, "MockAggregatorV3", uint8(8), "USDC / USD", big.NewInt(1e8))
+	if err != nil {
+		return nil, fmt.Errorf("deploy USDC/USD feed: %w", err)
+	}
+	px.registry, err = d.deploy(ctx, "MockFeedRegistry")
+	if err != nil {
+		return nil, fmt.Errorf("deploy feed registry: %w", err)
+	}
+	regABI, err := abiOf("MockFeedRegistry")
+	if err != nil {
+		return nil, err
+	}
+	for _, f := range []struct{ base, agg common.Address }{{denomETH, px.ethUsd}, {usdc, px.usdcUsd}} {
+		data, err := regABI.Pack("setFeed", f.base, denomUSD, f.agg)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := d.sendFaucet(ctx, &px.registry, nil, data, callGas); err != nil {
+			return nil, fmt.Errorf("setFeed: %w", err)
+		}
+	}
+
+	// v3: dSTEALTH/dWETH at 0.3%. Token order follows the addresses, as on Uniswap.
+	t0, t1 := weth, stealth
+	ratio := float64(demoStealthPerWeth) // token1 per token0
+	if t1.Cmp(t0) < 0 {
+		t0, t1 = t1, t0
+		ratio = 1 / ratio
+	}
+	tick := price.TickForRatio(ratio)
+	px.v3Pool, err = d.deploy(ctx, "MockUniswapV3Pool", t0, t1, big.NewInt(3000),
+		price.SqrtPriceX96FromTick(tick), big.NewInt(int64(tick)), ether(1000))
+	if err != nil {
+		return nil, fmt.Errorf("deploy v3 pool: %w", err)
+	}
+	head, err := d.node.HeaderByNumber(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	poolABI, err := abiOf("MockUniswapV3Pool")
+	if err != nil {
+		return nil, err
+	}
+	// An hour of oracle history, so the daemon's default 30m TWAP is available.
+	data, err := poolABI.Pack("setHistory", uint32(head.Time-3600), uint16(1))
+	if err != nil {
+		return nil, err
+	}
+	if _, err := d.sendFaucet(ctx, &px.v3Pool, nil, data, callGas); err != nil {
+		return nil, fmt.Errorf("setHistory: %w", err)
+	}
+	px.v3Factory, err = d.deploy(ctx, "MockUniswapV3Factory")
+	if err != nil {
+		return nil, fmt.Errorf("deploy v3 factory: %w", err)
+	}
+	if err := d.register(ctx, "MockUniswapV3Factory", px.v3Factory, px.v3Pool); err != nil {
+		return nil, err
+	}
+
+	// v2: dSTEALTH/dUSDC, 10,000 dSTEALTH against 29,000 dUSDC.
+	p0, p1 := stealth, usdc
+	r0, r1 := ether(10_000), ether(29_000)
+	if p1.Cmp(p0) < 0 {
+		p0, p1 = p1, p0
+		r0, r1 = r1, r0
+	}
+	px.v2Pair, err = d.deploy(ctx, "MockUniswapV2Pair", p0, p1, r0, r1)
+	if err != nil {
+		return nil, fmt.Errorf("deploy v2 pair: %w", err)
+	}
+	px.v2Factory, err = d.deploy(ctx, "MockUniswapV2Factory")
+	if err != nil {
+		return nil, fmt.Errorf("deploy v2 factory: %w", err)
+	}
+	if err := d.register(ctx, "MockUniswapV2Factory", px.v2Factory, px.v2Pair); err != nil {
+		return nil, err
+	}
+	return px, d.wait(ctx)
+}
+
+// register tells a mock factory about a pool.
+func (d *deployer) register(ctx context.Context, factoryName string, factory, pool common.Address) error {
+	parsed, err := abiOf(factoryName)
+	if err != nil {
+		return err
+	}
+	data, err := parsed.Pack("register", pool)
+	if err != nil {
+		return err
+	}
+	if _, err := d.sendFaucet(ctx, &factory, nil, data, callGas); err != nil {
+		return fmt.Errorf("%s.register: %w", factoryName, err)
 	}
 	return nil
 }
@@ -472,7 +617,7 @@ func deriveKey(label string) (*ecdsa.PrivateKey, error) {
 	return crypto.ToECDSA(crypto.Keccak256([]byte(label)))
 }
 
-func writeConfig(path, dsn, listen, node string, chainID uint64, registry common.Address, key *ecdsa.PrivateKey) error {
+func writeConfig(path, dsn, listen, node string, chainID uint64, registry common.Address, key *ecdsa.PrivateKey, px *priceSources) error {
 	body := fmt.Sprintf(`# Generated by evmscan-demo. Local dev chain only.
 database:
   dsn: %q
@@ -520,8 +665,31 @@ chains:
       min_events: 10
       min_blocks: 3
       max_promotions_per_tick: 5
+
+    # On-chain price discovery. A dev chain has no Chainlink or Uniswap, so these
+    # point at the mocks evmscan-demo deployed; on a real chain leave them out and
+    # the well-known deployments are used. dSTEALTH has no feed at all — it is
+    # priced through its dWETH pool and then the ETH/USD feed, which is the route
+    # a long-tail token takes on mainnet too.
+    pricing:
+      enabled: true
+      use_defaults: false
+      feed_registry: %q
+      uniswap_v3_factory: %q
+      uniswap_v2_factory: %q
+      quote_tokens:
+        - address: %q
+          symbol: dWETH
+          wrapped_native: true
+        - address: %q
+          symbol: dUSDC
+          assume_usd_peg: true
+      twap_window: 30m
+      # Blocks are two seconds apart here; one lens read per block is plenty.
+      cache_ttl: 2s
 `, dsn, listen, chainID, registry.Hex(),
-		fmt.Sprintf("0x%x", crypto.FromECDSA(key)), chainID, node)
+		fmt.Sprintf("0x%x", crypto.FromECDSA(key)), chainID, node,
+		px.registry.Hex(), px.v3Factory.Hex(), px.v2Factory.Hex(), px.weth.Hex(), px.usdc.Hex())
 
 	return os.WriteFile(path, []byte(body), 0o600)
 }
