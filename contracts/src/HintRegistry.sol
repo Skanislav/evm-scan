@@ -46,6 +46,11 @@ import {IERC20, IOptimisticOracleV3, IOptimisticOracleV3CallbackRecipient} from 
 ///    with no oracle deployment. An `arbiter` address settles challenges. This mode is a
 ///    concession to reality, not the design: a deployment in it is only as neutral as
 ///    that one key, which is why `evmscan-deploy` prints the mode it is deploying in.
+///
+/// In both modes the bonds, the challenge window and the coverage pricing are immutable:
+/// they are stated once in the constructor and no key can change them afterwards. The
+/// arbiter cannot hand itself over either. The one thing a local arbiter may still edit
+/// is the gateway list, which is a hint clients verify, never a rule.
 contract HintRegistry is IOptimisticOracleV3CallbackRecipient {
     // --------------------------------------------------------------------
     // Types
@@ -146,17 +151,17 @@ contract HintRegistry is IOptimisticOracleV3CallbackRecipient {
     IERC20 public immutable bondCurrency;
 
     /// @notice Settles challenges in local-arbiter mode. Always zero in oracle mode.
-    address public arbiter;
-    uint256 public assetBond;
+    address public immutable arbiter;
+    uint256 public immutable assetBond;
     /// @notice Bond a publisher posts per commitment: wei in local-arbiter mode, units of
     ///         `bondCurrency` in oracle mode.
-    uint256 public publisherBond;
+    uint256 public immutable publisherBond;
     /// @notice Challenge window in seconds. In oracle mode this is the assertion liveness.
-    uint256 public challengeWindow;
+    uint256 public immutable challengeWindow;
     /// @notice Minimum funding `requestIndexing` accepts on top of the asset bond.
-    uint256 public minFunding;
+    uint256 public immutable minFunding;
     /// @notice Paid to a publisher per newly covered block of a funded asset.
-    uint256 public rewardPerBlock;
+    uint256 public immutable rewardPerBlock;
 
     mapping(bytes32 => Asset) private _assets;
     mapping(bytes32 => Funding) private _funding;
@@ -200,15 +205,17 @@ contract HintRegistry is IOptimisticOracleV3CallbackRecipient {
     event IndexAsserted(uint256 indexed epochId, bytes32 indexed assertionId);
     event IndexChallenged(uint256 indexed epochId, address indexed challenger);
     event IndexResolved(uint256 indexed epochId, EpochStatus status);
-    event ArbiterUpdated(address indexed previous, address indexed next);
-    /// @notice Emitted once, at deployment, so the adjudication mode is on-chain history.
+    /// @notice Emitted once, at deployment. Everything in it is immutable, so this is the
+    ///         whole configuration history of the contract.
     event RegistryConfigured(
         address indexed oracle,
         address indexed bondCurrency,
         address indexed arbiter,
         uint256 assetBond,
         uint256 publisherBond,
-        uint256 challengeWindow
+        uint256 challengeWindow,
+        uint256 minFunding,
+        uint256 rewardPerBlock
     );
     event AssetFunded(bytes32 indexed key, address indexed funder, uint256 amount, uint256 balance);
     event CoverageRewarded(
@@ -220,7 +227,6 @@ contract HintRegistry is IOptimisticOracleV3CallbackRecipient {
         uint64 newBlocks,
         uint256 reward
     );
-    event EconomicsUpdated(uint256 minFunding, uint256 rewardPerBlock);
     event GatewaysUpdated(string[] urls);
 
     // --------------------------------------------------------------------
@@ -303,11 +309,16 @@ contract HintRegistry is IOptimisticOracleV3CallbackRecipient {
         rewardPerBlock = econ_.rewardPerBlock;
         _setGateways(gateways_);
 
-        if (arbiter_ != address(0)) emit ArbiterUpdated(address(0), arbiter_);
         emit RegistryConfigured(
-            oracle_, bondCurrency_, arbiter_, econ_.assetBond, econ_.publisherBond, econ_.challengeWindow
+            oracle_,
+            bondCurrency_,
+            arbiter_,
+            econ_.assetBond,
+            econ_.publisherBond,
+            econ_.challengeWindow,
+            econ_.minFunding,
+            econ_.rewardPerBlock
         );
-        emit EconomicsUpdated(econ_.minFunding, econ_.rewardPerBlock);
     }
 
     /// @notice True when disputes are settled by the optimistic oracle rather than a key.
@@ -715,10 +726,10 @@ contract HintRegistry is IOptimisticOracleV3CallbackRecipient {
     // --------------------------------------------------------------------
 
     /// @notice Leaf encoding for the index commitment.
-    /// @param assetsHash keccak256 over the ascending-sorted, packed asset addresses the
+    /// @param assetsDigest keccak256 over the ascending-sorted, packed asset addresses the
     ///        account touched on `chainId` within the epoch range.
-    function leafHash(address account, uint64 chainId, bytes32 assetsHash) public pure returns (bytes32) {
-        return keccak256(abi.encode(account, chainId, assetsHash));
+    function leafHash(address account, uint64 chainId, bytes32 assetsDigest) public pure returns (bytes32) {
+        return keccak256(abi.encode(account, chainId, assetsDigest));
     }
 
     /// @notice Leaf encoding for the coverage commitment.
@@ -728,14 +739,14 @@ contract HintRegistry is IOptimisticOracleV3CallbackRecipient {
 
     /// @notice Verify an account's membership in a finalized (or proposed) commitment.
     /// @dev Sorted-pair merkle tree, matching the indexer's builder.
-    function verifyInclusion(uint256 epochId, address account, bytes32 assetsHash, bytes32[] calldata proof)
+    function verifyInclusion(uint256 epochId, address account, bytes32 assetsDigest, bytes32[] calldata proof)
         external
         view
         returns (bool)
     {
         if (epochId >= _epochs.length) revert UnknownEpoch();
         Epoch storage e = _epochs[epochId];
-        return _verify(e.root, leafHash(account, e.chainId, assetsHash), proof);
+        return _verify(e.root, leafHash(account, e.chainId, assetsDigest), proof);
     }
 
     /// @notice Verify an asset range's membership in an epoch's coverage commitment.
@@ -818,30 +829,14 @@ contract HintRegistry is IOptimisticOracleV3CallbackRecipient {
     // --------------------------------------------------------------------
     // Local-arbiter admin
     //
-    // Every function below reverts permanently in oracle mode.
+    // Bonds, window and pricing are immutable and the arbiter cannot be reassigned, so
+    // this is the only entry point a key holds, and it reverts permanently in oracle
+    // mode. Gateways are discovery hints: whatever they return is verified by
+    // `contractsOfCallback`, and an ERC-3668 client may ignore the list and bring its
+    // own, so the worst a bad list can do is make a lookup fail.
     // --------------------------------------------------------------------
 
-    function setArbiter(address next) external onlyLocalArbiter {
-        if (next == address(0)) revert BadConfig();
-        emit ArbiterUpdated(arbiter, next);
-        arbiter = next;
-    }
-
-    function setBonds(uint256 assetBond_, uint256 publisherBond_, uint256 challengeWindow_) external onlyLocalArbiter {
-        if (challengeWindow_ == 0 || challengeWindow_ > type(uint64).max) revert BadConfig();
-        assetBond = assetBond_;
-        publisherBond = publisherBond_;
-        challengeWindow = challengeWindow_;
-    }
-
-    function setEconomics(uint256 minFunding_, uint256 rewardPerBlock_) external onlyLocalArbiter {
-        minFunding = minFunding_;
-        rewardPerBlock = rewardPerBlock_;
-        emit EconomicsUpdated(minFunding_, rewardPerBlock_);
-    }
-
-    /// @notice Replace the gateway list `contractsOf` advertises. Gateways are hints,
-    ///         not authorities: whatever they return is verified by the callback.
+    /// @notice Replace the gateway list `contractsOf` advertises.
     function setGateways(string[] memory urls) external onlyLocalArbiter {
         _setGateways(urls);
     }
