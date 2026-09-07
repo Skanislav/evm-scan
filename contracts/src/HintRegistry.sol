@@ -379,6 +379,11 @@ contract HintRegistry is IOptimisticOracleV3CallbackRecipient {
     function _register(bytes32 key, uint64 chainId, address token, uint8 kind, uint64 fromBlock, uint256 bond)
         private
     {
+        // A revoked asset keeps its row and its place in the key list, so a re-register
+        // must not add a second entry: `listAssets` is how indexers bootstrap their scan
+        // set, and a duplicate there is a scan counted twice.
+        bool known = _assets[key].registeredAt != 0;
+
         _assets[key] = Asset({
             chainId: chainId,
             token: token,
@@ -389,7 +394,7 @@ contract HintRegistry is IOptimisticOracleV3CallbackRecipient {
             bond: bond,
             active: true
         });
-        _assetKeys.push(key);
+        if (!known) _assetKeys.push(key);
 
         emit AssetRegistered(key, chainId, token, kind, fromBlock, msg.sender);
     }

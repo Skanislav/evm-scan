@@ -370,3 +370,60 @@ func claimsFor(t *testing.T, cov []store.EpochCoverage) []coverageClaim {
 	}
 	return out
 }
+
+// A revoked asset keeps its place in the key list, so registering it again must not
+// append a second entry: `listAssets` is how an indexer bootstraps its scan set, and
+// a duplicate there makes it scan the same contract twice.
+func TestReRegisterAfterRevokeKeepsOneKey(t *testing.T) {
+	ctx := context.Background()
+	s := newSim(t)
+	chainID := s.chainID.Uint64()
+
+	art, err := contracts.Load("HintRegistry")
+	if err != nil {
+		t.Fatal(err)
+	}
+	regABI, err := art.Parsed()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctor, err := regABI.Pack("", ConstructorArgs(common.Address{}, common.Address{}, s.from, Economics{
+		AssetBond: big.NewInt(0), PublisherBond: big.NewInt(1e15), ChallengeWindow: big.NewInt(5),
+		MinFunding: big.NewInt(0), RewardPerBlock: big.NewInt(1e12),
+	}, nil)...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := s.sendTx(ctx, nil, nil, append(art.Creation(), ctor...))
+	if err != nil {
+		t.Fatalf("deploy: %v", err)
+	}
+	rcpt, err := s.client.TransactionReceipt(ctx, h)
+	if err != nil || rcpt.Status != types.ReceiptStatusSuccessful {
+		t.Fatalf("deploy receipt: %v", err)
+	}
+	registry := rcpt.ContractAddress
+
+	token := common.HexToAddress("0x00000000000000000000000000000000000000cc")
+	key := AssetKey(chainID, token)
+
+	data, _ := regABI.Pack("registerAsset", chainID, token, uint8(20), uint64(0))
+	s.mustSend(ctx, registry, nil, data)
+	data, _ = regABI.Pack("revokeAsset", key)
+	s.mustSend(ctx, registry, nil, data)
+	data, _ = regABI.Pack("registerAsset", chainID, token, uint8(20), uint64(0))
+	s.mustSend(ctx, registry, nil, data)
+
+	data, _ = regABI.Pack("assetCount")
+	out, err := s.CallAtHead(ctx, ethereum.CallMsg{To: &registry, Data: data})
+	if err != nil {
+		t.Fatalf("assetCount: %v", err)
+	}
+	vals, err := regABI.Unpack("assetCount", out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := vals[0].(*big.Int); n.Int64() != 1 {
+		t.Fatalf("assetCount after register/revoke/register = %s, want 1", n)
+	}
+}
