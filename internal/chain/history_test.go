@@ -370,6 +370,15 @@ func TestClassifyLogsError(t *testing.T) {
 		{"busy text", errors.New("server is busy, try again later"), LogsErrTransient},
 		{"client closed", rpc.ErrClientQuit, LogsErrTransient},
 
+		// A bare "not found" is never evidence about a block: these are a proxy in
+		// front of the RPC and a node that does not serve the method. Reading either
+		// as pruned history would set the backfill floor from a misconfiguration.
+		{"http 404 from a proxy", rpc.HTTPError{StatusCode: 404, Status: "404 Not Found",
+			Body: []byte("404 Not Found")}, LogsErrTransient},
+		{"method not found", codedErr{code: -32601, msg: "the method eth_getLogs does not exist/is not available"}, LogsErrUnknown},
+		{"invalid request", codedErr{code: -32600, msg: "invalid request"}, LogsErrUnknown},
+		{"bare not found text", errors.New("not found"), LogsErrUnknown},
+
 		{"nothing recognisable", errors.New("no backend"), LogsErrUnknown},
 		{"nil", nil, LogsErrUnknown},
 	}

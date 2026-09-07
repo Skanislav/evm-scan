@@ -51,7 +51,9 @@ func (k LogsErrorKind) String() string {
 const gethPrunedHistoryCode = 4444
 
 // Message fragments, lower-cased, that identify a definite history-unavailable
-// answer. Only the go-ethereum ones have been observed against a live node; the
+// answer. Each names the thing that is missing: a bare "not found" is not on the
+// list, because a proxy's "404 Not Found" and a JSON-RPC "method not found" both
+// contain it and neither is evidence that a block was pruned. Only the go-ethereum ones have been observed against a live node; the
 // rest are the wordings other clients are documented or reported to use, kept
 // here so a non-geth node degrades to "unknown" less often. See README, "Why a
 // snap-synced node is enough".
@@ -72,7 +74,6 @@ var historyUnavailableNeedles = []string{
 	"historical data",
 	"pruned",
 	"block not found",
-	"not found",
 	"beyond the last available block",
 	"distance to target block exceeds maximum",
 }
@@ -114,6 +115,9 @@ func ClassifyLogsError(err error) LogsErrorKind {
 		case -32002, // go-ethereum server-side "request timed out"
 			-32005: // "limit exceeded" / rate limit at several providers
 			return LogsErrTransient
+		case -32601, // "method not found": the node does not serve eth_getLogs at all
+			-32600: // malformed request; our bug, never the block's age
+			return LogsErrUnknown
 		}
 	}
 
@@ -123,6 +127,11 @@ func ClassifyLogsError(err error) LogsErrorKind {
 		case http.StatusTooManyRequests, http.StatusInternalServerError,
 			http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout,
 			http.StatusRequestTimeout:
+			return LogsErrTransient
+		case http.StatusNotFound:
+			// A proxy or load balancer answering the RPC path with 404. The body is
+			// "404 Not Found", which the message needles must not read as an answer
+			// about the block.
 			return LogsErrTransient
 		}
 	}
