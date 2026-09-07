@@ -3,7 +3,7 @@ BIN     := bin
 SOLC    ?= 0.8.28
 PKGS    := ./...
 
-.PHONY: all build test vet fmt lint contracts clean devchain demo run tidy check
+.PHONY: all build test test-evm vet fmt lint contracts clean devchain demo run tidy check
 
 all: build
 
@@ -28,8 +28,12 @@ fmt:
 tidy:
 	$(GO) mod tidy
 
+## test-evm: run the lens against a real EVM (own module: heavy, test-only deps)
+test-evm:
+	cd contracts/evmtest && $(GO) test ./...
+
 ## check: what CI runs
-check: fmt vet test
+check: fmt vet test test-evm
 
 ## contracts: recompile Solidity into contracts/out (requires node)
 contracts:

@@ -95,7 +95,7 @@ func callString(ctx context.Context, src chain.Source, addr common.Address, data
 	}
 	switch {
 	case len(out) == 32:
-		return clean(strings.TrimRight(string(out), "\x00")), nil
+		return Clean(strings.TrimRight(string(out), "\x00")), nil
 
 	case len(out) >= 64:
 		offset := new(big.Int).SetBytes(out[:32])
@@ -119,16 +119,17 @@ func callString(ctx context.Context, src chain.Source, addr common.Address, data
 		if start+n > uint64(len(out)) {
 			return "", errors.New("token: string body out of range")
 		}
-		return clean(string(out[start : start+n])), nil
+		return Clean(string(out[start : start+n])), nil
 
 	default:
 		return "", errors.New("token: unrecognised string encoding")
 	}
 }
 
-// clean drops control characters and invalid UTF-8 so a hostile token name cannot
-// inject terminal escapes or break JSON consumers downstream.
-func clean(s string) string {
+// Clean drops control characters and invalid UTF-8 so a hostile token name cannot
+// inject terminal escapes or break JSON consumers downstream. Exported because every
+// path that reads a token's own strings needs it, not just this one.
+func Clean(s string) string {
 	if !utf8.ValidString(s) {
 		s = strings.ToValidUTF8(s, "")
 	}

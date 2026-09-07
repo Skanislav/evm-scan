@@ -67,6 +67,49 @@ That is why discovery runs forward from the head rather than backward from genes
 history is the scarce resource, and the system only spends it on contracts something has
 already decided are worth indexing.
 
+## Reading state: one call, no deployment
+
+Discovery answers *which* contracts to ask about. Actually reading them is the other
+half, and doing it over plain RPC is worse than it looks: a balance, an allowance, a
+symbol, decimals, an owner, a URI — one `eth_call` each. Twenty tokens is well over a
+hundred round trips, and because each lands at whatever block the node was on, the
+"portfolio" that comes out never existed as a state the chain was ever in.
+
+`contracts/src/AssetLens.sol` does all of it inside one EVM execution: native balance,
+ERC-20 balances and allowances, ERC-165 detection, NFT ownership and URIs per token id,
+ERC-721Enumerable walking, and the account's own code, code hash and **EIP-7702
+delegation target**. One round trip, one block, one consistent snapshot.
+
+**It is never deployed.** `eth_call` with no `to` address executes creation code and
+returns whatever the constructor returns, so shipping the bytecode as the call payload
+turns a contract into a pure function:
+
+```
+eth_call({ data: <AssetLens creation code> || abi.encode(request) }, "latest")
+```
+
+That keeps the premise of the project intact. There is no address to trust, no upgrade
+key, no deployment to fund on each chain, and nothing to coordinate with anyone: the
+lens works against any EVM node, on any chain, the moment it compiles. Same posture as
+everything else here — read public state from your own node, ask nobody's permission.
+
+Three consequences worth knowing, all handled in `internal/lens`:
+
+- **The reply is treated as contract code**, so EIP-170's 24576-byte limit applies to
+  it (EIP-3860's 49152 applies to the payload). Too large a portfolio fails the call
+  outright rather than truncating, so the client batches tokens and halves the batch
+  when a node says no — the same adaptive shape the `eth_getLogs` sweep uses. Chains
+  differ on where that ceiling sits, which is exactly why the limit is discovered
+  rather than assumed.
+- **Nonces are not in there.** The EVM has no opcode for another account's nonce, so
+  no contract — deployless or not — can report one. It comes from
+  `eth_getTransactionCount` alongside the call, and the response says whether that
+  read landed instead of printing a confident `0`.
+- **Hostile tokens are boxed.** Every read the lens makes is a staticcall with capped
+  gas and capped returndata, and nothing a token does can revert the batch. A token
+  that stays silent comes back as *unknown*, never as zero: a wallet rendering a
+  failed call as a balance of nought is a bug, not a rounding error.
+
 ## Architecture
 
 ```
@@ -144,6 +187,9 @@ Then open <http://127.0.0.1:8080>, or:
 # what has this account touched?
 curl localhost:8080/v1/accounts/0xF431…0F9a/contracts
 
+# what does it hold *now*? one deployless eth_call, one block
+curl "localhost:8080/v1/accounts/0xF431…0F9a/portfolio?spenders=0x1111…&nfts=8"
+
 # commit the index on-chain
 curl -XPOST localhost:8080/v1/epochs -d '{"publish":true}'
 
@@ -165,6 +211,7 @@ snap-synced geth's IPC path, and raise `confirmations` to your reorg tolerance.
 | --- | --- | --- |
 | `GET` | `/v1/accounts/{addr}/contracts` | **The discovery surface.** Contracts this account has touched. |
 | `GET` | `/v1/accounts/{addr}` | Same, enriched with token metadata and live balances. |
+| `GET` | `/v1/accounts/{addr}/portfolio` | **Live state via the deployless lens**: balances, allowances, NFT ids, nonce, 7702 delegation — one call, one block. |
 | `GET` | `/v1/assets` | Registered hints and their scan progress. |
 | `POST` | `/v1/assets` | Register a hint locally (gated by `api.allow_registration`). |
 | `GET` | `/v1/assets/{addr}/accounts` | Accounts known to have touched a contract. |
@@ -179,8 +226,10 @@ Every account response carries `as_of_block` so a caller can pin what it saw.
 ## Layout
 
 ```
-contracts/src/       HintRegistry.sol + demo tokens; artifacts committed to contracts/out
+contracts/src/       HintRegistry.sol, AssetLens.sol + demo tokens; artifacts in contracts/out
+contracts/evmtest/   separate module: runs the lens in a real EVM (heavy test-only deps)
 internal/chain/      the only place that touches a node (Source read / Sender write)
+internal/lens/       the deployless AssetLens client: encode, batch, decode
 internal/evmlog/     log decoding — which topics we watch and who is in them
 internal/indexer/    discovery, backfiller, follower, reorg handling, rollup aggregation
 internal/store/      PostgreSQL: rollup, pending buffer, commitments
@@ -192,8 +241,10 @@ cmd/evmscan-demo/    devnet bootstrapper
 cmd/evmscan-verify/  independent proof checker
 ```
 
-`make check` runs fmt, vet and tests. Integration tests skip unless `EVMSCAN_TEST_NODE`
-points at a node.
+`make check` runs fmt, vet and tests, including `make test-evm` — the lens executed in
+a real EVM in `contracts/evmtest`, which lives in its own module so go-ethereum's
+in-process node never lands in the daemon's dependency graph. Integration tests against
+a real node skip unless `EVMSCAN_TEST_NODE` points at one.
 
 ## Known limits
 
@@ -214,7 +265,14 @@ Being explicit about what this does *not* do:
 - **Only identity-carrying token events are decoded** (`Transfer`, `Approval`,
   `ApprovalForAll`, `TransferSingle`, `TransferBatch`). A contract whose interactions
   never surface an address in an indexed topic will not produce hints.
-- **ERC-1155 balances are not reported.** Balance there is per token id and the index
-  tracks contracts, not ids. Reporting nothing beats reporting a misleading zero.
+- **ERC-1155 balances are not reported by the index-driven views.** Balance there is
+  per token id and the index tracks contracts, not ids. Reporting nothing beats
+  reporting a misleading zero. The portfolio endpoint *will* return per-id balances,
+  but only for ids you name: nothing here discovers which ids an account holds unless
+  the contract implements ERC-721Enumerable.
+- **The lens reads, it does not verify.** It runs on your node against head state, so
+  its answers are exactly as good as that node — which is the point, but it means a
+  portfolio is a live read, never a commitment. Nothing about it is published or
+  challengeable.
 - **Commitments are cumulative snapshots**, so cost grows with total accounts rather than
   with recent activity. Fine at this scale; deltas or an accumulator would be the fix.

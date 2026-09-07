@@ -6,12 +6,8 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
-	"sync"
 	"time"
 
-	"github.com/ethereum/go-ethereum/common"
-
-	"github.com/Skanislav/evm-scan/internal/chain"
 	"github.com/Skanislav/evm-scan/internal/hintreg"
 	"github.com/Skanislav/evm-scan/internal/indexer"
 	"github.com/Skanislav/evm-scan/internal/store"
@@ -326,54 +322,26 @@ func (s *Server) accountAssets(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// The lens reports the block it ran at, so when balances came back there is no
+	// need to ask for the head separately — and no window in which the two disagree.
+	var head uint64
 	if r.URL.Query().Get("balances") != "false" {
-		s.fillBalances(ctx, src, account, rows, out)
+		// Only when the lens read the whole list in one go: a stitched read has no
+		// single block to be as of, and saying otherwise would be a small lie.
+		if block, atomic := s.fillBalances(ctx, src, account, rows, out); atomic {
+			head = block
+		}
+	}
+	if head == 0 {
+		head, _ = src.HeadBlock(ctx)
 	}
 
-	head, _ := src.HeadBlock(ctx)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"account":     account.Hex(),
 		"chain_id":    chainID,
 		"as_of_block": head,
 		"assets":      out,
 	})
-}
-
-// fillBalances reads balanceOf for each discovered asset concurrently.
-//
-// ERC-1155 is skipped: balance there is per token id, and the index tracks contracts
-// rather than ids, so there is no single number to report. Returning nothing is
-// better than returning a misleading zero.
-func (s *Server) fillBalances(ctx context.Context, src chain.Source, account common.Address,
-	rows []store.AccountAsset, out []accountAssetJSON) {
-
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	const parallelism = 8
-	sem := make(chan struct{}, parallelism)
-	var wg sync.WaitGroup
-
-	for i := range rows {
-		if out[i].Standard == "erc1155" || out[i].Standard == "unknown" {
-			continue
-		}
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-
-			bal, err := token.BalanceOf(ctx, src, rows[i].Asset, account)
-			if err != nil {
-				out[i].BalanceError = err.Error()
-				return
-			}
-			str := bal.String()
-			out[i].Balance = &str
-		}(i)
-	}
-	wg.Wait()
 }
 
 // accountContracts is the minimal wallet-facing surface: just the contract list.

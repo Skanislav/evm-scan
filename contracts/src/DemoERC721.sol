@@ -26,6 +26,15 @@ contract DemoERC721 {
         symbol = symbol_;
     }
 
+    /// @notice ERC-165, claiming ERC-165 itself and ERC-721.
+    /// @dev Here because it is how a reader is *supposed* to tell an NFT apart from a
+    ///      fungible token: without it, a lens or an indexer is left guessing from the
+    ///      shape of the interface. Deliberately does not claim ERC-721Metadata, which
+    ///      this demo does not implement.
+    function supportsInterface(bytes4 interfaceId) external pure returns (bool) {
+        return interfaceId == 0x01ffc9a7 || interfaceId == 0x80ac58cd;
+    }
+
     function mint(address to) external returns (uint256 tokenId) {
         tokenId = nextTokenId++;
         ownerOf[tokenId] = to;
