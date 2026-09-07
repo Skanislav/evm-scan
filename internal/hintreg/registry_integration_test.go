@@ -145,6 +145,8 @@ func TestRegistryOracleModeHasNoArbiter(t *testing.T) {
 		{"setArbiter", []any{h.faucet}},
 		{"setBonds", []any{big.NewInt(1), big.NewInt(1), big.NewInt(1)}},
 		{"resolveChallenge", []any{big.NewInt(0), true}},
+		{"setEconomics", []any{big.NewInt(1), big.NewInt(1)}},
+		{"setGateways", []any{[]string{"https://example.invalid/{sender}/{data}.json"}}},
 	} {
 		if err := h.simulate(t, env.registry, c.method, c.args...); err == nil {
 			t.Fatalf("%s succeeded in oracle mode", c.method)
@@ -158,9 +160,8 @@ func TestRegistryLocalArbiterModeStillWorks(t *testing.T) {
 	bond := big.NewInt(1_000_000)
 
 	// The fallback for chains with no oracle: the deployer settles disputes.
-	registry := h.deploy(t, "HintRegistry",
-		common.Address{}, common.Address{}, h.faucet,
-		big.NewInt(0), bond, big.NewInt(liveness))
+	registry := h.deploy(t, "HintRegistry", hintreg.ConstructorArgs(
+		common.Address{}, common.Address{}, h.faucet, testEconomics(bond), nil)...)
 
 	client := h.client(t, registry)
 	mode, err := client.Mode(h.ctx)
@@ -173,7 +174,7 @@ func TestRegistryLocalArbiterModeStillWorks(t *testing.T) {
 
 	publisher := h.fundedKey(t, "publisher")
 	h.sendKey(t, publisher, &registry, bond, h.pack(t, reg, "publishIndex",
-		uint64(1), uint64(1), uint64(100), [32]byte(common.HexToHash("0xfeed")), "ipfs://local"))
+		uint64(1), uint64(1), uint64(100), [32]byte(common.HexToHash("0xfeed")), [32]byte{}, "ipfs://local"))
 
 	challenger := h.fundedKey(t, "challenger")
 	challengerAddr := crypto.PubkeyToAddress(challenger.PublicKey)
@@ -195,6 +196,18 @@ func TestRegistryLocalArbiterModeStillWorks(t *testing.T) {
 // --------------------------------------------------------------------------
 // Harness
 // --------------------------------------------------------------------------
+
+// testEconomics prices a test registry: no asset bond, the given publisher bond, the
+// short liveness, and no coverage rewards (those have their own tests).
+func testEconomics(publisherBond *big.Int) hintreg.Economics {
+	return hintreg.Economics{
+		AssetBond:       big.NewInt(0),
+		PublisherBond:   publisherBond,
+		ChallengeWindow: big.NewInt(liveness),
+		MinFunding:      big.NewInt(0),
+		RewardPerBlock:  big.NewInt(0),
+	}
+}
 
 type oracleEnv struct {
 	registry  common.Address
@@ -258,8 +271,8 @@ func (h *harness) deployOracleMode(t *testing.T) oracleEnv {
 	token := h.deploy(t, "DemoERC20", "Bond Token", "BOND")
 	// The faucet stands in for UMA's DVM.
 	oracle := h.deploy(t, "MockOptimisticOracleV3", h.faucet, big.NewInt(0))
-	registry := h.deploy(t, "HintRegistry",
-		oracle, token, common.Address{}, big.NewInt(0), bond, big.NewInt(liveness))
+	registry := h.deploy(t, "HintRegistry", hintreg.ConstructorArgs(
+		oracle, token, common.Address{}, testEconomics(bond), nil)...)
 
 	client := h.client(t, registry)
 	mode, err := client.Mode(h.ctx)
@@ -284,7 +297,7 @@ func (h *harness) publish(t *testing.T, env oracleEnv, key *ecdsa.PrivateKey, fr
 		t.Fatal(err)
 	}
 	h.sendKey(t, key, &env.registry, nil, h.pack(t, reg, "publishIndex",
-		uint64(1), from, to, [32]byte(root), "ipfs://table"))
+		uint64(1), from, to, [32]byte(root), [32]byte{}, "ipfs://table"))
 	return int64(before)
 }
 
@@ -315,7 +328,7 @@ func (h *harness) client(t *testing.T, registry common.Address) *hintreg.Client 
 	return c
 }
 
-func (h *harness) epoch(t *testing.T, registry common.Address, epochID int64) hintreg.OnchainEpoch {
+func (h *harness) epoch(t *testing.T, registry common.Address, epochID int64) hintreg.RegistryEpoch {
 	t.Helper()
 	e, err := h.client(t, registry).GetEpoch(h.ctx, epochID)
 	if err != nil {

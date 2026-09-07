@@ -1,12 +1,17 @@
-// Command evmscan-deploy deploys a HintRegistry and prints how it will settle disputes.
+// Command evmscan-deploy puts a HintRegistry on a real network and acts on it.
+//
+// evmscan-demo only works against `geth --dev`, because it relies on the node's
+// unlocked account. This tool signs locally, so it works over any RPC endpoint, and
+// it does not insist on a local node: deploying is a one-off, and the indexer's
+// locality guarantee is about the node it reads from, not this.
 //
 // A registry is deployed in one of two adjudication modes, and the mode cannot be
-// changed afterwards, so this tool exists to make the choice explicit and to print it
-// back:
+// changed afterwards, so the choice is explicit and the tool reads it back off the
+// chain and prints it:
 //
 //	optimistic-oracle  -oracle 0x… -bond-currency 0x…
 //	                   Disputes go to UMA's Optimistic Oracle V3. No arbiter, no owner,
-//	                   no admin setter is reachable.
+//	                   no admin setter is reachable — economics and gateways are final.
 //
 //	local-arbiter      -arbiter 0x…
 //	                   The fallback for a chain with no oracle deployment: one key
@@ -15,24 +20,32 @@
 //
 // Usage:
 //
-//	evmscan-deploy -node /tmp/devchain/geth.ipc -arbiter 0xabc… -challenge-window 3600
-//	evmscan-deploy -node ws://127.0.0.1:8546 -key 0x… \
-//	    -oracle 0x… -bond-currency 0x… -publisher-bond 500000000000000000
+//	evmscan-deploy -node https://... -key 0x... -arbiter 0x... \
+//	    -publisher-bond 0 -asset-bond 0 -min-funding 1000000000000000 \
+//	    -reward-per-block 100000000000 -challenge-window 3600 \
+//	    -gateway 'https://host/ccip/{sender}/{data}.json'
+//
+//	evmscan-deploy -node https://... -key 0x... -oracle 0x... -bond-currency 0x... \
+//	    -publisher-bond 500000000000000000 -challenge-window 7200
+//
+//	evmscan-deploy -node https://... -key 0x... -registry 0x... \
+//	    -request 0xToken:20:8000000:5000000000000000
+//
+//	evmscan-deploy -node https://... -key 0x... -registry 0x... -fund 0xToken:1000000000000000
 package main
 
 import (
 	"context"
-	"crypto/ecdsa"
 	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"math/big"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
-	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -42,37 +55,64 @@ import (
 	"github.com/Skanislav/evm-scan/internal/hintreg"
 )
 
-type options struct {
-	nodeURL         string
-	requireLocal    bool
-	keyHex          string
-	oracle          string
-	bondCurrency    string
-	arbiter         string
-	assetBond       string
-	publisherBond   string
-	challengeWindow uint64
+type listFlag []string
+
+func (l *listFlag) String() string     { return strings.Join(*l, ",") }
+func (l *listFlag) Set(v string) error { *l = append(*l, v); return nil }
+
+type opts struct {
+	node, key, registry string
+	requireLocal        bool
+	oracle, currency    string
+	arbiter             string
+	econ                hintreg.Economics
+	timeout             time.Duration
+	requests, funds     []string
+	gateways            []string
 }
 
 func main() {
-	var o options
-	flag.StringVar(&o.nodeURL, "node", "", "IPC path or ws/http URL of the node to deploy through")
-	flag.BoolVar(&o.requireLocal, "require-local-node", true, "refuse to deploy through a non-loopback endpoint")
-	flag.StringVar(&o.keyHex, "key", "", "deployer private key; omit to use the node's first unlocked account (dev chains)")
+	var (
+		o        opts
+		requests listFlag
+		funds    listFlag
+		gateways listFlag
+		window   uint64
+	)
+	flag.StringVar(&o.node, "node", "", "RPC endpoint of the target chain (ipc path, ws:// or http://)")
+	flag.BoolVar(&o.requireLocal, "require-local-node", false, "refuse to deploy through a non-loopback endpoint")
+	flag.StringVar(&o.key, "key", os.Getenv("EVMSCAN_DEPLOYER_KEY"), "hex private key that pays for everything (or EVMSCAN_DEPLOYER_KEY)")
+	flag.StringVar(&o.registry, "registry", "", "existing HintRegistry to act on; empty deploys a new one")
 	flag.StringVar(&o.oracle, "oracle", "", "UMA Optimistic Oracle V3 address; empty selects local-arbiter mode")
-	flag.StringVar(&o.bondCurrency, "bond-currency", "", "ERC-20 the oracle bonds are denominated in (required with -oracle)")
-	flag.StringVar(&o.arbiter, "arbiter", "", "dispute arbiter (required without -oracle)")
-	flag.StringVar(&o.assetBond, "asset-bond", "0", "bond an asset hint costs, in wei")
-	flag.StringVar(&o.publisherBond, "publisher-bond", "0", "bond a commitment costs: bond-currency units with -oracle, wei without")
-	flag.Uint64Var(&o.challengeWindow, "challenge-window", 7200, "dispute window in seconds (assertion liveness with -oracle)")
+	flag.StringVar(&o.currency, "bond-currency", "", "ERC-20 the oracle bonds are denominated in (required with -oracle)")
+	flag.StringVar(&o.arbiter, "arbiter", "", "dispute arbiter for a new registry (required without -oracle)")
+	assetBond := flag.String("asset-bond", "0", "bond registerAsset requires, in wei")
+	pubBond := flag.String("publisher-bond", "0", "bond publishIndex requires: bond-currency units with -oracle, wei without")
+	flag.Uint64Var(&window, "challenge-window", 3600, "dispute window in seconds (assertion liveness with -oracle)")
+	minFund := flag.String("min-funding", "0", "minimum requestIndexing deposit above the bond, in wei")
+	reward := flag.String("reward-per-block", "0", "paid to a publisher per newly covered block of a funded asset, in wei")
+	flag.DurationVar(&o.timeout, "timeout", 3*time.Minute, "how long to wait for each receipt")
+	flag.Var(&requests, "request", "requestIndexing as token:kind:fromBlock:valueWei (repeatable)")
+	flag.Var(&funds, "fund", "fundAsset for a token on this chain as token:valueWei (repeatable)")
+	flag.Var(&gateways, "gateway", "ERC-3668 gateway URL template for contractsOf, e.g. https://host/ccip/{sender}/{data}.json (repeatable; set at deployment, or replaces the list on an existing local-arbiter registry)")
 	flag.Parse()
 
-	if o.nodeURL == "" {
-		flag.Usage()
-		os.Exit(2)
+	if o.node == "" || o.key == "" {
+		log.Fatal("-node and -key (or EVMSCAN_DEPLOYER_KEY) are required")
 	}
+	if window == 0 {
+		log.Fatal("-challenge-window must be greater than zero")
+	}
+	o.econ = hintreg.Economics{
+		AssetBond:       mustWei(*assetBond),
+		PublisherBond:   mustWei(*pubBond),
+		ChallengeWindow: new(big.Int).SetUint64(window),
+		MinFunding:      mustWei(*minFund),
+		RewardPerBlock:  mustWei(*reward),
+	}
+	o.requests, o.funds, o.gateways = requests, funds, gateways
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
 	if err := run(ctx, o); err != nil {
@@ -80,13 +120,13 @@ func main() {
 	}
 }
 
-func run(ctx context.Context, o options) error {
-	args, err := o.constructorArgs()
+func run(ctx context.Context, o opts) error {
+	key, err := crypto.HexToECDSA(strings.TrimPrefix(o.key, "0x"))
 	if err != nil {
-		return err
+		return fmt.Errorf("parse key: %w", err)
 	}
 
-	node, err := chain.Dial(ctx, o.nodeURL, o.requireLocal)
+	node, err := chain.Dial(ctx, o.node, o.requireLocal)
 	if err != nil {
 		return err
 	}
@@ -96,83 +136,148 @@ func run(ctx context.Context, o options) error {
 	if err != nil {
 		return err
 	}
+	sub := hintreg.NewEOASubmitter(node, key, chainID, o.timeout)
+	fmt.Printf("chain id   %d\n", chainID)
+	fmt.Printf("deployer   %s\n", sub.Sender().Hex())
 
-	d, err := newDeployer(ctx, node, chainID, o.keyHex)
+	art, err := contracts.Load("HintRegistry")
+	if err != nil {
+		return err
+	}
+	regABI, err := art.Parsed()
 	if err != nil {
 		return err
 	}
 
-	fmt.Printf("chain id       %d\n", chainID)
-	fmt.Printf("node           %s\n", node.Endpoint().String())
-	fmt.Printf("deployer       %s\n", d.from.Hex())
+	var registry common.Address
+	if o.registry == "" {
+		args, err := o.constructorArgs()
+		if err != nil {
+			return err
+		}
+		packed, err := regABI.Pack("", args...)
+		if err != nil {
+			return fmt.Errorf("pack constructor: %w", err)
+		}
+		h, err := sub.Deploy(ctx, append(art.Creation(), packed...))
+		if err != nil {
+			return err
+		}
+		fmt.Printf("deploy tx  %s\n", h.Hex())
+		r, err := sub.Wait(ctx, h)
+		if err != nil {
+			return err
+		}
+		if r.Status != types.ReceiptStatusSuccessful {
+			return errors.New("HintRegistry deployment reverted (bad mode combination or bond below the oracle's minimum?)")
+		}
+		registry = r.ContractAddress
+		fmt.Printf("registry   %s\n\n", registry.Hex())
 
-	addr, err := d.deploy(ctx, "HintRegistry", args...)
-	if err != nil {
-		return fmt.Errorf("deploy HintRegistry: %w", err)
-	}
-	fmt.Printf("HintRegistry   %s\n\n", addr.Hex())
+		// Read the mode back off the chain rather than echoing the flags: what matters
+		// is what the deployed bytecode says, not what we asked for.
+		client, err := hintreg.NewClient(node, registry)
+		if err != nil {
+			return err
+		}
+		mode, err := client.Mode(ctx)
+		if err != nil {
+			return err
+		}
+		printMode(mode)
+		fmt.Printf("min funding      %s wei\n", o.econ.MinFunding)
+		fmt.Printf("reward per block %s wei\n", o.econ.RewardPerBlock)
+		fmt.Printf("gateways         %d\n", len(o.gateways))
+	} else {
+		if !common.IsHexAddress(o.registry) {
+			return fmt.Errorf("bad registry address %q", o.registry)
+		}
+		registry = common.HexToAddress(o.registry)
+		fmt.Printf("registry   %s\n", registry.Hex())
 
-	// Read the mode back off the chain rather than echoing the flags: what matters is
-	// what the deployed bytecode says, not what we asked for.
-	client, err := hintreg.NewClient(node, addr)
-	if err != nil {
-		return err
+		if len(o.gateways) > 0 {
+			data, err := regABI.Pack("setGateways", o.gateways)
+			if err != nil {
+				return fmt.Errorf("pack setGateways: %w", err)
+			}
+			if err := send(ctx, sub, registry, nil, data, fmt.Sprintf("setGateways (%d)", len(o.gateways))); err != nil {
+				return fmt.Errorf("%w (only the arbiter of a local-arbiter registry may do this; in oracle mode the list is fixed at deployment)", err)
+			}
+		}
 	}
-	mode, err := client.Mode(ctx)
-	if err != nil {
-		return err
-	}
-	printMode(mode)
 
-	fmt.Printf("\nregistry:\n  chain_id: %d\n  address: %q\n", chainID, addr.Hex())
+	for _, spec := range o.requests {
+		token, kind, from, value, err := parseRequest(spec)
+		if err != nil {
+			return err
+		}
+		data, err := regABI.Pack("requestIndexing", chainID, token, kind, from)
+		if err != nil {
+			return fmt.Errorf("pack requestIndexing: %w", err)
+		}
+		if err := send(ctx, sub, registry, value, data, "requestIndexing "+token.Hex()); err != nil {
+			return err
+		}
+	}
+
+	for _, spec := range o.funds {
+		parts := strings.Split(spec, ":")
+		if len(parts) != 2 || !common.IsHexAddress(parts[0]) {
+			return fmt.Errorf("bad -fund %q, want token:valueWei", spec)
+		}
+		token := common.HexToAddress(parts[0])
+		value, ok := new(big.Int).SetString(parts[1], 10)
+		if !ok {
+			return fmt.Errorf("bad -fund value %q", parts[1])
+		}
+		data, err := regABI.Pack("fundAsset", [32]byte(hintreg.AssetKey(chainID, token)))
+		if err != nil {
+			return fmt.Errorf("pack fundAsset: %w", err)
+		}
+		if err := send(ctx, sub, registry, value, data, "fundAsset "+token.Hex()); err != nil {
+			return err
+		}
+	}
+
+	fmt.Printf("\nnext:  EVMSCAN_REGISTRY_ADDRESS=%s\n", registry.Hex())
 	return nil
 }
 
-// printMode is the whole point of the tool: a deployment's adjudication mode is fixed
-// forever at construction, so it gets stated in full, once, at the moment it is fixed.
+// printMode is the whole point of deploying through this tool: a deployment's
+// adjudication mode is fixed forever at construction, so it gets stated in full, once,
+// at the moment it is fixed.
 func printMode(m hintreg.Mode) {
 	if m.OracleMode() {
-		fmt.Printf("mode           optimistic-oracle\n")
-		fmt.Printf("oracle         %s\n", m.Oracle.Hex())
-		fmt.Printf("bond currency  %s\n", m.BondCurrency.Hex())
-		fmt.Printf("publisher bond %s (bond-currency units)\n", m.PublisherBond)
-		fmt.Printf("asset bond     %s wei\n", m.AssetBond)
-		fmt.Printf("liveness       %ds\n", m.ChallengeWindow)
-		fmt.Printf("arbiter        none — disputes are settled by the oracle, and no admin\n")
-		fmt.Printf("               setter on this deployment is reachable.\n")
+		fmt.Printf("mode             optimistic-oracle\n")
+		fmt.Printf("oracle           %s\n", m.Oracle.Hex())
+		fmt.Printf("bond currency    %s\n", m.BondCurrency.Hex())
+		fmt.Printf("publisher bond   %s (bond-currency units)\n", m.PublisherBond)
+		fmt.Printf("asset bond       %s wei\n", m.AssetBond)
+		fmt.Printf("liveness         %ds\n", m.ChallengeWindow)
+		fmt.Printf("arbiter          none — disputes are settled by the oracle, and no admin\n")
+		fmt.Printf("                 setter on this deployment is reachable.\n")
 		return
 	}
 
-	fmt.Printf("mode           local-arbiter  (FALLBACK)\n")
-	fmt.Printf("arbiter        %s\n", m.Arbiter.Hex())
-	fmt.Printf("publisher bond %s wei\n", m.PublisherBond)
-	fmt.Printf("asset bond     %s wei\n", m.AssetBond)
-	fmt.Printf("window         %ds\n", m.ChallengeWindow)
+	fmt.Printf("mode             local-arbiter  (FALLBACK)\n")
+	fmt.Printf("arbiter          %s\n", m.Arbiter.Hex())
+	fmt.Printf("publisher bond   %s wei\n", m.PublisherBond)
+	fmt.Printf("asset bond       %s wei\n", m.AssetBond)
+	fmt.Printf("window           %ds\n", m.ChallengeWindow)
 	fmt.Printf("\nWARNING: this deployment settles every dispute with one key, which can\n")
 	fmt.Printf("also retune the bonds and hand itself over. Use it only on a chain with no\n")
-	fmt.Printf("optimistic oracle deployment; pass -oracle and -bond-currency otherwise.\n")
+	fmt.Printf("optimistic oracle deployment; pass -oracle and -bond-currency otherwise.\n\n")
 }
 
-// constructorArgs validates the flag combination and packs HintRegistry's constructor.
-// The contract enforces the same rules; failing here just makes the error readable.
-func (o options) constructorArgs() ([]any, error) {
-	assetBond, ok := new(big.Int).SetString(o.assetBond, 10)
-	if !ok || assetBond.Sign() < 0 {
-		return nil, fmt.Errorf("-asset-bond %q is not a non-negative integer", o.assetBond)
-	}
-	publisherBond, ok := new(big.Int).SetString(o.publisherBond, 10)
-	if !ok || publisherBond.Sign() < 0 {
-		return nil, fmt.Errorf("-publisher-bond %q is not a non-negative integer", o.publisherBond)
-	}
-	if o.challengeWindow == 0 {
-		return nil, errors.New("-challenge-window must be greater than zero")
-	}
-
+// constructorArgs validates the flag combination and lays out HintRegistry's
+// constructor. The contract enforces the same rules; failing here makes the error
+// readable instead of a reverted deployment.
+func (o opts) constructorArgs() ([]any, error) {
 	oracle, err := optionalAddress("-oracle", o.oracle)
 	if err != nil {
 		return nil, err
 	}
-	currency, err := optionalAddress("-bond-currency", o.bondCurrency)
+	currency, err := optionalAddress("-bond-currency", o.currency)
 	if err != nil {
 		return nil, err
 	}
@@ -197,8 +302,7 @@ func (o options) constructorArgs() ([]any, error) {
 			return nil, errors.New("-bond-currency only applies with -oracle; local-arbiter bonds are wei")
 		}
 	}
-
-	return []any{oracle, currency, arbiter, assetBond, publisherBond, new(big.Int).SetUint64(o.challengeWindow)}, nil
+	return hintreg.ConstructorArgs(oracle, currency, arbiter, o.econ, o.gateways), nil
 }
 
 func optionalAddress(flagName, raw string) (common.Address, error) {
@@ -211,130 +315,50 @@ func optionalAddress(flagName, raw string) (common.Address, error) {
 	return common.HexToAddress(raw), nil
 }
 
-// --------------------------------------------------------------------------
-// Deploy helper
-// --------------------------------------------------------------------------
-
-// deployer sends either locally signed transactions or, on a dev chain with an unlocked
-// account, unsigned ones through the node.
-type deployer struct {
-	node    *chain.Node
-	chainID *big.Int
-	from    common.Address
-	key     *ecdsa.PrivateKey
-}
-
-func newDeployer(ctx context.Context, node *chain.Node, chainID uint64, keyHex string) (*deployer, error) {
-	d := &deployer{node: node, chainID: new(big.Int).SetUint64(chainID)}
-
-	if keyHex != "" {
-		key, err := crypto.HexToECDSA(strings.TrimPrefix(keyHex, "0x"))
-		if err != nil {
-			return nil, fmt.Errorf("parse -key: %w", err)
-		}
-		d.key = key
-		d.from = crypto.PubkeyToAddress(key.PublicKey)
-		return d, nil
-	}
-
-	accounts, err := node.Accounts(ctx)
-	if err != nil || len(accounts) == 0 {
-		return nil, fmt.Errorf("no -key given and the node has no unlocked account: %w", err)
-	}
-	d.from = accounts[0]
-	return d, nil
-}
-
-func (d *deployer) deploy(ctx context.Context, name string, args ...any) (common.Address, error) {
-	art, err := contracts.Load(name)
+func send(ctx context.Context, sub *hintreg.EOASubmitter, to common.Address, value *big.Int, data []byte, what string) error {
+	h, err := sub.Submit(ctx, to, value, data)
 	if err != nil {
-		return common.Address{}, err
+		return fmt.Errorf("%s: %w", what, err)
 	}
-	parsed, err := art.Parsed()
+	r, err := sub.Wait(ctx, h)
 	if err != nil {
-		return common.Address{}, err
-	}
-	packed, err := parsed.Pack("", args...)
-	if err != nil {
-		return common.Address{}, fmt.Errorf("pack %s constructor: %w", name, err)
-	}
-	code := append(art.Creation(), packed...)
-
-	// Estimating doubles as a dry run: a constructor that reverts on a bad configuration
-	// should not cost a deployment's worth of gas to discover.
-	gas, err := d.node.EstimateGas(ctx, ethereum.CallMsg{From: d.from, Data: code})
-	if err != nil {
-		return common.Address{}, fmt.Errorf("%s constructor would revert: %w", name, err)
-	}
-	gas += gas / 5
-
-	h, err := d.send(ctx, nil, code, gas)
-	if err != nil {
-		return common.Address{}, err
-	}
-	r, err := d.receipt(ctx, h)
-	if err != nil {
-		return common.Address{}, err
+		return fmt.Errorf("%s: %w", what, err)
 	}
 	if r.Status != types.ReceiptStatusSuccessful {
-		return common.Address{}, fmt.Errorf("%s deployment reverted (tx %s)", name, h.Hex())
+		return fmt.Errorf("%s reverted (tx %s)", what, h.Hex())
 	}
-	return r.ContractAddress, nil
+	fmt.Printf("%-40s tx %s  value %s wei\n", what, h.Hex(), value)
+	return nil
 }
 
-func (d *deployer) send(ctx context.Context, to *common.Address, data []byte, gas uint64) (common.Hash, error) {
-	if d.key == nil {
-		return d.node.SendUnsigned(ctx, d.from, to, nil, data, gas)
+// parseRequest reads token:kind:fromBlock:valueWei.
+func parseRequest(spec string) (common.Address, uint8, uint64, *big.Int, error) {
+	parts := strings.Split(spec, ":")
+	if len(parts) != 4 {
+		return common.Address{}, 0, 0, nil, fmt.Errorf("bad -request %q, want token:kind:fromBlock:valueWei", spec)
 	}
-
-	nonce, err := d.node.PendingNonceAt(ctx, d.from)
+	if !common.IsHexAddress(parts[0]) {
+		return common.Address{}, 0, 0, nil, fmt.Errorf("bad -request token %q", parts[0])
+	}
+	kind, err := strconv.ParseUint(parts[1], 10, 8)
 	if err != nil {
-		return common.Hash{}, err
+		return common.Address{}, 0, 0, nil, fmt.Errorf("bad -request kind %q (20, 21 or 55)", parts[1])
 	}
-	tip, err := d.node.SuggestGasTipCap(ctx)
+	from, err := strconv.ParseUint(parts[2], 10, 64)
 	if err != nil {
-		tip = big.NewInt(1e9)
+		return common.Address{}, 0, 0, nil, fmt.Errorf("bad -request fromBlock %q", parts[2])
 	}
-	head, err := d.node.HeaderByNumber(ctx, nil)
-	if err != nil {
-		return common.Hash{}, err
+	value, ok := new(big.Int).SetString(parts[3], 10)
+	if !ok {
+		return common.Address{}, 0, 0, nil, fmt.Errorf("bad -request value %q", parts[3])
 	}
-
-	tx := types.NewTx(&types.DynamicFeeTx{
-		ChainID:   d.chainID,
-		Nonce:     nonce,
-		GasTipCap: tip,
-		GasFeeCap: new(big.Int).Add(tip, new(big.Int).Mul(head.BaseFee, big.NewInt(2))),
-		Gas:       gas,
-		To:        to,
-		Data:      data,
-	})
-	signed, err := types.SignTx(tx, types.LatestSignerForChainID(d.chainID), d.key)
-	if err != nil {
-		return common.Hash{}, err
-	}
-	if err := d.node.SendTransaction(ctx, signed); err != nil {
-		return common.Hash{}, err
-	}
-	return signed.Hash(), nil
+	return common.HexToAddress(parts[0]), uint8(kind), from, value, nil
 }
 
-func (d *deployer) receipt(ctx context.Context, h common.Hash) (*types.Receipt, error) {
-	t := time.NewTicker(300 * time.Millisecond)
-	defer t.Stop()
-	deadline := time.Now().Add(3 * time.Minute)
-
-	for {
-		if r, err := d.node.TransactionReceipt(ctx, h); err == nil {
-			return r, nil
-		}
-		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("timed out waiting for %s", h.Hex())
-		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-t.C:
-		}
+func mustWei(s string) *big.Int {
+	v, ok := new(big.Int).SetString(s, 10)
+	if !ok || v.Sign() < 0 {
+		log.Fatalf("bad wei amount %q", s)
 	}
+	return v
 }
