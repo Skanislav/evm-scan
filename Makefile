@@ -39,7 +39,7 @@ check: fmt vet test test-evm
 ## contracts: recompile Solidity into contracts/out (requires node)
 contracts:
 	@command -v node >/dev/null || { echo "node is required to compile contracts"; exit 1; }
-	@test -d scripts/node_modules || npm --prefix scripts install solc@$(SOLC) --no-audit --no-fund
+	@test -d scripts/node_modules || npm --prefix scripts install solc@$(SOLC) --save-exact --no-audit --no-fund
 	SOLC_HOME=$(PWD)/scripts node scripts/compile.js
 
 ## devchain: run a local geth dev node (foreground)

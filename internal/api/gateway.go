@@ -130,28 +130,36 @@ type accountProof struct {
 	assets []common.Address
 }
 
-// accountProof rebuilds the proof and re-derives the asset list from the live
-// rollup, then checks the list still hashes to the committed leaf. If the rollup
-// has drifted since the commitment (a revoked asset, a corrected first block) the
-// honest answer is an error, not a list the contract would reject.
+// accountProof rebuilds the proof and returns the asset list the leaf was committed
+// over. That list is stored with the leaf, because it cannot be re-derived: a
+// backfill walking an asset toward its floor keeps inserting interactions whose
+// first_block lies inside a range already committed, so the live rollup grows a
+// superset of what was hashed and the contract would reject it.
+//
+// Epochs built before migration 0005 have no stored list. For those the rollup is
+// the only source, and the hash is checked against the leaf so a drifted answer is
+// an error rather than one the contract refuses.
 func (s *Server) accountProof(ctx context.Context, e store.Epoch, account common.Address) (accountProof, error) {
 	leaf, proof, err := hintreg.ProofFor(ctx, s.d.Store, e.ID, account)
 	if err != nil {
 		return accountProof{}, err
 	}
-	rows, err := s.d.Store.AccountAssets(ctx, e.ChainID, account)
-	if err != nil {
-		return accountProof{}, err
-	}
-	assets := make([]common.Address, 0, len(rows))
-	for _, a := range rows {
-		if a.FirstBlock <= e.ToBlock {
-			assets = append(assets, a.Asset)
+	assets := leaf.Assets
+	if assets == nil {
+		rows, err := s.d.Store.AccountAssets(ctx, e.ChainID, account)
+		if err != nil {
+			return accountProof{}, err
 		}
+		assets = make([]common.Address, 0, len(rows))
+		for _, a := range rows {
+			if a.FirstBlock <= e.ToBlock {
+				assets = append(assets, a.Asset)
+			}
+		}
+		assets = ccip.SortedUnique(assets)
 	}
-	assets = ccip.SortedUnique(assets)
 	if merkle.AssetsHash(assets) != leaf.AssetsHash {
-		return accountProof{}, fmt.Errorf("index drifted since epoch %d was built; asset list no longer matches the committed leaf", e.ID)
+		return accountProof{}, fmt.Errorf("asset list for epoch %d does not hash to the committed leaf", e.ID)
 	}
 	return accountProof{leaf: leaf, proof: proof, assets: assets}, nil
 }

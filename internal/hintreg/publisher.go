@@ -135,7 +135,7 @@ func (p *Publisher) Build(ctx context.Context, chainID uint64, uri string, force
 		ah := merkle.AssetsHash(s.Assets)
 		leaf := merkle.LeafHash(s.Account, chainID, ah)
 		leaves[i] = leaf
-		rows[i] = store.EpochLeaf{Index: i, Account: s.Account, AssetsHash: ah, Leaf: leaf}
+		rows[i] = store.EpochLeaf{Index: i, Account: s.Account, AssetsHash: ah, Leaf: leaf, Assets: s.Assets}
 	}
 	root := merkle.Build(leaves).Root()
 

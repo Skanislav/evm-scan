@@ -67,6 +67,10 @@ type EpochLeaf struct {
 	Account    common.Address
 	AssetsHash common.Hash
 	Leaf       common.Hash
+	// Assets is the sorted, unique list the leaf's hash was taken over, kept so the
+	// CCIP gateway can return exactly what was committed. Nil for epochs built
+	// before migration 0005.
+	Assets []common.Address
 }
 
 const epochColumns = `id, chain_id, from_block, to_block, merkle_root, leaf_count, uri,
@@ -89,9 +93,9 @@ func (s *Store) CreateEpoch(ctx context.Context, e Epoch, leaves []EpochLeaf, co
 
 		b := &pgx.Batch{}
 		for _, l := range leaves {
-			b.Queue(`INSERT INTO epoch_leaves (epoch_id, idx, account, assets_hash, leaf)
-			         VALUES ($1,$2,$3,$4,$5)`,
-				id, l.Index, l.Account.Bytes(), l.AssetsHash.Bytes(), l.Leaf.Bytes())
+			b.Queue(`INSERT INTO epoch_leaves (epoch_id, idx, account, assets_hash, leaf, assets)
+			         VALUES ($1,$2,$3,$4,$5,$6)`,
+				id, l.Index, l.Account.Bytes(), l.AssetsHash.Bytes(), l.Leaf.Bytes(), addressBytes(l.Assets))
 		}
 		for _, c := range coverage {
 			b.Queue(`INSERT INTO epoch_coverage (epoch_id, idx, asset, registry_key, from_block, to_block, leaf)
@@ -356,9 +360,10 @@ func (s *Store) EpochLeafFor(ctx context.Context, epochID int64, account common.
 		l                   EpochLeaf
 		acc, ahash, leafRaw []byte
 	)
+	var assets [][]byte
 	err := s.pool.QueryRow(ctx,
-		`SELECT idx, account, assets_hash, leaf FROM epoch_leaves WHERE epoch_id = $1 AND account = $2`,
-		epochID, account.Bytes()).Scan(&l.Index, &acc, &ahash, &leafRaw)
+		`SELECT idx, account, assets_hash, leaf, assets FROM epoch_leaves WHERE epoch_id = $1 AND account = $2`,
+		epochID, account.Bytes()).Scan(&l.Index, &acc, &ahash, &leafRaw, &assets)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return EpochLeaf{}, ErrNotFound
 	}
@@ -368,6 +373,7 @@ func (s *Store) EpochLeafFor(ctx context.Context, epochID int64, account common.
 	l.Account = common.BytesToAddress(acc)
 	l.AssetsHash = common.BytesToHash(ahash)
 	l.Leaf = common.BytesToHash(leafRaw)
+	l.Assets = toAddresses(assets)
 	return l, nil
 }
 
@@ -392,4 +398,29 @@ func (s *Store) SetRegistrySyncCursor(ctx context.Context, chainID uint64, addr 
 		DO UPDATE SET last_block = EXCLUDED.last_block, updated_at = now()`,
 		int64(chainID), addr.Bytes(), int64(block))
 	return err
+}
+
+// addressBytes lays an address list out for a BYTEA[] column. A nil list stays
+// NULL, which is how an epoch built before migration 0005 reads back.
+func addressBytes(addrs []common.Address) [][]byte {
+	if len(addrs) == 0 {
+		return nil
+	}
+	out := make([][]byte, len(addrs))
+	for i, a := range addrs {
+		out[i] = a.Bytes()
+	}
+	return out
+}
+
+// toAddresses reads a BYTEA[] column back. NULL and an empty array both give nil.
+func toAddresses(raw [][]byte) []common.Address {
+	if len(raw) == 0 {
+		return nil
+	}
+	out := make([]common.Address, len(raw))
+	for i, b := range raw {
+		out[i] = common.BytesToAddress(b)
+	}
+	return out
 }
