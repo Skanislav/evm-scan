@@ -1,5 +1,10 @@
 # Running evm-scan on Railway
 
+For a mainnet deployment read [docs/MAINNET.md](MAINNET.md) instead — the registry's
+economics and gateway list are immutable, so the order of the steps there matters and
+this document's order does not carry over. This one is the Sepolia rehearsal, and is
+worth doing first either way.
+
 This runs the indexer against **Sepolia** without giving up the local-node rule. A
 [Helios](https://github.com/a16z/helios) light client runs inside the same container on
 loopback, verifies everything an upstream RPC returns against beacon-chain headers, and

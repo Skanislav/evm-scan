@@ -264,6 +264,8 @@ overturn the root it just verified.
 To host it without a geth, see [docs/RAILWAY.md](docs/RAILWAY.md): a Helios light client
 runs in the container on loopback and verifies an upstream RPC against beacon headers, so
 `require_local_node` stays on. `evmscan-deploy` puts the registry on a real network.
+[docs/MAINNET.md](docs/MAINNET.md) is the mainnet runbook, and leads with the constraint
+that shapes it: Helios can verify about 8191 blocks, which on mainnet is a rolling day.
 
 ## Paying for indexing
 
