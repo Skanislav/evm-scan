@@ -92,6 +92,23 @@ curl -XPOST localhost:8080/v1/candidates/0xADDR/promote -d '{"reason":"looks use
 Production configs should set `auto_promote: false` and let the on-chain registry decide;
 the demo turns it on so there is something to watch.
 
+**The deployless lens.** Ask what an account actually holds, right now:
+
+```bash
+curl "localhost:8080/v1/accounts/0xYOUR_DEMO_USER/portfolio?nfts=8&uri=true"
+```
+
+Every number in that reply came back from a single `eth_call` that carried the
+`AssetLens` bytecode as its payload — no `to` address, nothing deployed, nothing to
+trust but your own node. `as_of_block` is the block the contract itself observed while
+running, and `atomic: true` means the whole reply is one snapshot rather than a stitch
+of several. Watch `calls` climb above 1 if you hand it a long `tokens=` list: the reply
+is treated as contract code, so it has to fit under EIP-170 and the client splits when
+it does not.
+
+The demo ERC-721 answers `supportsInterface`, so it comes back as `erc721` through
+ERC-165 rather than by guesswork, with `ids[]` resolving owners for the ids you name.
+
 **The history floor.** `/v1/status` reports `history_floor`: the oldest block this node
 can serve logs for, found by probing rather than assumed. A dev chain reports genesis. A
 node synced without ancient receipts reports wherever its receipts begin, and backfills
@@ -135,4 +152,19 @@ Unit tests are hermetic. The node-backed ones skip unless pointed at a chain:
 EVMSCAN_TEST_NODE="$PWD/.devchain/geth.ipc" \
 EVMSCAN_TEST_TOKEN=0xYOUR_TOKEN \
   go test ./internal/token/ -run Probe -v
+
+EVMSCAN_TEST_NODE="$PWD/.devchain/geth.ipc" \
+EVMSCAN_TEST_ACCOUNT=0xYOUR_DEMO_USER \
+EVMSCAN_TEST_TOKEN=0xYOUR_TOKEN,0xYOUR_NFT \
+  go test ./internal/lens/ -run AgainstNode -v
 ```
+
+The lens also has a hermetic end-to-end test that runs the compiled contract in a real
+EVM — no geth needed, no environment variables:
+
+```bash
+make test-evm
+```
+
+It lives in its own module (`contracts/evmtest`) because go-ethereum's in-process node
+brings a few dozen dependencies with it, and none of them belong in the daemon.

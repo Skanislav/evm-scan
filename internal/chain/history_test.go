@@ -42,6 +42,7 @@ func (p *prunedNode) SubscribeLogs(context.Context, Query, chan<- types.Log) (et
 }
 func (p *prunedNode) CallAtHead(context.Context, ethereum.CallMsg) ([]byte, error) { return nil, nil }
 func (p *prunedNode) CodeAt(context.Context, common.Address) ([]byte, error)       { return nil, nil }
+func (p *prunedNode) NonceAt(context.Context, common.Address) (uint64, error)      { return 0, nil }
 func (p *prunedNode) Endpoint() Endpoint                                           { return Endpoint{} }
 func (p *prunedNode) Close()                                                       {}
 
