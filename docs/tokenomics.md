@@ -37,8 +37,9 @@ number in section 9 makes a deployment safe that fails one of these.
 - **C3. The adjudicator answers honestly.** Bonds only work if the loser loses. In
   local-arbiter mode this is a trusted key, and the deploy tool says so.
 - **C4. `block.basefee` is set by protocol, not by a participant.** Every price in
-  sections 4 and 5 is gas units times basefee. This holds on every EIP-1559 chain; a
-  chain with a fixed or near-zero basefee relies on the `minBasefee` floor instead.
+  sections 4 and 5 is gas units times basefee. This holds on every EIP-1559 chain. Where
+  the basefee is near zero, and mainnet at 0.07 gwei in September 2026 counts, the
+  `minBasefee` floor is the price and does the work instead.
 
 **Attacks the design prices:**
 
@@ -62,7 +63,7 @@ number in section 9 makes a deployment safe that fails one of these.
   surface to capture, and buys nothing the design needs.
 - **Every parameter is fixed at deploy and stated in gas units.** Constructor arguments,
   no setters (#4, #7, PR #22). Multiplied by the basefee at call time, so a deployment
-  priced at 5 gwei is still right at 50. Different numbers means a new deployment.
+  made at 0.07 gwei is still right at 7. Different numbers means a new deployment.
 - **Pay for work, charge for cost.** Whoever imposes a cost on indexers pays money that
   is not returned. Whoever indexes is paid from it, per block covered, once. Bonds are
   separate: security that comes back if you behaved.
@@ -119,8 +120,12 @@ price(g) = g * max(block.basefee, minBasefee)
 The costs a price has to beat are transactions on the registry chain, and those move
 with the basefee, so a price in gas units follows them without retuning. Amounts are
 recorded in wei when paid, so a challenger a day later matches what the publisher
-posted, not today's basefee. `minBasefee` is the one absolute number: it stops quiet
-hours from making everything cheap and gives an L2 registry something to multiply.
+posted, not today's basefee. `minBasefee` is the one absolute number. It stops a cheap
+chain from making everything cheap: mainnet's basefee has sat below 0.1 gwei for long
+stretches, at 0.069 gwei on 8 September 2026 per Etherscan, and an L2's is a fraction of
+that. On such a chain the floor binds nearly always and is the effective price, and the
+gas-unit denomination only matters if the basefee climbs back above it. Choosing the
+floor is therefore the real pricing decision, not a safety detail.
 
 Gas units do not price off-chain work, reading receipts and keeping the result on disk.
 That is priced per block of coverage and set by the registrant, below. Oracle-mode bonds
@@ -308,26 +313,38 @@ the input-set hash from #14. The options are recorded in #18.
 ## 9. Worked numbers
 
 Illustrative only; every deployment sets its own. Assumes a mainnet registry with
-`minBasefee = 1 gwei`, shown at 10 gwei. Rough gas from PR #19: `publishIndex` 180k,
-`challengeIndex` 150k, `requestIndexing` 120k.
+`minBasefee = 1 gwei`. Mainnet's basefee was 0.069 gwei on 8 September 2026 (Etherscan
+gas tracker), so the floor binds and the amounts below are what the contract charges
+today; the 10 gwei column is a spike. Rough gas from PR #19: `publishIndex` 180k,
+`challengeIndex` 150k, `requestIndexing` 120k. At 0.07 gwei those transactions cost
+0.000013, 0.000011 and 0.000008 ETH.
 
-| Parameter | Value | At 10 gwei | Why |
-| --- | --- | --- | --- |
-| `minBasefee` | 1 gwei | | Floor for quiet hours. On an L2 set it near that chain's typical basefee |
-| `assetBondGas` | 2 000 000 | 0.02 ETH | About fifteen registrations of gas, locked for `assetLock` |
-| `minFundingGas` | 1 000 000 | 0.01 ETH | Ten thousand spam registrations cost 100 ETH, never returned |
-| `assetLock` | 30 days | | Longer than any realistic backfill plus a challenge window |
-| `baseBondGas` | 20 000 000 | 0.2 ETH | Over a hundred times the gas of disputing |
-| `perLeafGas` | 10 | +0.1 ETH per 1 M leaves | A 1 M-account root posts 0.3 ETH; 10 M posts 1.2 ETH |
-| `leavesPerMinBond` (oracle) | 1 000 000 | | A 1 M-account root posts twice UMA's minimum; the deploy tool prints the result |
-| `challengeWindow` | 7200 s | | Long enough to recompute an epoch, short enough that bonds turn over daily |
-| `ratePerBlock` | registrant's choice; 1 gwei reference | | Genesis backfill (25 M blocks) costs 0.025 ETH; a year at the head (2.6 M) costs 0.0026 ETH |
-| Burn share | 50 % | | Matches UMA |
+| Parameter | Value | At the 1 gwei floor (today) | At 10 gwei | Why |
+| --- | --- | --- | --- | --- |
+| `minBasefee` | 1 gwei | | | Fifteen times today's mainnet basefee, so the floor is the price until gas returns. On an L2 set it a similar multiple above that chain's typical basefee |
+| `assetBondGas` | 2 000 000 | 0.002 ETH | 0.02 ETH | About 240 registrations of gas at today's basefee, fifteen at a 1 gwei basefee; locked for `assetLock` |
+| `minFundingGas` | 1 000 000 | 0.001 ETH | 0.01 ETH | Ten thousand spam registrations cost 10 ETH, never returned, against 0.08 ETH of gas |
+| `assetLock` | 30 days | | | Longer than any realistic backfill plus a challenge window |
+| `baseBondGas` | 20 000 000 | 0.02 ETH | 0.2 ETH | Nearly two thousand times the gas of disputing today, over a hundred at a 1 gwei basefee |
+| `perLeafGas` | 10 | +0.01 ETH per 1 M leaves | +0.1 ETH per 1 M leaves | A 1 M-account root posts 0.03 ETH today; 10 M posts 0.12 ETH |
+| `leavesPerMinBond` (oracle) | 1 000 000 | | | A 1 M-account root posts twice UMA's minimum; the deploy tool prints the result |
+| `challengeWindow` | 7200 s | | | Long enough to recompute an epoch, short enough that bonds turn over daily |
+| `ratePerBlock` | registrant's choice; 1 gwei reference | | | Not gas-denominated. Genesis backfill (25 M blocks) costs 0.025 ETH; a year at the head (2.6 M) costs 0.0026 ETH |
+| Burn share | 50 % | | | Matches UMA |
+
+Registering a token from the chain tip today therefore costs 0.002 ETH bond plus
+0.001 ETH funding plus about 0.00001 ETH of gas, and the bond comes back after 30 days.
+The minimum funding buys one million blocks at the reference rate, about four and a half
+months of head coverage.
 
 Check against section 7: a thousand funded assets at 1 gwei per block and an hourly
-epoch of 300 blocks put 0.0003 ETH of coverage at stake against a 0.2 ETH bond. The
+epoch of 300 blocks put 0.0003 ETH of coverage at stake against a 0.02 ETH bond. The
 "twice the reward" rule only binds on heavily funded assets, and the daemon checks it
 anyway.
+
+One quirk to know: the minimum funding scales with the basefee but `ratePerBlock` does
+not, so registering during a gas spike deposits more ETH and buys more blocks at the
+same rate. Registering at the floor buys the fewest blocks the contract allows.
 
 At that rate head coverage of a thousand assets pays 2.6 ETH a year. That does not fund
 a mainnet node and is not meant to. It covers the marginal cost registrants impose and
@@ -374,7 +391,10 @@ leaves, and refuses zero for `minBasefee`, `baseBondGas` and `challengeWindow`.
 ## 12. Open questions
 
 - **`minBasefee` per chain.** Chosen by judgement from that chain's basefee history.
-  Everything else follows from gas; this does not.
+  Everything else follows from gas; this does not. On today's mainnet, at 0.07 gwei, the
+  floor is the price nearly all the time, so this one number sets every bond and minimum
+  until the basefee recovers. Setting it too low makes spam and parking cheap; too high
+  keeps out the second publisher C1 needs.
 - **Minimum funding in the bond currency in oracle mode?** A stablecoin minimum is more
   predictable for registrants but cannot follow the basefee. This document assumes
   native.
