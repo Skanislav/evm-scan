@@ -67,6 +67,10 @@ type Server struct {
 	d      Deps
 	mux    *http.ServeMux
 	chains []uint64
+	// meta caches token symbol/name/decimals by chain and address. A deployed
+	// contract's metadata does not change, and reading it costs a verified eth_call
+	// on a light client, so it is worth never asking twice.
+	meta tokenMetaCache
 }
 
 // New builds the router.

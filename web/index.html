@@ -51,6 +51,9 @@
   td { padding: 10px 10px 10px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
   tr:last-child td { border-bottom: 0; }
   .mono { font-family: var(--mono); font-size: 12.5px; }
+  /* A full address is 42 characters; shrink it a little so a row still reads as
+     a row, and let it be selected in one go for pasting elsewhere. */
+  .addr { font-size: 11.5px; letter-spacing: -0.2px; white-space: nowrap; user-select: all; }
   .num { font-variant-numeric: tabular-nums; text-align: right; }
   .tag { display: inline-block; padding: 1px 7px; border-radius: 20px; font-size: 11px;
          background: var(--bg); border: 1px solid var(--line); color: var(--muted); margin-right: 4px; }
@@ -172,7 +175,7 @@
   <div class="err" id="cand-err" hidden></div>
   <div class="scroll"><table id="cand-table">
     <thead><tr>
-      <th>Contract</th><th>Std</th><th class="num">Events</th>
+      <th>Contract</th><th>Token</th><th>Std</th><th class="num">Events</th>
       <th class="num">Blocks</th><th class="num">Range</th><th>State</th><th></th>
     </tr></thead>
     <tbody></tbody>
@@ -275,7 +278,7 @@ async function loadAssets() {
     const { assets = [] } = await api('/v1/assets');
     $('assets-table').querySelector('tbody').innerHTML = assets.length ? assets.map(a => `
       <tr>
-        <td class="mono" title="${a.address}">${short(a.address)}</td>
+        <td class="mono addr">${a.address}</td>
         <td>${a.symbol ? `<strong>${a.symbol}</strong>` : '<span class="empty">unknown</span>'}
             ${a.name ? `<div class="hint">${a.name}</div>` : ''}</td>
         <td><span class="tag">${a.standard}</span></td>
@@ -523,7 +526,7 @@ async function lookup() {
     renderValuation(heldOnly ? null : (rows.length ? r.valuation : null), rows);
     $('account-table').querySelector('tbody').innerHTML = rows.map(a => `
       <tr>
-        <td class="mono" title="${a.address}">${short(a.address)}</td>
+        <td class="mono addr">${a.address}</td>
         <td>${a.symbol ? `<strong>${a.symbol}</strong>` : '<span class="empty">—</span>'}</td>
         <td><span class="tag">${a.standard}</span></td>
         <td>${(a.roles || []).map(x => `<span class="tag">${x}</span>`).join('')}</td>
@@ -620,7 +623,9 @@ async function loadCandidates() {
     const tbody = $('cand-table').querySelector('tbody');
     tbody.innerHTML = candidates.length ? candidates.map(c => `
       <tr>
-        <td class="mono" title="${c.address}">${short(c.address)}</td>
+        <td class="mono addr">${c.address}</td>
+        <td>${c.symbol ? `<strong>${c.symbol}</strong>` : '<span class="empty">—</span>'}${
+              c.name ? `<div class="sub">${c.name}</div>` : ''}</td>
         <td><span class="tag">${c.standard}</span></td>
         <td class="num">${c.event_count}</td>
         <td class="num">${c.blocks_seen}</td>

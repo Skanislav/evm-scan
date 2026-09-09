@@ -723,6 +723,13 @@ type candidateJSON struct {
 	Promoted        bool    `json:"promoted"`
 	PromotedAt      *string `json:"promoted_at,omitempty"`
 	PromotionReason string  `json:"promotion_reason,omitempty"`
+	// Symbol and Name are read at head, not stored: discovery counts events and
+	// never probes metadata, so a candidate row has none. They are best-effort —
+	// a token that does not answer, or a node that will not run the batch, leaves
+	// them empty rather than failing the listing.
+	Symbol   string `json:"symbol,omitempty"`
+	Name     string `json:"name,omitempty"`
+	Decimals *int16 `json:"decimals,omitempty"`
 }
 
 // listCandidates returns contracts seen at the head that are not indexed yet.
@@ -766,6 +773,19 @@ func (s *Server) listCandidates(w http.ResponseWriter, r *http.Request) {
 		if c.PromotedAt != nil {
 			ts := c.PromotedAt.UTC().Format(time.RFC3339)
 			out[i].PromotedAt = &ts
+		}
+	}
+
+	if src, ok := s.d.Sources[chainID]; ok {
+		addrs := make([]common.Address, len(out))
+		for i := range out {
+			addrs[i] = common.HexToAddress(out[i].Address)
+		}
+		meta := s.meta.lookup(ctx, src, chainID, addrs)
+		for i := range out {
+			if m, ok := meta[common.HexToAddress(out[i].Address)]; ok {
+				out[i].Symbol, out[i].Name, out[i].Decimals = m.Symbol, m.Name, m.Decimals
+			}
 		}
 	}
 
