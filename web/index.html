@@ -111,7 +111,34 @@
     </tr></thead>
     <tbody></tbody>
   </table></div>
-  <div class="empty" id="account-empty" hidden>No indexed interactions for this account.</div>
+  <div class="empty" id="account-empty" hidden>No indexed interactions, and no balance in any registered asset.</div>
+  <div class="hint" id="account-held" hidden>No indexed interactions for this account — its token events are older than the
+    history this node can serve. These are live balances read at head across the registered assets.</div>
+</section>
+
+<section id="request-section" hidden>
+  <h2>Request indexing</h2>
+  <div class="hint" id="request-intro">Registering on-chain is what pays for the work. The deposit above the asset bond
+    becomes that asset's funding, and the registry pays it back to whoever indexes it, per block covered. This is the
+    same <code>requestIndexing</code> call <code>evmscan-deploy -request</code> makes — from your own wallet.</div>
+  <div class="row">
+    <input type="text" id="req-token" placeholder="0x… token contract" spellcheck="false" autocomplete="off">
+    <select id="req-kind">
+      <option value="20">ERC-20</option>
+      <option value="21">ERC-721</option>
+      <option value="55">ERC-1155</option>
+      <option value="0">unknown</option>
+    </select>
+  </div>
+  <div class="row">
+    <input type="text" id="req-from" placeholder="from block" spellcheck="false" autocomplete="off">
+    <input type="text" id="req-value" placeholder="deposit in ETH" spellcheck="false" autocomplete="off">
+    <button id="req-connect">Connect wallet</button>
+    <button id="req-send" disabled>Request</button>
+  </div>
+  <div class="hint" id="req-terms"></div>
+  <div class="err" id="req-err" hidden></div>
+  <div class="hint" id="req-result" hidden></div>
 </section>
 
 <section>
@@ -208,6 +235,9 @@ async function loadStatus() {
     const s = await api('/v1/status');
     const c = s.chains && s.chains[0];
     if (!c) return;
+    REG = s.registry || null;
+    HEAD = c.head_block || 0;
+    renderRequestSection();
     $('stats').innerHTML = [
       ['chain', c.chain_id], ['head block', c.head_block],
       ['history floor', c.history_floor === 0 ? 'genesis' : c.history_floor],
@@ -303,6 +333,170 @@ function renderValuation(v, rows) {
   ].join('');
 }
 
+// --------------------------------------------------------------------------
+// Request indexing: the paid, on-chain path. Registration is what funds an
+// asset, so it is a transaction from the visitor's own wallet, not a call to
+// this daemon. The daemon only tells us where the registry is and what it costs.
+// --------------------------------------------------------------------------
+
+let REG = null;       // { chain_id, address, min_funding_wei, asset_bond_wei, ... }
+let HEAD = 0;         // head block, for a fromBlock the node can actually serve
+let WALLET = null;    // the connected account
+
+// requestIndexing(uint64,address,uint8,uint64)
+const REQUEST_SELECTOR = '0x83b37d78';
+
+const word = v => BigInt(v).toString(16).padStart(64, '0');
+
+function encodeRequest(chainId, token, kind, fromBlock) {
+  const addr = token.toLowerCase().replace(/^0x/, '');
+  if (!/^[0-9a-f]{40}$/.test(addr)) throw new Error('token must be a 20-byte address');
+  return REQUEST_SELECTOR + word(chainId) + addr.padStart(64, '0') + word(kind) + word(fromBlock);
+}
+
+function weiToEth(wei) {
+  const v = BigInt(wei), whole = v / 10n ** 18n, frac = (v % 10n ** 18n).toString().padStart(18, '0').replace(/0+$/, '');
+  return frac ? `${whole}.${frac}` : `${whole}`;
+}
+
+function ethToWei(s) {
+  const t = String(s).trim();
+  if (!/^\d*\.?\d*$/.test(t) || t === '' || t === '.') throw new Error('deposit must be a number of ETH');
+  const [w, f = ''] = t.split('.');
+  return BigInt(w || '0') * 10n ** 18n + BigInt((f + '0'.repeat(18)).slice(0, 18));
+}
+
+// The least requestIndexing accepts: assetBond + minFunding for an asset nobody has
+// registered, minFunding alone to top one up. We cannot know which without reading
+// the registry, so quote the higher number and say why.
+function minDeposit() {
+  if (!REG) return 0n;
+  return BigInt(REG.asset_bond_wei || 0) + BigInt(REG.min_funding_wei || 0);
+}
+
+function renderRequestSection() {
+  const sec = $('request-section');
+  if (!REG || !REG.address) { sec.hidden = true; return; }
+  sec.hidden = false;
+
+  const min = minDeposit();
+  const rpb = REG.reward_per_block_wei ? BigInt(REG.reward_per_block_wei) : 0n;
+  const blocks = rpb > 0n ? (BigInt(REG.min_funding_wei || 0) / rpb) : 0n;
+  $('req-terms').innerHTML = [
+    `Registry <code>${REG.address}</code> on chain ${REG.chain_id}. `,
+    `A new asset needs at least <strong>${weiToEth(min)} ETH</strong>`,
+    REG.asset_bond_wei && BigInt(REG.asset_bond_wei) > 0n
+      ? ` (${weiToEth(REG.asset_bond_wei)} refundable bond + ${weiToEth(REG.min_funding_wei || 0)} funding);`
+      : ';',
+    ` one already registered needs ${weiToEth(REG.min_funding_wei || 0)} ETH.`,
+    blocks > 0n ? ` That buys about ${blocks.toLocaleString()} blocks of coverage.` : '',
+  ].join('');
+
+  if (!$('req-value').value) $('req-value').value = weiToEth(min);
+  // Default to a block the node can still serve rather than a token's real deploy
+  // block: anything older buys a range this deployment cannot index.
+  if (!$('req-from').value && HEAD) $('req-from').value = String(Math.max(0, HEAD - 6000));
+}
+
+async function connectWallet() {
+  showErr('req-err', null);
+  if (!window.ethereum) {
+    showErr('req-err', new Error('no injected wallet found — this needs MetaMask or another EIP-1193 wallet'));
+    return;
+  }
+  $('req-connect').disabled = true;
+  try {
+    const [acct] = await window.ethereum.request({ method: 'eth_requestAccounts' });
+    WALLET = acct;
+    const want = '0x' + Number(REG.chain_id).toString(16);
+    const have = await window.ethereum.request({ method: 'eth_chainId' });
+    if (have !== want) {
+      try {
+        await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: want }] });
+      } catch {
+        throw new Error(`wallet is on chain ${parseInt(have, 16)}; the registry is on ${REG.chain_id}`);
+      }
+    }
+    $('req-connect').textContent = short(acct);
+    $('req-send').disabled = false;
+  } catch (e) { showErr('req-err', e); }
+  finally { $('req-connect').disabled = false; }
+}
+
+async function sendRequest() {
+  showErr('req-err', null);
+  $('req-result').hidden = true;
+  const token = $('req-token').value.trim();
+  const kind = $('req-kind').value;
+  const from = $('req-from').value.trim();
+  if (!token || !from) { showErr('req-err', new Error('token and from block are required')); return; }
+
+  $('req-send').disabled = true;
+  try {
+    const value = ethToWei($('req-value').value);
+    if (value < BigInt(REG.min_funding_wei || 0)) {
+      throw new Error(`deposit is below the registry's minimum funding of ${weiToEth(REG.min_funding_wei)} ETH`);
+    }
+    if (HEAD && Number(from) < HEAD - 8191) {
+      throw new Error(`from block ${from} is older than this node can serve (head ${HEAD}, window 8191)`);
+    }
+    const data = encodeRequest(REG.chain_id, token, kind, from);
+    const tx = await window.ethereum.request({
+      method: 'eth_sendTransaction',
+      params: [{ from: WALLET, to: REG.address, data, value: '0x' + value.toString(16) }],
+    });
+    $('req-result').hidden = false;
+    $('req-result').innerHTML = `Submitted <code>${tx}</code>. The mirror picks the registration up on its next sync;
+      nothing else needs to be told.`;
+    $('req-token').value = '';
+  } catch (e) { showErr('req-err', e); }
+  finally { $('req-send').disabled = false; }
+}
+
+// Live balances across every registered asset, for an account the index cannot
+// answer for. The lens reads them all in one eth_call per batch; batches stay
+// small because one call over the whole list outruns the node's deadline.
+async function heldBalances(addr) {
+  let assets = [];
+  try {
+    ({ assets = [] } = await api('/v1/assets'));
+  } catch { return []; }
+  const addrs = assets.map(a => a.address).filter(Boolean);
+  if (!addrs.length) return [];
+
+  const BATCH = 20;
+  const batches = [];
+  for (let i = 0; i < addrs.length; i += BATCH) batches.push(addrs.slice(i, i + BATCH));
+
+  const results = await Promise.all(batches.map(async chunk => {
+    try {
+      const p = await api(`/v1/accounts/${addr}/portfolio?tokens=${chunk.join(',')}`);
+      return p.tokens || [];
+    } catch { return []; }
+  }));
+
+  const meta = new Map(assets.map(a => [a.address.toLowerCase(), a]));
+  return results.flat()
+    .filter(t => t.balance !== undefined && t.balance !== null && t.balance !== '0' && t.balance !== '')
+    .map(t => {
+      const m = meta.get((t.address || '').toLowerCase()) || {};
+      return {
+        address: t.address,
+        symbol: t.symbol || m.symbol,
+        standard: t.standard || m.standard || 'erc20',
+        decimals: t.decimals ?? m.decimals,
+        balance: t.balance,
+        price: t.price,
+        value_usd: t.value_usd,
+        roles: [],
+        event_count: 0,
+        first_block: null,
+        last_block: null,
+      };
+    })
+    .sort((a, b) => (a.symbol || '').localeCompare(b.symbol || ''));
+}
+
 async function lookup() {
   const addr = $('account').value.trim();
   if (!addr) return;
@@ -310,17 +504,27 @@ async function lookup() {
   $('lookup').disabled = true;
   try {
     const r = await api(`/v1/accounts/${addr}`);
-    const rows = r.assets || [];
+    let rows = r.assets || [];
+    let heldOnly = false;
+    // The index only knows events the node could still serve. An account whose last
+    // token event fell out of that window has no rows here, but it may still hold
+    // plenty. Ask the lens directly before calling it empty.
+    if (rows.length === 0) {
+      rows = await heldBalances(addr);
+      heldOnly = rows.length > 0;
+    }
     $('account-table').hidden = rows.length === 0;
     $('account-empty').hidden = rows.length !== 0;
-    renderValuation(rows.length ? r.valuation : null, rows);
+    $('account-held').hidden = !heldOnly;
+    renderValuation(heldOnly ? null : (rows.length ? r.valuation : null), rows);
     $('account-table').querySelector('tbody').innerHTML = rows.map(a => `
       <tr>
         <td class="mono" title="${a.address}">${short(a.address)}</td>
         <td>${a.symbol ? `<strong>${a.symbol}</strong>` : '<span class="empty">—</span>'}</td>
         <td><span class="tag">${a.standard}</span></td>
         <td>${(a.roles || []).map(x => `<span class="tag">${x}</span>`).join('')}</td>
-        <td class="num" title="blocks ${a.first_block}–${a.last_block}">${a.event_count}</td>
+        <td class="num"${a.first_block ? ` title="blocks ${a.first_block}–${a.last_block}"` : ''}>${
+            a.first_block ? a.event_count : '<span class="empty" title="held now; no event inside the node\'s history window">—</span>'}</td>
         <td class="num mono">${a.balance !== undefined
             ? formatUnits(a.balance, a.decimals)
             : (a.balance_error ? '<span class="empty">n/a</span>' : '—')}</td>
@@ -441,6 +645,9 @@ $('lookup').addEventListener('click', lookup);
 $('account').addEventListener('keydown', e => { if (e.key === 'Enter') lookup(); });
 $('register').addEventListener('click', register);
 $('new-asset').addEventListener('keydown', e => { if (e.key === 'Enter') register(); });
+$('req-connect').addEventListener('click', connectWallet);
+$('req-send').addEventListener('click', sendRequest);
+$('req-token').addEventListener('keydown', e => { if (e.key === 'Enter' && !$('req-send').disabled) sendRequest(); });
 $('build').addEventListener('click', buildEpoch);
 $('refresh-epochs').addEventListener('click', loadEpochs);
 

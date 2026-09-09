@@ -40,11 +40,16 @@ chains:
     node: "http://127.0.0.1:8545"
     require_local_node: true
     confirmations: 6
-    # Helios proves logs for at most 4096 blocks per eth_getLogs, and every block
-    # with a matching log costs one verified receipts fetch upstream. Keep windows
-    # small.
-    backfill_window: 2000
-    tail_window: 500
+    # Helios proves logs for at most 4096 blocks per eth_getLogs, but that ceiling is
+    # never what binds. Two things bite first, both measured against Sepolia through
+    # Ankr: the upstream caps a response (Ankr at 10 MB, Alchemy's free tier at a
+    # 10-block range), and Helios caps its own ("Memory capacity exceeded" out of
+    # jsonrpsee). Sepolia log density swings wildly — 10,002 logs in a 3-block range
+    # at one depth, 853 at another — so the safe window is small and flat. At 2000/500
+    # every discovery tick failed and the index stayed empty; at these numbers
+    # discovery promoted its first assets within 90 seconds.
+    backfill_window: 20
+    tail_window: 10
     poll_interval: 12s
     backfill_interval: 3s
 
@@ -53,7 +58,10 @@ chains:
       # Helios can only verify blocks the EIP-2935 history contract still covers,
       # roughly the last 8191. Looking back further would just probe the floor.
       lookback: 6000
-      max_blocks_per_tick: 2000
+      # Same ceiling as the windows above. Catching up 6000 blocks at this size takes
+      # a little over an hour on a cold start; the alternative is a tick that always
+      # fails, which never catches up at all.
+      max_blocks_per_tick: 20
       interval: 15s
       # Index first, register later: promote on activity alone, and let an on-chain
       # requestIndexing make it durable and funded. Thresholds are high because

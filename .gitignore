@@ -8,6 +8,11 @@ config.demo.yaml
 config.local.yaml
 *.local.yaml
 
+# docs/RAILWAY.md has you put HELIOS_EXECUTION_RPC (an RPC key) and
+# EVMSCAN_PUBLISHER_KEY in one of these. Same rule as above.
+.env
+.env.*
+
 # Local dev chain data
 /devchain/
 /data/

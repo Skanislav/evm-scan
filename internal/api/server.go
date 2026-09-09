@@ -268,6 +268,11 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 			// block of a funded asset; MinFundingWei is the least a request deposits.
 			RewardPerBlockWei string `json:"reward_per_block_wei,omitempty"`
 			MinFundingWei     string `json:"min_funding_wei,omitempty"`
+			// AssetBondWei is what registerAsset locks for an asset nobody has
+			// registered yet. requestIndexing wants assetBond + minFunding for a new
+			// asset and minFunding for one that already exists, so a caller building
+			// that transaction needs both numbers.
+			AssetBondWei string `json:"asset_bond_wei,omitempty"`
 		} `json:"registry,omitempty"`
 		Publisher string `json:"publisher,omitempty"`
 	}{}
@@ -333,12 +338,16 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 			Address           string `json:"address"`
 			RewardPerBlockWei string `json:"reward_per_block_wei,omitempty"`
 			MinFundingWei     string `json:"min_funding_wei,omitempty"`
+			AssetBondWei      string `json:"asset_bond_wei,omitempty"`
 		}{ChainID: s.d.RegistryChainID, Address: s.d.Registry.Address().Hex()}
 		if v, err := s.d.Registry.RewardPerBlock(ctx); err == nil {
 			out.Registry.RewardPerBlockWei = v.String()
 		}
 		if v, err := s.d.Registry.MinFunding(ctx); err == nil {
 			out.Registry.MinFundingWei = v.String()
+		}
+		if v, err := s.d.Registry.AssetBond(ctx); err == nil {
+			out.Registry.AssetBondWei = v.String()
 		}
 	}
 	if s.d.Publisher != nil {
