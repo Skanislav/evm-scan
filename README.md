@@ -248,14 +248,29 @@ readable on-chain from `oracle()` / `arbiter()`:
 UMA's Optimistic Oracle V3, bonding an ERC-20 the deployment names. Anyone disputes it,
 either at the oracle or through `challengeIndex`, which is a thin wrapper over
 `disputeAssertion`. UMA's vote decides; the registry only reacts to the oracle's
-callbacks. There is no arbiter and no reachable admin setter — `setArbiter`, `setBonds`,
-`setEconomics`, `setGateways` and `resolveChallenge` all revert permanently, because the
-arbiter is the zero address and the oracle is not. Bonds, coverage pricing and the
-gateway list are whatever the constructor said, forever.
+callbacks. There is no arbiter: `resolveChallenge` and `setGateways` revert permanently,
+because the arbiter is the zero address and the oracle is not, so the gateway list is
+whatever the constructor said, forever.
 
 **Local-arbiter mode** — the fallback for a chain with no oracle deployment. Bonds are
 in wei and one `arbiter` key settles challenges. It is a trusted deployment wearing a
 permissionless write path, which is why the deploy tool says so in capitals.
+
+In both modes the economics are immutable: asset bond, publisher bond, challenge window,
+minimum funding and reward per block are constructor arguments with public getters and
+no setters, and the arbiter cannot be reassigned. A deployment's rules are therefore
+fully stated by its `RegistryConfigured` event, and changing them means deploying a new
+registry. The one knob a local arbiter keeps is `setGateways`, because gateways are hints
+the callback verifies, not rules.
+
+**Sizing the bonds.** The publisher bond is what a wrong root costs its author, and the
+challenger has to match it, so it also prices how expensive it is to stall an honest
+epoch in `Challenged`. Two references for picking a number: Arbitrum BoLD derives bond
+sizes from the attacker's delay payoff and targets an attacker-to-defender cost ratio of
+roughly 6.5:1; OP Stack fault proofs price spam at about 0.08 ETH per hourly proposal. A
+zero publisher bond makes challenges free and can never be raised, so the deploy tool
+warns when it sees one. In oracle mode the bond additionally cannot go below the
+oracle's minimum for the bond currency.
 
 ```bash
 # neutral: UMA settles, nobody administers
@@ -277,6 +292,8 @@ overturn the root it just verified.
 To host it without a geth, see [docs/RAILWAY.md](docs/RAILWAY.md): a Helios light client
 runs in the container on loopback and verifies an upstream RPC against beacon headers, so
 `require_local_node` stays on. `evmscan-deploy` puts the registry on a real network.
+[docs/MAINNET.md](docs/MAINNET.md) is the mainnet runbook, and leads with the constraint
+that shapes it: Helios can verify about 8191 blocks, which on mainnet is a rolling day.
 
 ## Paying for indexing
 
@@ -395,7 +412,8 @@ Being explicit about what this does *not* do:
 - **A zero publisher bond makes challenges free in local-arbiter mode.** `challengeIndex`
   matches the epoch's bond, so a registry deployed with `publisherBond = 0` lets anyone
   park an epoch in `Challenged` for the arbiter to resolve. In oracle mode the bond
-  cannot go below the oracle's minimum. Set a bond where that matters.
+  cannot go below the oracle's minimum. Bonds are immutable, so set one at deployment
+  where that matters.
 - **Coverage is only as honest as the challenge path.** A claim is paid for the range a
   finalized epoch declared, and finalization only means nobody challenged. Until there
   is a fraud proof, a publisher declaring coverage it did not do is caught by whoever

@@ -137,15 +137,18 @@ func TestRegistryOracleModeHasNoArbiter(t *testing.T) {
 		t.Fatalf("arbiter = %s, want the zero address in oracle mode", got.Hex())
 	}
 
-	// Every admin entry point must be unreachable, including from the deployer.
+	// Every arbiter entry point must be unreachable, including from the deployer. The
+	// bonds and pricing have no setter at all; the ABI is the proof of that.
+	for _, name := range []string{"setArbiter", "setBonds", "setEconomics"} {
+		if _, ok := reg.Methods[name]; ok {
+			t.Fatalf("%s exists; economics are meant to be immutable", name)
+		}
+	}
 	for _, c := range []struct {
 		method string
 		args   []any
 	}{
-		{"setArbiter", []any{h.faucet}},
-		{"setBonds", []any{big.NewInt(1), big.NewInt(1), big.NewInt(1)}},
 		{"resolveChallenge", []any{big.NewInt(0), true}},
-		{"setEconomics", []any{big.NewInt(1), big.NewInt(1)}},
 		{"setGateways", []any{[]string{"https://example.invalid/{sender}/{data}.json"}}},
 	} {
 		if err := h.simulate(t, env.registry, c.method, c.args...); err == nil {

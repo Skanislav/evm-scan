@@ -264,9 +264,16 @@ func printMode(m hintreg.Mode) {
 	fmt.Printf("publisher bond   %s wei\n", m.PublisherBond)
 	fmt.Printf("asset bond       %s wei\n", m.AssetBond)
 	fmt.Printf("window           %ds\n", m.ChallengeWindow)
-	fmt.Printf("\nWARNING: this deployment settles every dispute with one key, which can\n")
-	fmt.Printf("also retune the bonds and hand itself over. Use it only on a chain with no\n")
-	fmt.Printf("optimistic oracle deployment; pass -oracle and -bond-currency otherwise.\n\n")
+	fmt.Printf("\nWARNING: this deployment settles every dispute with one key. The bonds,\n")
+	fmt.Printf("window and pricing above are immutable and the key cannot be reassigned, but\n")
+	fmt.Printf("whoever holds it decides every challenge. Use it only on a chain with no\n")
+	fmt.Printf("optimistic oracle deployment; pass -oracle and -bond-currency otherwise.\n")
+	if m.PublisherBond.Sign() == 0 {
+		fmt.Printf("\nWARNING: publisher bond is 0, so challengeIndex is free: anyone can park every\n")
+		fmt.Printf("epoch in Challenged for the arbiter to clear. Fine for a demo, not for a\n")
+		fmt.Printf("deployment anyone relies on. It cannot be raised later.\n")
+	}
+	fmt.Println()
 }
 
 // constructorArgs validates the flag combination and lays out HintRegistry's

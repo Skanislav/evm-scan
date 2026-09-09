@@ -43,6 +43,10 @@ COPY --from=build  /out/evmscand          /app/evmscand
 COPY --from=helios /usr/local/bin/helios  /app/helios
 COPY web/                                 /app/web/
 COPY deploy/config.railway.yaml           /app/config.yaml
+# Both hosted profiles ship; EVMSCAN_CONFIG picks one. The Sepolia profile is the
+# default because it is the one that can be run without spending real money.
+COPY deploy/config.railway.yaml           /app/config.sepolia.yaml
+COPY deploy/config.mainnet.yaml           /app/config.mainnet.yaml
 COPY deploy/entrypoint.sh                 /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh && mkdir -p /data/helios && chown -R evmscan:evmscan /data
 USER evmscan
