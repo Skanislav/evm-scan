@@ -365,6 +365,11 @@ func TestClassifyLogsError(t *testing.T) {
 		{"eof", errors.New("EOF"), LogsErrTransient},
 		{"geth server timeout code", codedErr{code: -32002, msg: "request timed out"}, LogsErrTransient},
 		{"provider limit code", codedErr{code: -32005, msg: "limit exceeded"}, LogsErrTransient},
+		// Helios cannot verify a block the EIP-2935 ring buffer no longer covers, and
+		// says so definitively. The probe must read that as a floor, not retry it.
+		{"helios ring buffer", errors.New(
+			"block 3000000 is outside EIP-2935 ring buffer range (latest: 11670459, buffer size: 8191)"),
+			LogsErrHistoryUnavailable},
 		{"http 429", rpc.HTTPError{StatusCode: 429, Status: "429 Too Many Requests"}, LogsErrTransient},
 		{"http 503", rpc.HTTPError{StatusCode: 503, Status: "503 Service Unavailable"}, LogsErrTransient},
 		{"busy text", errors.New("server is busy, try again later"), LogsErrTransient},

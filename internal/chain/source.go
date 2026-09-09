@@ -235,6 +235,17 @@ func isRangeLimit(err error) bool {
 		"more than", "query returned more than", "limit exceeded", "response size",
 		"too many results", "block range", "range is too large", "query timeout",
 		"exceed maximum", "-32005",
+		// A capped response, which is the same thing as a window that is too wide:
+		// halving fixes it, giving up does not. Ankr says the first ("Exceeded max
+		// limit of 10485760"), Helios the second when its own jsonrpsee server
+		// cannot serialise what it just verified. Measured on mainnet: 20 blocks of
+		// discovery topics is 6-9 MB and 50 blocks is over the limit.
+		"response is too big", "memory capacity exceeded",
+		// Helios's wrapper for an upstream request that did not come back. It is
+		// ambiguous — a dead RPC looks the same — but every instance we have seen
+		// was an oversized request, and halving a genuinely failing endpoint only
+		// costs a few smaller retries before the sweep gives up anyway.
+		"error sending request for url",
 	} {
 		if strings.Contains(s, needle) {
 			return true

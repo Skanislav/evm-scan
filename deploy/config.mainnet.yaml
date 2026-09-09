@@ -56,11 +56,14 @@ chains:
     # ~2.5 minutes. Mainnet reorgs past two epochs are a consensus failure, not an
     # operating condition, but commitments are bonded, so pay for the depth.
     confirmations: 12
-    # Helios proves logs for at most 4096 blocks per eth_getLogs, and every block
-    # holding a matching log costs one verified receipts fetch upstream. Mainnet has
-    # a Transfer in essentially every block, so these are smaller than Sepolia's.
-    backfill_window: 1000
-    tail_window: 200
+    # Helios's 4096-block eth_getLogs ceiling is never what binds; the response size
+    # is. Measured cold against mainnet through Ankr (10 MB cap), discovery topics
+    # unfiltered by address: 10 blocks is 4.6 MB, 20 blocks is 6-8.6 MB depending on
+    # depth, and 50 blocks is refused outright. Latency is not the problem — the
+    # 20-block call takes two seconds — so this is sized for the cap, with room for
+    # the density swing, not for time.
+    backfill_window: 10
+    tail_window: 10
     poll_interval: 12s
     backfill_interval: 5s
 
@@ -69,7 +72,9 @@ chains:
       # Inside the ~8191-block window Helios can verify, with room for the daemon to
       # have been restarted.
       lookback: 6000
-      max_blocks_per_tick: 1000
+      # Same cap. A cold start walks 6000 blocks at ten per tick; at the interval
+      # below that is under an hour, and every tick actually completes.
+      max_blocks_per_tick: 10
       interval: 30s
       # Off by default on mainnet. Every promotion spends verified RPC quota on a
       # backfill nobody has paid for, and the funded path — requestIndexing — is the

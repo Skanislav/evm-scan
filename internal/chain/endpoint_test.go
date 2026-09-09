@@ -84,6 +84,13 @@ func TestIsRangeLimitMatchesProviderErrors(t *testing.T) {
 		"eth_getLogs block range too large",
 		"limit exceeded",
 		"error code: -32005",
+		// Observed against a hosted deployment: Ankr capping a response, Helios
+		// failing to serialise its own, and Helios's wrapper for an upstream request
+		// that never came back. All three are answered by a narrower window, and all
+		// three used to abort the sweep instead.
+		"Response is too big",
+		`Error serializing response: Error("Memory capacity exceeded")`,
+		"error sending request for url (https://rpc.example/eth/KEY)",
 	}
 	for _, s := range limits {
 		if !isRangeLimit(errors.New(s)) {

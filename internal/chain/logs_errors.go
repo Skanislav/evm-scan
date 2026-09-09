@@ -68,6 +68,12 @@ var historyUnavailableNeedles = []string{
 	"receipt not found",                       // older geth receipt accessors
 	"receipts not found",
 	"missing trie node", // state below the pruning point; not logs, but definite
+	// Helios: the block is outside the EIP-2935 ring buffer, so a light client
+	// cannot verify it however many times we ask. This is the hosted deployment's
+	// equivalent of go-ethereum's pruned-history answer, and the floor probe needs
+	// to read it as one — observed verbatim as "block 3000000 is outside EIP-2935
+	// ring buffer range (latest: 11670459, buffer size: 8191)".
+	"outside eip-2935 ring buffer range",
 	// Other clients (untested against a live node; see README).
 	"history not available",
 	"history unavailable",
