@@ -11,9 +11,17 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 
 	"github.com/Skanislav/evm-scan/internal/chain"
+	"github.com/Skanislav/evm-scan/internal/evmlog"
 	"github.com/Skanislav/evm-scan/internal/lens"
+	"github.com/Skanislav/evm-scan/internal/price"
 	"github.com/Skanislav/evm-scan/internal/store"
 	"github.com/Skanislav/evm-scan/internal/token"
+)
+
+// NFT standards are never priced: a floor price is not an oracle question.
+const (
+	evmlogERC721  = evmlog.StandardERC721
+	evmlogERC1155 = evmlog.StandardERC1155
 )
 
 // The portfolio endpoint is the read side of the same premise as the rest of the
@@ -35,6 +43,9 @@ type accountStateJSON struct {
 	IsDelegated bool   `json:"is_delegated"`
 	Delegate    string `json:"delegate,omitempty"`
 	Code        string `json:"code,omitempty"`
+	// Price and ValueUSD are the native asset's, from the native/USD feed.
+	Price    *quoteJSON `json:"price,omitempty"`
+	ValueUSD string     `json:"value_usd,omitempty"`
 }
 
 type allowanceJSON struct {
@@ -68,6 +79,11 @@ type portfolioTokenJSON struct {
 	// IndexStatus is what the indexer knows about this contract, when it knows
 	// anything: the lens will happily read a contract nobody registered.
 	IndexStatus string `json:"index_status,omitempty"`
+	// Price is what the chain's own oracles and pools say one token is worth, and
+	// how far to trust it. ValueUSD is Balance at that price; absent, not zero,
+	// when either is unknown.
+	Price    *quoteJSON `json:"price,omitempty"`
+	ValueUSD string     `json:"value_usd,omitempty"`
 }
 
 // accountPortfolio reads an account's live position through the deployless lens.
@@ -177,6 +193,48 @@ func (s *Server) accountPortfolio(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Prices ride alongside, from the PriceLens rather than the AssetLens: a second
+	// deployless call, one block, and every number in it traceable to a contract.
+	var (
+		valuationOut map[string]any
+		nativeQuote  *quoteJSON
+		nativeValue  string
+	)
+	if p := s.pricerFor(chainID); p != nil && q.Get("prices") != "false" {
+		addrs := make([]common.Address, 0, len(res.Tokens))
+		for _, t := range res.Tokens {
+			if t.IsContract && t.Standard != evmlogERC721 && t.Standard != evmlogERC1155 {
+				addrs = append(addrs, t.Address)
+			}
+		}
+		prices, errMsg := s.quotes(ctx, p, addrs)
+		tot := newTotals()
+		var asOf uint64
+		if prices != nil {
+			asOf = prices.AsOfBlock
+			for i, t := range res.Tokens {
+				pq := prices.Quotes[t.Address]
+				if pq == nil {
+					continue
+				}
+				view := quoteView(pq)
+				tokens[i].Price = &view
+				v := valuation(t.Balance, t.Decimals, pq)
+				tokens[i].ValueUSD = price.FormatValue(v)
+				tot.add(v, pq)
+			}
+			if prices.Native != nil && prices.Native.USD != nil {
+				nv := quoteView(prices.Native)
+				nativeQuote = &nv
+				wei := int16(18)
+				v := valuation(res.Account.Balance, &wei, prices.Native)
+				nativeValue = price.FormatValue(v)
+				tot.add(v, prices.Native)
+			}
+		}
+		valuationOut = tot.view(asOf, errMsg)
+	}
+
 	state := accountStateJSON{
 		Balance:     res.Account.Balance.String(),
 		IsContract:  res.Account.IsContract,
@@ -194,6 +252,7 @@ func (s *Server) accountPortfolio(w http.ResponseWriter, r *http.Request) {
 	if len(res.Account.Code) > 0 {
 		state.Code = "0x" + common.Bytes2Hex(res.Account.Code)
 	}
+	state.Price, state.ValueUSD = nativeQuote, nativeValue
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"account":     account.Hex(),
@@ -208,7 +267,11 @@ func (s *Server) accountPortfolio(w http.ResponseWriter, r *http.Request) {
 		"calls":         res.Calls,
 		"account_state": state,
 		"tokens":        tokens,
-		"read_by":       "deployless AssetLens (eth_call, no deployment); live state, not indexed",
+		// Valuation is present only when pricing is configured for the chain. It
+		// is the sum of every priced token plus the native balance, with the
+		// weakest confidence in that sum and how many tokens had no price at all.
+		"valuation": valuationOut,
+		"read_by":   "deployless AssetLens (eth_call, no deployment); live state, not indexed",
 	})
 }
 

@@ -21,6 +21,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 
 	"github.com/Skanislav/evm-scan/internal/api"
@@ -28,6 +29,7 @@ import (
 	"github.com/Skanislav/evm-scan/internal/config"
 	"github.com/Skanislav/evm-scan/internal/hintreg"
 	"github.com/Skanislav/evm-scan/internal/indexer"
+	"github.com/Skanislav/evm-scan/internal/price"
 	"github.com/Skanislav/evm-scan/internal/store"
 )
 
@@ -80,6 +82,7 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 	sources := map[uint64]chain.Source{}
 	services := map[uint64]*indexer.Service{}
 	workers := map[uint64]api.Worker{}
+	pricers := map[uint64]*price.Pricer{}
 	defer func() {
 		for _, s := range sources {
 			s.Close()
@@ -130,6 +133,25 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 			"chain_id", c.ChainID, "name", c.Name,
 			"node", node.Endpoint().String(), "confirmations", c.Confirmations,
 			"discovery", c.Discovery.Enabled, "auto_promote", c.Discovery.AutoPromote)
+
+		// Prices come off the same node, through the same deployless trick, from
+		// whatever oracles and pools the chain has. Where they come from is worth
+		// a log line: it is the only third-party code in the read path.
+		if p := newPricer(node, c, log); p != nil {
+			pricers[c.ChainID] = p
+			src := p.Sources()
+			log.Info("price discovery enabled",
+				"chain_id", c.ChainID,
+				"feed_registry", src.FeedRegistry != (common.Address{}),
+				"native_usd_feed", src.NativeUSDFeed != (common.Address{}),
+				"pinned_feeds", len(src.Feeds),
+				"uniswap_v3", src.V3Factory != (common.Address{}),
+				"uniswap_v2", src.V2Factory != (common.Address{}),
+				"quote_tokens", len(src.QuoteTokens),
+				"twap_window", p.TWAPWindow())
+		} else {
+			log.Info("price discovery off: no on-chain sources configured for this chain", "chain_id", c.ChainID)
+		}
 	}
 
 	var (
@@ -200,6 +222,7 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 			Store:             st,
 			Sources:           sources,
 			Workers:           workers,
+			Pricers:           pricers,
 			Registry:          regClient,
 			RegistryChainID:   cfg.Registry.ChainID,
 			Publisher:         publisher,

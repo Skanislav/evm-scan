@@ -22,6 +22,7 @@ import (
 	"github.com/Skanislav/evm-scan/internal/chain"
 	"github.com/Skanislav/evm-scan/internal/evmlog"
 	"github.com/Skanislav/evm-scan/internal/hintreg"
+	"github.com/Skanislav/evm-scan/internal/price"
 	"github.com/Skanislav/evm-scan/internal/store"
 )
 
@@ -46,9 +47,12 @@ type Worker interface {
 
 // Deps is everything the HTTP layer needs.
 type Deps struct {
-	Store             *store.Store
-	Sources           map[uint64]chain.Source
-	Workers           map[uint64]Worker
+	Store   *store.Store
+	Sources map[uint64]chain.Source
+	Workers map[uint64]Worker
+	// Pricers read on-chain price sources per chain. A chain without one simply
+	// serves portfolios without values.
+	Pricers           map[uint64]*price.Pricer
 	Registry          *hintreg.Client
 	RegistryChainID   uint64
 	Publisher         *hintreg.Publisher
@@ -81,6 +85,7 @@ func New(d Deps) *Server {
 	s.mux.HandleFunc("GET /v1/accounts/{address}", s.accountAssets)
 	s.mux.HandleFunc("GET /v1/accounts/{address}/contracts", s.accountContracts)
 	s.mux.HandleFunc("GET /v1/accounts/{address}/portfolio", s.accountPortfolio)
+	s.mux.HandleFunc("GET /v1/prices", s.listPrices)
 	s.mux.HandleFunc("GET /v1/candidates", s.listCandidates)
 	s.mux.HandleFunc("POST /v1/candidates/{address}/promote", s.promoteCandidate)
 	s.mux.HandleFunc("GET /v1/epochs", s.listEpochs)
@@ -234,7 +239,22 @@ type chainStatus struct {
 	BackfillDone    int    `json:"assets_backfilled"`
 	Candidates      int64  `json:"candidates_observed"`
 	CandidatesReady int64  `json:"candidates_promotable"`
-	Error           string `json:"error,omitempty"`
+	// Pricing says where this chain's prices come from, or that they do not.
+	Pricing *pricingStatus `json:"pricing,omitempty"`
+	Error   string         `json:"error,omitempty"`
+}
+
+type pricingStatus struct {
+	Enabled      bool   `json:"enabled"`
+	FeedRegistry bool   `json:"feed_registry"`
+	NativeFeed   bool   `json:"native_usd_feed"`
+	PinnedFeeds  int    `json:"pinned_feeds"`
+	UniswapV3    bool   `json:"uniswap_v3"`
+	UniswapV2    bool   `json:"uniswap_v2"`
+	QuoteTokens  int    `json:"quote_tokens"`
+	TWAPWindow   string `json:"twap_window"`
+	// NativeUSD is the native asset's current USD price, when the feed answered.
+	NativeUSD string `json:"native_usd,omitempty"`
 }
 
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {
@@ -285,6 +305,23 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 			minEvents, minBlocks := w.DiscoveryThresholds()
 			if cst, err := s.d.Store.CandidateStats(ctx, id, minEvents, minBlocks); err == nil {
 				cs.Candidates, cs.CandidatesReady = cst.Observed, cst.Promotable
+			}
+		}
+		cs.Pricing = &pricingStatus{}
+		if p := s.pricerFor(id); p != nil {
+			src := p.Sources()
+			cs.Pricing = &pricingStatus{
+				Enabled:      true,
+				FeedRegistry: src.FeedRegistry != (common.Address{}),
+				NativeFeed:   src.NativeUSDFeed != (common.Address{}) || src.FeedRegistry != (common.Address{}),
+				PinnedFeeds:  len(src.Feeds),
+				UniswapV3:    src.V3Factory != (common.Address{}),
+				UniswapV2:    src.V2Factory != (common.Address{}),
+				QuoteTokens:  len(src.QuoteTokens),
+				TWAPWindow:   p.TWAPWindow().String(),
+			}
+			if res, _ := s.quotes(ctx, p, nil); res != nil && res.Native != nil {
+				cs.Pricing.NativeUSD = price.FormatPrice(res.Native.USD)
 			}
 		}
 		out.Chains = append(out.Chains, cs)
