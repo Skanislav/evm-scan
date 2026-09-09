@@ -12,6 +12,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"math/big"
 	"net/http"
 	"os"
 	"os/signal"
@@ -196,16 +197,22 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 			"address", addr.Hex(), "chain_id", cfg.Registry.ChainID, "adjudication", adjudication)
 
 		if cfg.Registry.PublisherKey != "" {
-			key, err := parseKey(cfg.Registry.PublisherKey)
+			sub, err := newSubmitter(regSrc, cfg.Registry)
 			if err != nil {
 				return err
 			}
-			sender, ok := regSrc.(chain.Sender)
-			if !ok {
-				return errors.New("registry chain source cannot send transactions")
+			publisher = hintreg.NewPublisher(regClient, sub, st, log)
+			publisher.StaleAfter = cfg.Registry.Publisher.StaleAfter.D()
+			if raw := cfg.Registry.Publisher.MinExpectedReward; raw != "" {
+				minReward, ok := new(big.Int).SetString(raw, 10)
+				if !ok || minReward.Sign() < 0 {
+					return fmt.Errorf("registry.publisher.min_expected_reward_wei: bad amount %q", raw)
+				}
+				publisher.MinReward = minReward
 			}
-			publisher = hintreg.NewPublisher(regClient, sender, st, key, cfg.Registry.ChainID, log)
-			log.Info("commitment publisher enabled", "address", publisher.Address().Hex())
+			log.Info("commitment publisher enabled",
+				"address", publisher.Address().Hex(), "mode", publisherMode(cfg.Registry),
+				"min_expected_reward_wei", cfg.Registry.Publisher.MinExpectedReward)
 		}
 	}
 
@@ -236,7 +243,11 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 		go func(id uint64, svc *indexer.Service) {
 			defer wg.Done()
 			if err := svc.Run(runCtx); err != nil && runCtx.Err() == nil {
+				// An indexer that cannot run is a process that cannot do its job.
+				// Exit so the supervisor restarts it, rather than serving stale
+				// answers behind a healthy-looking API.
 				log.Error("indexer stopped", "chain_id", id, "err", err)
+				cancel()
 			}
 		}(id, svc)
 	}
@@ -249,11 +260,11 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 		}()
 	}
 
-	if publisher != nil && cfg.Registry.AutoPublishInterval > 0 {
+	if publisher != nil {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			autoPublish(runCtx, publisher, cfg, log)
+			publisherLoop(runCtx, publisher, cfg, log)
 		}()
 	}
 
@@ -279,8 +290,23 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 	return nil
 }
 
-// autoPublish periodically commits the index on-chain.
-func autoPublish(ctx context.Context, p *hintreg.Publisher, cfg *config.Config, log *slog.Logger) {
+// publisherLoop keeps commitments moving through their lifecycle.
+//
+// On start it resumes any submission the previous process left waiting. Then, if
+// auto-publish is on, each tick: settle what is still pending, finalize what is past
+// its challenge window, claim the coverage reward on what has finalized (which is
+// what pays the publisher back), and post a new commitment only when the index or
+// its coverage has actually changed and the registry says it is worth posting.
+func publisherLoop(ctx context.Context, p *hintreg.Publisher, cfg *config.Config, log *slog.Logger) {
+	for _, c := range cfg.Chains {
+		if _, err := p.ResumePending(ctx, c.ChainID); err != nil && ctx.Err() == nil {
+			log.Error("resume pending submissions failed", "chain_id", c.ChainID, "err", err)
+		}
+	}
+	if cfg.Registry.AutoPublishInterval <= 0 {
+		return
+	}
+
 	t := time.NewTicker(cfg.Registry.AutoPublishInterval.D())
 	defer t.Stop()
 
@@ -292,25 +318,70 @@ func autoPublish(ctx context.Context, p *hintreg.Publisher, cfg *config.Config, 
 		}
 
 		for _, c := range cfg.Chains {
-			e, err := p.Build(ctx, c.ChainID, cfg.Registry.CommitmentURI)
-			if errors.Is(err, hintreg.ErrEmptyIndex) {
-				continue
-			}
-			if err != nil {
-				log.Error("auto-publish build failed", "chain_id", c.ChainID, "err", err)
-				continue
-			}
-			if _, err := p.Publish(ctx, e.ID); err != nil {
-				log.Error("auto-publish failed", "chain_id", c.ChainID, "epoch", e.ID, "err", err)
-			}
-		}
-
-		// Publishing is only half of the loop: a commitment stays challengeable, and
-		// its bond stays locked, until someone settles it.
-		if err := p.FinalizeDue(ctx); err != nil && ctx.Err() == nil {
-			log.Error("finalize sweep failed", "err", err)
+			publishTick(ctx, p, c.ChainID, cfg.Registry.CommitmentURI, log)
 		}
 	}
+}
+
+func publishTick(ctx context.Context, p *hintreg.Publisher, chainID uint64, uri string, log *slog.Logger) {
+	pending, err := p.ResumePending(ctx, chainID)
+	if err != nil {
+		log.Error("resume pending submissions failed", "chain_id", chainID, "err", err)
+		return
+	}
+	// Publishing is only half of the loop: a commitment stays challengeable, and its
+	// bond stays locked, until someone settles it. In oracle mode this is also what
+	// settles the assertion.
+	if _, err := p.FinalizeDue(ctx, chainID); err != nil && ctx.Err() == nil {
+		log.Error("finalize failed", "chain_id", chainID, "err", err)
+	}
+	if _, err := p.ClaimDue(ctx, chainID); err != nil && ctx.Err() == nil {
+		log.Error("claim coverage reward failed", "chain_id", chainID, "err", err)
+	}
+	if pending > 0 {
+		log.Info("submission still in flight; not building another", "chain_id", chainID, "pending", pending)
+		return
+	}
+
+	e, err := p.Build(ctx, chainID, uri, false)
+	if errors.Is(err, hintreg.ErrEmptyIndex) || errors.Is(err, hintreg.ErrUnchanged) || errors.Is(err, hintreg.ErrUnfunded) {
+		return
+	}
+	if err != nil {
+		log.Error("auto-publish build failed", "chain_id", chainID, "err", err)
+		return
+	}
+	if _, err := p.Publish(ctx, e.ID); err != nil && ctx.Err() == nil {
+		log.Error("auto-publish failed", "chain_id", chainID, "epoch", e.ID, "err", err)
+	}
+}
+
+// newSubmitter picks how commitments get to the chain. Only the EOA mode exists;
+// the switch is the seam a paymaster or relayer mode would plug into.
+func newSubmitter(regSrc chain.Source, reg config.Registry) (hintreg.Submitter, error) {
+	switch publisherMode(reg) {
+	case config.PublisherModeEOA:
+		key, err := parseKey(reg.PublisherKey)
+		if err != nil {
+			return nil, err
+		}
+		sender, ok := regSrc.(chain.Sender)
+		if !ok {
+			return nil, errors.New("registry chain source cannot send transactions")
+		}
+		sub := hintreg.NewEOASubmitter(sender, key, reg.ChainID, reg.Publisher.SubmitTimeout.D())
+		sub.FallbackGas = reg.Publisher.FallbackGas
+		return sub, nil
+	default:
+		return nil, fmt.Errorf("publisher mode %q is not implemented", reg.Publisher.Mode)
+	}
+}
+
+func publisherMode(reg config.Registry) string {
+	if reg.Publisher.Mode == "" {
+		return config.PublisherModeEOA
+	}
+	return reg.Publisher.Mode
 }
 
 func parseKey(hexKey string) (*ecdsa.PrivateKey, error) {

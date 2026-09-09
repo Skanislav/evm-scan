@@ -63,6 +63,34 @@ there is no RPC for this) and treats that as a hard floor. Backfills stop there.
 whose history is truncated by the floor reports `history_complete: false` rather than
 implying coverage it does not have.
 
+The probe uses errors as evidence, so it is careful about which errors count
+(`chain.ClassifyLogsError`, `chain.ProbeHistoryFloor`):
+
+- A *definite* "history unavailable" answer marks a block pruned. For geth that is
+  `pruned history unavailable` (JSON-RPC code 4444, `core/history.PrunedHistoryError`)
+  once history pruning is on, and `failed to get logs for block #N` / `header not found`
+  while ancient receipts are still missing after snap sync.
+- A *transient* failure — timeout, connection reset, EOF, `429`/rate limit, a busy or
+  restarting server — is retried with bounded backoff and never moves the floor. If the
+  retries run out the probe returns an error and the daemon keeps its previous floor
+  instead of adopting a wrong one.
+- An error the classifier does not recognise is read as "pruned" (the conservative
+  choice for a backfill floor) but logged as a guess, so an unfamiliar client's wording
+  shows up in the log rather than silently shaping the floor.
+- A node that answers a pruned block with an *empty* log set instead of an error would
+  fool any error-based probe into reporting floor 0. So the probe is cross-checked
+  against an *anchor*: a block known to hold logs (the oldest block discovery has
+  already read a watched event from). If the node claims to serve the anchor but
+  returns nothing for it, the probe fails with `ErrEmptyHistory` rather than reporting
+  history the node does not have. On a first start there is no anchor yet and the
+  check is skipped; it strengthens as discovery runs.
+
+Only geth's error semantics have been exercised against a live node. The wordings
+listed for other clients (Erigon, Nethermind, Reth, Besu) are taken from their sources
+and reports, not verified here; on such a node expect the "unknown boundary" warning
+until its messages are added to the classifier, and supply an anchor so an empty
+answer for pruned history is caught.
+
 That is why discovery runs forward from the head rather than backward from genesis:
 history is the scarce resource, and the system only spends it on contracts something has
 already decided are worth indexing.
@@ -162,12 +190,13 @@ whole path against mocks on a dev chain.
 ## Architecture
 
 ```
-    HintRegistry (on-chain)                       Optimistic Oracle V3
-    ├── registerAsset(chainId, token, kind)       permissionless, bonded
-    ├── publishIndex(chainId, from, to, root) ──► assertTruth
-    ├── challengeIndex(epochId) ──────────────►   disputeAssertion
-    ├── finalizeIndex(epochId) ───────────────►   settleAndGetAssertionResult
-    └── resolved / disputed callbacks ◄───────  (the oracle calls back)
+    HintRegistry (on-chain)                                   Optimistic Oracle V3
+    ├── requestIndexing(chainId, token, kind, fromBlock)       permissionless, funds the asset
+    ├── publishIndex(chainId, from, to, root, covRoot, uri) ──► assertTruth
+    ├── challengeIndex(epochId) ─────────────────────────────► disputeAssertion
+    ├── finalizeIndex(epochId) ──────────────────────────────► settleAndGetAssertionResult
+    ├── resolved / disputed callbacks ◄─────────────────────  (the oracle calls back)
+    └── claimCoverage(epochId, claims[])                      pays per newly covered block
               │  ▲
        mirror │  │ commitments
               ▼  │
@@ -264,26 +293,43 @@ against it inside the window. What happens *after* a challenge is the whole trus
 question, and a registry answers it in one of two modes, fixed at deployment and
 readable on-chain from `oracle()` / `arbiter()`:
 
-**Oracle mode** — `publishIndex` asserts `(chainId, fromBlock, toBlock, root, uri)` to
+**Oracle mode** — `publishIndex` asserts `(chainId, fromBlock, toBlock, root, coverageRoot, uri)` to
 UMA's Optimistic Oracle V3, bonding an ERC-20 the deployment names. Anyone disputes it,
 either at the oracle or through `challengeIndex`, which is a thin wrapper over
 `disputeAssertion`. UMA's vote decides; the registry only reacts to the oracle's
-callbacks. There is no arbiter and no reachable admin setter — `setArbiter`, `setBonds`
-and `resolveChallenge` all revert permanently, because the arbiter is the zero address
-and the oracle is not.
+callbacks. There is no arbiter: `resolveChallenge` and `setGateways` revert permanently,
+because the arbiter is the zero address and the oracle is not, so the gateway list is
+whatever the constructor said, forever.
 
 **Local-arbiter mode** — the fallback for a chain with no oracle deployment. Bonds are
 in wei and one `arbiter` key settles challenges. It is a trusted deployment wearing a
 permissionless write path, which is why the deploy tool says so in capitals.
 
+In both modes the economics are immutable: asset bond, publisher bond, challenge window,
+minimum funding and reward per block are constructor arguments with public getters and
+no setters, and the arbiter cannot be reassigned. A deployment's rules are therefore
+fully stated by its `RegistryConfigured` event, and changing them means deploying a new
+registry. The one knob a local arbiter keeps is `setGateways`, because gateways are hints
+the callback verifies, not rules.
+
+**Sizing the bonds.** The publisher bond is what a wrong root costs its author, and the
+challenger has to match it, so it also prices how expensive it is to stall an honest
+epoch in `Challenged`. Two references for picking a number: Arbitrum BoLD derives bond
+sizes from the attacker's delay payoff and targets an attacker-to-defender cost ratio of
+roughly 6.5:1; OP Stack fault proofs price spam at about 0.08 ETH per hourly proposal. A
+zero publisher bond makes challenges free and can never be raised, so the deploy tool
+warns when it sees one. In oracle mode the bond additionally cannot go below the
+oracle's minimum for the bond currency.
+
 ```bash
 # neutral: UMA settles, nobody administers
-./bin/evmscan-deploy -node "$PWD/.devchain/geth.ipc" \
+./bin/evmscan-deploy -node https://… -key 0x… \
     -oracle 0xOOv3… -bond-currency 0xUSDC… \
-    -publisher-bond 500000000000000000 -challenge-window 7200
+    -publisher-bond 500000000000000000 -challenge-window 7200 \
+    -reward-per-block 100000000000 -gateway 'https://host/ccip/{sender}/{data}.json'
 
 # fallback: one key settles
-./bin/evmscan-deploy -node "$PWD/.devchain/geth.ipc" -arbiter 0xyou…
+./bin/evmscan-deploy -node https://… -key 0x… -arbiter 0xyou… -reward-per-block 100000000000
 ```
 
 The publisher settles its own commitments: `evmscand` sweeps published epochs each
@@ -291,6 +337,44 @@ auto-publish tick and calls `finalizeIndex` on the ones the chain will let it se
 which is what returns the bond. `evmscan-verify` prints the mode and the commitment's
 on-chain status alongside every proof it checks, so a consumer sees who could still
 overturn the root it just verified.
+
+To host it without a geth, see [docs/RAILWAY.md](docs/RAILWAY.md): a Helios light client
+runs in the container on loopback and verifies an upstream RPC against beacon headers, so
+`require_local_node` stays on. `evmscan-deploy` puts the registry on a real network.
+[docs/MAINNET.md](docs/MAINNET.md) is the mainnet runbook, and leads with the constraint
+that shapes it: Helios can verify about 8191 blocks, which on mainnet is a rolling day.
+
+## Paying for indexing
+
+`registerAsset` is a bonded hint. `requestIndexing` is the paid version: whatever the
+caller pays above the bond becomes that asset's **funding**, and funding buys blocks. A
+commitment carries a second root over the per-asset block ranges the publisher scanned,
+and once it finalizes the publisher claims `rewardPerBlock` for every block of a funded
+asset's range that nobody has been paid for yet. Replaying a claim, or claiming a range an
+earlier epoch already covered, pays nothing, so what a block of coverage is worth does not
+depend on how many epochs get posted. Paying for asset X makes indexing X worth someone's
+while, and only X.
+
+The publisher fronts gas with a plain EOA and is paid back by the people who wanted the
+data; there is no paymaster to trust and nothing in the contract that needs one. Before
+posting, the daemon asks the registry what the epoch's coverage is worth and refuses to
+post below `min_expected_reward_wei`, so an unfunded chain does not get epochs. In the
+daemon that EOA sits behind a `Submitter` interface, which is where a relayer or an
+ERC-4337 account would go if you wanted one.
+
+That is the minimum of the economics in [docs/TOKENOMICS.md](docs/TOKENOMICS.md); the
+rest (publisher staking, attestations, fraud proofs, a self-funding paymaster) is
+designed there and not built.
+
+`HintRegistry.contractsOf(chainId, account)` is the same answer as a contract call: it
+reverts with an ERC-3668 `OffchainLookup`, any gateway returns the leaf and proof, and
+`contractsOfCallback` verifies them against the latest finalized root. A gateway can
+withhold an answer but cannot forge one, and cannot serve a stale epoch. The daemon is
+one such gateway (`/ccip/…`); `evmscan-verify -ccip` is a client for it.
+
+Commitments are optimistic and served as soon as they are posted. `GET /v1/epochs/{id}`
+reports `onchain_status` and `challenge_deadline`, so a consumer can decide for itself
+whether "proposed" is good enough.
 
 ## API
 
@@ -305,9 +389,10 @@ overturn the root it just verified.
 | `GET` | `/v1/assets/{addr}/accounts` | Accounts known to have touched a contract. |
 | `GET` | `/v1/candidates` | Contracts discovered at the head, ranked by activity. |
 | `POST` | `/v1/candidates/{addr}/promote` | Commit a discovered contract to being indexed. |
-| `GET` | `/v1/epochs` · `POST /v1/epochs` | List / build + publish commitments. |
+| `GET` | `/v1/epochs` · `POST /v1/epochs` | List / build + publish commitments (`force` to repost an unchanged root). |
 | `GET` | `/v1/epochs/{id}/proof?account=` | Inclusion proof for `verifyInclusion`. |
-| `GET` | `/v1/status` · `/v1/health` | Sync state, node locality, index size. |
+| `GET` | `/ccip/{sender}/{data}.json` · `POST /ccip` | ERC-3668 gateway for `HintRegistry.contractsOf`: leaf and proof for the latest finalized epoch, verified on-chain by the callback. |
+| `GET` | `/v1/status` · `/v1/health` | Sync state, node locality, index size, registry economics. Health is 503 when a node, the database or an indexer is down. |
 
 Every account response carries `as_of_block` so a caller can pin what it saw.
 
@@ -328,7 +413,8 @@ internal/api/        HTTP surface
 cmd/evmscand/        the daemon
 cmd/evmscan-demo/    devnet bootstrapper
 cmd/evmscan-verify/  independent proof checker
-cmd/evmscan-deploy/  registry deployer; prints the adjudication mode it just fixed
+cmd/evmscan-deploy/  registry deployer: fixes the adjudication mode, prints it, seeds requests
+deploy/              container entrypoint and hosted config (Railway)
 ```
 
 `make check` runs fmt, vet and tests, including `make test-evm` — the lens executed in
@@ -354,6 +440,9 @@ Being explicit about what this does *not* do:
 - **History is only as deep as your node.** The floor is probed, respected and reported,
   but an asset promoted on a node without ancient receipts simply has shallower history.
   `history_complete` on the asset says whether the walk reached what was asked for.
+  The probe has been validated against geth only; other clients' pruned-history
+  errors are matched by wording and fall back to a logged guess. The floor is re-probed
+  after a backfill failure, not on a schedule.
 - **Candidate ranking is crude** — event count and distinct blocks. It separates active
   contracts from idle ones, but not a widely-held token from a large spam airdrop. That
   is why `auto_promote` defaults to off and the on-chain registry stays authoritative.
@@ -378,3 +467,14 @@ Being explicit about what this does *not* do:
   peg only with a note saying so.
 - **Commitments are cumulative snapshots**, so cost grows with total accounts rather than
   with recent activity. Fine at this scale; deltas or an accumulator would be the fix.
+- **A zero publisher bond makes challenges free in local-arbiter mode.** `challengeIndex`
+  matches the epoch's bond, so a registry deployed with `publisherBond = 0` lets anyone
+  park an epoch in `Challenged` for the arbiter to resolve. In oracle mode the bond
+  cannot go below the oracle's minimum. Bonds are immutable, so set one at deployment
+  where that matters.
+- **Coverage is only as honest as the challenge path.** A claim is paid for the range a
+  finalized epoch declared, and finalization only means nobody challenged. Until there
+  is a fraud proof, a publisher declaring coverage it did not do is caught by whoever
+  adjudicates — UMA's voters, the arbiter — or by nobody. The coverage root is part of
+  the oracle claim text for exactly that reason. Funding is also a cap, not a promise: a claim the balance only
+  partly covers marks the whole range paid.

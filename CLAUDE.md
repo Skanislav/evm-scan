@@ -1,0 +1,139 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this is
+
+evm-scan is a Go daemon that answers "which contracts has this address touched?" using only a
+self-hosted, snap-synced geth node. It discovers token contracts by watching the chain head,
+indexes per-account interactions only for contracts that get *promoted*, and commits the
+resulting `account → contracts` table on-chain as a merkle root in `HintRegistry.sol`.
+README.md explains the design rationale in depth; read it before changing architecture.
+
+## Commands
+
+```bash
+make build            # builds bin/evmscand, bin/evmscan-demo, bin/evmscan-verify, bin/evmscan-deploy
+make check            # what CI runs: gofmt -w, go vet, go test ./...
+go test ./...         # unit tests only (hermetic, no node or DB needed)
+go test ./internal/merkle/ -run TestName -v      # single test
+make contracts        # recompile contracts/src/*.sol -> contracts/out/*.json (needs node; installs solc@0.8.28 into scripts/)
+```
+
+Local end-to-end loop (needs PostgreSQL 16+ and a `geth` binary; see docs/DEMO.md):
+
+```bash
+make devchain         # foreground geth --dev, IPC at .devchain/geth.ipc
+make demo             # deploys HintRegistry + demo tokens, generates traffic, writes config.demo.yaml
+make run              # evmscand against config.demo.yaml; UI at http://127.0.0.1:8080
+```
+
+Node-backed integration tests skip unless pointed at a chain:
+
+```bash
+EVMSCAN_TEST_NODE="$PWD/.devchain/geth.ipc" EVMSCAN_TEST_TOKEN=0x... go test ./internal/token/ -run Probe -v
+```
+
+Go 1.24+. `config.demo.yaml` contains a dev-chain private key and is gitignored; never commit
+a config with a publisher key. Secrets can be supplied via `EVMSCAN_DATABASE_DSN`,
+`EVMSCAN_PUBLISHER_KEY`, `EVMSCAN_REGISTRY_ADDRESS`, `EVMSCAN_NODE`, `EVMSCAN_API_LISTEN`.
+
+## Architecture
+
+Single process (`cmd/evmscand`) running, per configured chain, an `indexer.Service` plus a
+shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module path is
+`github.com/Skanislav/evm-scan`.
+
+**Data flow through the packages:**
+
+- `internal/chain` is the *only* package that talks to a node. Everything else is written
+  against the `chain.Source` interface (read) and `chain.Sender` (write, in `tx.go`). Tests
+  fake `Source` directly (see `prunedNode` in `chain/history_test.go`). `Dial` enforces
+  `require_local_node`; `SweepLogs` is the adaptive-window `eth_getLogs` walker every scan
+  uses; `HistoryFloor` binary-searches for the oldest block the node can serve logs for.
+- `internal/evmlog` decodes only the five identity-carrying token events (`Transfer`,
+  `Approval`, `ApprovalForAll`, `TransferSingle`, `TransferBatch`) from indexed topics. It
+  never unpacks event data, so it is total. `WatchedTopics()` is the topic filter that
+  bounds every node query.
+- `internal/indexer` runs three goroutines per chain inside `Service.Run`:
+  - **discovery** (`discovery.go`): unfiltered-by-address sweep forward from the head,
+    writing only per-contract counters to `candidates`. `Promote` turns a candidate into an
+    indexed asset; `auto_promote` is off by default.
+  - **follower** (`followTick`): walks forward from each asset's anchor, handles reorgs by
+    comparing stored block hashes and rewinding `pending_events`.
+  - **backfiller** (`runBackfill`): walks backward from the anchor toward
+    `max(hint_from_block, historyFloor)`. Assets whose walk is truncated by the floor get
+    `history_complete: false`.
+  - `Aggregate` in `aggregate.go` folds logs into `store.Interaction` rollup rows.
+- `internal/store` is hand-written SQL over pgx (no ORM by design). Schema lives in
+  `migrations/*.sql`, embedded and applied in filename order by `Store.Migrate`; new
+  migrations must be named `NNNN_name.sql`. Addresses are 20-byte `BYTEA`. Key tables:
+  `assets` + `asset_cursors` (two-pointer scan state), `candidates` (discovery counters),
+  `interactions` (the rollup), `pending_events` (unconfirmed buffer), `epochs`/`epoch_leaves`
+  (commitments).
+- `internal/hintreg` bridges the on-chain registry both ways: `Mirror` pulls registered hints
+  into `assets` and nudges the follower; `Publisher` builds an epoch from
+  `store.SnapshotIndex`, commits the merkle root via `publishIndex`, finalizes its own
+  epochs after the challenge window (`FinalizeDue`), and `ProofFor` serves inclusion
+  proofs. Transactions go through the `Submitter` interface (`submitter.go`); `EOASubmitter`
+  is the only implementation. A submission reference is persisted (`epochs.submission_ref`,
+  status `submitted`) before the receipt wait, and `ResumePending` settles it after a
+  restart, so nothing is ever posted twice. `Build` refuses an unchanged root unless forced.
+- `HintRegistry` adjudicates disputes in one of two modes fixed at construction, read via
+  `Client.Mode`. **Oracle mode** (UMA Optimistic Oracle V3, `contracts/src/IOptimisticOracleV3.sol`,
+  `MockOptimisticOracleV3.sol` for tests): `publishIndex` asserts the commitment, the bond is
+  an ERC-20 the publisher must approve (`Publisher.ensureBondAllowance`), `finalizeIndex`
+  settles the assertion, and the arbiter is the zero address so `resolveChallenge` and
+  `setGateways` revert forever. **Local-arbiter mode**: wei bonds, one key resolves
+  challenges and may edit the gateway list. In both modes bonds, window and pricing are
+  `immutable` constructor arguments with no setters, and the arbiter cannot be reassigned;
+  the constructor takes an `Economics` tuple plus the initial gateway list, packed with
+  `hintreg.ConstructorArgs`. Changing the rules means a new deployment.
+  `registry_integration_test.go` (needs a dev node) covers the oracle path.
+- `HintRegistry.requestIndexing` is a paid registration whose surplus becomes the asset's
+  funding (`getFunding`). An epoch commits a `coverageRoot` over per-asset
+  `(assetKey, fromBlock, toBlock)` leaves built from `asset_cursors`
+  (`hintreg.CoverageFromCursors`); after `finalizeIndex` returns the bond, `claimCoverage`
+  pays `rewardPerBlock` per block of a funded asset's range not paid for before
+  (`Publisher.ClaimDue`). `Build` quotes the coverage with `claimable` and refuses to
+  store an epoch below `Publisher.MinReward` (`ErrUnfunded`). That is how gas is
+  sponsored: the EOA fronts it and the people who funded the assets pay it back.
+  `merkle.CoverageLeaf` must match `HintRegistry.coverageLeaf` byte-for-byte; the
+  hermetic `registry_sim_test.go` runs the whole loop on go-ethereum's simulated backend.
+  docs/TOKENOMICS.md is the full design; only its minimum is built.
+- `internal/merkle` must match `HintRegistry.leafHash` / `verifyInclusion` byte-for-byte:
+  leaf = `keccak256(abi.encode(account, chainId, keccak256(abi.encodePacked(sorted unique
+  assets))))`, sorted-pair keccak tree. Changing either side requires changing the other and
+  re-running `cmd/evmscan-verify`, which checks the Go proof against the Solidity verifier.
+- `internal/token` probes metadata and balances via `eth_call` **at head only**. Nothing in
+  the codebase may request historical state; that is what keeps snap sync sufficient.
+- `internal/lens` runs `contracts/src/AssetLens.sol` as a *deployless* `eth_call` (creation
+  code plus request as calldata) to read an account's whole position, balances, allowances,
+  NFT ids, nonce and 7702 delegation, in one call at head; served at
+  `/v1/accounts/{addr}/portfolio` (`internal/api/portfolio.go`). `contracts/evmtest` is a
+  separate Go module that executes the lens in a real EVM (`make test-evm`), kept apart so
+  go-ethereum's in-process node stays out of the daemon's dependency graph.
+- `internal/api` depends on the indexer through the small `Worker` interface, not the package.
+  `gateway.go` is the ERC-3668 gateway for `HintRegistry.contractsOf`; `internal/ccip` holds
+  the response codec and an ERC-3668 client shared with `cmd/evmscan-verify -ccip`. The
+  callback only accepts the latest finalized epoch, so the gateway reads that id from the
+  registry, not from the local table.
+  Routes use Go 1.22 method-prefixed patterns on `http.ServeMux`. Static UI is `web/index.html`.
+- `contracts/` embeds compiled artifacts from `contracts/out/` so `go build` needs no Node
+  toolchain. After editing a `.sol`, run `make contracts` and commit the regenerated JSON.
+- `Dockerfile` + `deploy/entrypoint.sh` run evmscand next to a Helios light client on
+  loopback (Sepolia). Helios verifies logs against receipts roots and calls via
+  `eth_getProof`, so `require_local_node` stays on. Its verifiable history is ~8191 blocks
+  (EIP-2935) and `eth_getLogs` is capped at 4096 blocks; `deploy/config.railway.yaml` is
+  sized for that. See docs/RAILWAY.md.
+
+**Invariants to preserve when editing:**
+
+- Discovery writes counters only, never per-account rows. Per-account indexing and history
+  reads are reserved for promoted assets.
+- The `eth_subscribe` stream is a wake-up signal only; all logs enter the index through
+  `eth_getLogs`. Do not add a second ingestion path.
+- Events shallower than `confirmations` stay in `pending_events`; the `interactions` rollup
+  is only ever written from confirmed blocks.
+- Backfills stop at the probed history floor, never assume genesis is reachable.
+- Two node operations only: `eth_getLogs` and `eth_call` at head.

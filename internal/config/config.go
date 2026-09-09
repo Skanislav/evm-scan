@@ -46,6 +46,32 @@ type Registry struct {
 	AutoPublishInterval Duration `yaml:"auto_publish_interval"`
 	// CommitmentURI is recorded alongside a published root, pointing at the full table.
 	CommitmentURI string `yaml:"commitment_uri"`
+	// Publisher controls how commitments reach the chain.
+	Publisher PublisherCfg `yaml:"publisher"`
+}
+
+// PublisherCfg selects and tunes the transaction submitter.
+//
+// Gas is deliberately behind an interface (hintreg.Submitter). Today the only mode is
+// an EOA that pays for itself and is paid back, per block of funded coverage, when it
+// claims against its finalized epochs; a paymaster or relayer would be another mode
+// here and nothing else.
+type PublisherCfg struct {
+	// Mode is "eoa" (the default when empty). Other values are reserved.
+	Mode string `yaml:"mode"`
+	// SubmitTimeout bounds how long one submission is waited on before the wait is
+	// abandoned and left for ResumePending.
+	SubmitTimeout Duration `yaml:"submit_timeout"`
+	// StaleAfter is how long an unconfirmed submission may linger before it is
+	// written off as failed.
+	StaleAfter Duration `yaml:"stale_after"`
+	// FallbackGas is used when the node cannot estimate gas. Zero means fail. A
+	// light client without eth_estimateGas is the case it exists for.
+	FallbackGas uint64 `yaml:"fallback_gas"`
+	// MinExpectedReward, in wei, is the least the registry must quote for an
+	// epoch's coverage before it is posted. Zero posts regardless. This is the gas
+	// floor: with it set, an unfunded chain does not get epochs.
+	MinExpectedReward string `yaml:"min_expected_reward_wei"`
 }
 
 // Chain is one indexed network.
@@ -173,7 +199,13 @@ func Load(path string) (*Config, error) {
 	cfg := &Config{
 		API:      API{Listen: "127.0.0.1:8080"},
 		Database: Database{AutoMigrate: true},
-		Registry: Registry{SyncInterval: Duration(10 * time.Second)},
+		Registry: Registry{
+			SyncInterval: Duration(10 * time.Second),
+			Publisher: PublisherCfg{
+				SubmitTimeout: Duration(3 * time.Minute),
+				StaleAfter:    Duration(30 * time.Minute),
+			},
+		},
 	}
 
 	if path != "" {
@@ -258,8 +290,17 @@ func (c *Config) validate() error {
 			return fmt.Errorf("config: registry.publisher_key must be a 32-byte hex key")
 		}
 	}
+	switch c.Registry.Publisher.Mode {
+	case "", PublisherModeEOA:
+	default:
+		return fmt.Errorf("config: registry.publisher.mode %q is not implemented (only %q)",
+			c.Registry.Publisher.Mode, PublisherModeEOA)
+	}
 	return nil
 }
+
+// PublisherModeEOA signs with registry.publisher_key and pays its own gas.
+const PublisherModeEOA = "eoa"
 
 // RegistryAddress returns the parsed registry address and whether one is configured.
 func (c *Config) RegistryAddress() (common.Address, bool) {

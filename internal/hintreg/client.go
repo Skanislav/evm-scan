@@ -16,7 +16,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 
 	"github.com/Skanislav/evm-scan/contracts"
-	"github.com/Skanislav/evm-scan/internal/chain"
 )
 
 // RegisteredAsset mirrors HintRegistry.Asset.
@@ -43,15 +42,103 @@ type abiAsset struct {
 	Active       bool
 }
 
+// EpochStatus mirrors HintRegistry.EpochStatus.
+type EpochStatus uint8
+
+const (
+	EpochNone EpochStatus = iota
+	EpochProposed
+	EpochChallenged
+	EpochFinalized
+	EpochRejected
+)
+
+// String renders an on-chain status for humans and JSON.
+func (s EpochStatus) String() string {
+	switch s {
+	case EpochProposed:
+		return "proposed"
+	case EpochChallenged:
+		return "challenged"
+	case EpochFinalized:
+		return "finalized"
+	case EpochRejected:
+		return "rejected"
+	default:
+		return "none"
+	}
+}
+
+// RegistryEpoch mirrors HintRegistry.Epoch.
+type RegistryEpoch struct {
+	ChainID           uint64
+	FromBlock         uint64
+	ToBlock           uint64
+	Root              common.Hash
+	CoverageRoot      common.Hash
+	URI               string
+	Publisher         common.Address
+	Challenger        common.Address
+	Bond              *big.Int
+	PublishedAt       uint64
+	ChallengeDeadline uint64
+	Status            EpochStatus
+	// AssertionID is the oracle assertion backing the commitment; zero in
+	// local-arbiter mode.
+	AssertionID common.Hash
+}
+
+// abiEpoch matches the ABI tuple field-for-field for decoding.
+type abiEpoch struct {
+	ChainId           uint64
+	FromBlock         uint64
+	ToBlock           uint64
+	Root              [32]byte
+	CoverageRoot      [32]byte
+	Uri               string
+	Publisher         common.Address
+	Challenger        common.Address
+	Bond              *big.Int
+	PublishedAt       uint64
+	ChallengeDeadline uint64
+	Status            uint8
+	AssertionId       [32]byte
+}
+
+// Economics mirrors HintRegistry.Economics: the constructor's pricing tuple.
+type Economics struct {
+	AssetBond       *big.Int
+	PublisherBond   *big.Int
+	ChallengeWindow *big.Int
+	MinFunding      *big.Int
+	RewardPerBlock  *big.Int
+}
+
+// ConstructorArgs lays out HintRegistry's constructor arguments for ABI packing.
+// Zero oracle and bondCurrency select local-arbiter mode; a zero arbiter selects
+// oracle mode. The contract rejects any other combination.
+func ConstructorArgs(oracle, bondCurrency, arbiter common.Address, econ Economics, gateways []string) []any {
+	if gateways == nil {
+		gateways = []string{}
+	}
+	return []any{oracle, bondCurrency, arbiter, econ, gateways}
+}
+
+// headCaller is the one node operation the client needs. chain.Source satisfies it;
+// tests satisfy it with a simulated chain.
+type headCaller interface {
+	CallAtHead(ctx context.Context, msg ethereum.CallMsg) ([]byte, error)
+}
+
 // Client reads the registry contract.
 type Client struct {
-	src  chain.Source
+	src  headCaller
 	abi  abi.ABI
 	addr common.Address
 }
 
 // NewClient binds to a deployed HintRegistry.
-func NewClient(src chain.Source, addr common.Address) (*Client, error) {
+func NewClient(src headCaller, addr common.Address) (*Client, error) {
 	parsed, err := contracts.HintRegistryABI()
 	if err != nil {
 		return nil, err
@@ -161,6 +248,106 @@ func (c *Client) PublisherBond(ctx context.Context) (*big.Int, error) {
 	return n, nil
 }
 
+// GetEpoch reads one on-chain commitment.
+func (c *Client) GetEpoch(ctx context.Context, id int64) (RegistryEpoch, error) {
+	vals, err := c.call(ctx, "getEpoch", new(big.Int).SetInt64(id))
+	if err != nil {
+		return RegistryEpoch{}, err
+	}
+	e := *abi.ConvertType(vals[0], new(abiEpoch)).(*abiEpoch)
+	return RegistryEpoch{
+		ChainID:           e.ChainId,
+		FromBlock:         e.FromBlock,
+		ToBlock:           e.ToBlock,
+		Root:              e.Root,
+		CoverageRoot:      e.CoverageRoot,
+		URI:               e.Uri,
+		Publisher:         e.Publisher,
+		Challenger:        e.Challenger,
+		Bond:              e.Bond,
+		PublishedAt:       e.PublishedAt,
+		ChallengeDeadline: e.ChallengeDeadline,
+		Status:            EpochStatus(e.Status),
+		AssertionID:       e.AssertionId,
+	}, nil
+}
+
+// Funding mirrors HintRegistry.Funding: what an asset has left to pay indexers and
+// the contiguous block range that has already been paid for.
+type Funding struct {
+	Balance  *big.Int
+	PaidFrom uint64
+	PaidTo   uint64
+}
+
+type abiFunding struct {
+	Balance  *big.Int
+	PaidFrom uint64
+	PaidTo   uint64
+}
+
+// Funding reads an asset's remaining funding and paid range.
+func (c *Client) Funding(ctx context.Context, key common.Hash) (Funding, error) {
+	vals, err := c.call(ctx, "getFunding", [32]byte(key))
+	if err != nil {
+		return Funding{}, err
+	}
+	f := *abi.ConvertType(vals[0], new(abiFunding)).(*abiFunding)
+	return Funding{Balance: f.Balance, PaidFrom: f.PaidFrom, PaidTo: f.PaidTo}, nil
+}
+
+// Claimable is what a finalized claim for this asset range would pay right now.
+func (c *Client) Claimable(ctx context.Context, key common.Hash, fromBlock, toBlock uint64) (*big.Int, error) {
+	return c.uintCall(ctx, "claimable", [32]byte(key), fromBlock, toBlock)
+}
+
+// RewardPerBlock is what a publisher earns per newly covered block of a funded asset.
+func (c *Client) RewardPerBlock(ctx context.Context) (*big.Int, error) {
+	return c.uintCall(ctx, "rewardPerBlock")
+}
+
+// MinFunding is the least requestIndexing accepts above the asset bond.
+func (c *Client) MinFunding(ctx context.Context) (*big.Int, error) {
+	return c.uintCall(ctx, "minFunding")
+}
+
+func (c *Client) uintCall(ctx context.Context, method string, args ...any) (*big.Int, error) {
+	vals, err := c.call(ctx, method, args...)
+	if err != nil {
+		return nil, err
+	}
+	n, ok := vals[0].(*big.Int)
+	if !ok {
+		return nil, fmt.Errorf("hintreg: unexpected %s return", method)
+	}
+	return n, nil
+}
+
+// LatestFinalizedEpoch is the registry's own view of the newest final commitment
+// for a chain, which is the only epoch contractsOfCallback accepts.
+func (c *Client) LatestFinalizedEpoch(ctx context.Context, chainID uint64) (found bool, id int64, err error) {
+	vals, err := c.call(ctx, "latestFinalizedEpoch", chainID)
+	if err != nil {
+		return false, 0, err
+	}
+	found, _ = vals[0].(bool)
+	n, ok := vals[1].(*big.Int)
+	if !ok || !n.IsInt64() {
+		return false, 0, fmt.Errorf("hintreg: unexpected latestFinalizedEpoch return")
+	}
+	return found, n.Int64(), nil
+}
+
+// Gateways lists the ERC-3668 gateway templates the registry advertises.
+func (c *Client) Gateways(ctx context.Context) ([]string, error) {
+	vals, err := c.call(ctx, "gateways")
+	if err != nil {
+		return nil, err
+	}
+	urls, _ := vals[0].([]string)
+	return urls, nil
+}
+
 // KindToStandard maps a registry kind sentinel to an evmlog.Standard value.
 func KindToStandard(kind uint8) uint8 {
 	switch kind {
@@ -255,89 +442,6 @@ func (c *Client) Mode(ctx context.Context) (Mode, error) {
 	}
 	m.ChallengeWindow = w.Uint64()
 	return m, nil
-}
-
-// EpochStatus mirrors HintRegistry.EpochStatus.
-type EpochStatus uint8
-
-const (
-	EpochNone EpochStatus = iota
-	EpochProposed
-	EpochChallenged
-	EpochFinalized
-	EpochRejected
-)
-
-func (s EpochStatus) String() string {
-	switch s {
-	case EpochProposed:
-		return "proposed"
-	case EpochChallenged:
-		return "challenged"
-	case EpochFinalized:
-		return "finalized"
-	case EpochRejected:
-		return "rejected"
-	default:
-		return "none"
-	}
-}
-
-// OnchainEpoch mirrors HintRegistry.Epoch.
-type OnchainEpoch struct {
-	ChainID           uint64
-	FromBlock         uint64
-	ToBlock           uint64
-	Root              common.Hash
-	URI               string
-	Publisher         common.Address
-	Challenger        common.Address
-	Bond              *big.Int
-	PublishedAt       uint64
-	ChallengeDeadline uint64
-	Status            EpochStatus
-	// AssertionID is the oracle assertion backing the commitment; zero in
-	// local-arbiter mode.
-	AssertionID common.Hash
-}
-
-// abiEpoch matches the ABI tuple field-for-field for decoding.
-type abiEpoch struct {
-	ChainId           uint64
-	FromBlock         uint64
-	ToBlock           uint64
-	Root              [32]byte
-	Uri               string
-	Publisher         common.Address
-	Challenger        common.Address
-	Bond              *big.Int
-	PublishedAt       uint64
-	ChallengeDeadline uint64
-	Status            uint8
-	AssertionId       [32]byte
-}
-
-// GetEpoch reads one commitment's on-chain state.
-func (c *Client) GetEpoch(ctx context.Context, epochID int64) (OnchainEpoch, error) {
-	vals, err := c.call(ctx, "getEpoch", big.NewInt(epochID))
-	if err != nil {
-		return OnchainEpoch{}, err
-	}
-	e := *abi.ConvertType(vals[0], new(abiEpoch)).(*abiEpoch)
-	return OnchainEpoch{
-		ChainID:           e.ChainId,
-		FromBlock:         e.FromBlock,
-		ToBlock:           e.ToBlock,
-		Root:              e.Root,
-		URI:               e.Uri,
-		Publisher:         e.Publisher,
-		Challenger:        e.Challenger,
-		Bond:              e.Bond,
-		PublishedAt:       e.PublishedAt,
-		ChallengeDeadline: e.ChallengeDeadline,
-		Status:            EpochStatus(e.Status),
-		AssertionID:       e.AssertionId,
-	}, nil
 }
 
 // EpochCount returns how many commitments have been published.

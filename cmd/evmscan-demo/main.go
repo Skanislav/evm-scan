@@ -27,6 +27,7 @@ import (
 
 	"github.com/Skanislav/evm-scan/contracts"
 	"github.com/Skanislav/evm-scan/internal/chain"
+	"github.com/Skanislav/evm-scan/internal/hintreg"
 	"github.com/Skanislav/evm-scan/internal/price"
 )
 
@@ -49,6 +50,9 @@ func main() {
 		bondWei   = flag.Int64("bond", 0, "asset and publisher bond in wei (bond-token units for the publisher in -oracle mode)")
 		challenge = flag.Int64("challenge-window", 60, "challenge window in seconds")
 		oracle    = flag.Bool("oracle", false, "deploy in oracle mode against a mock optimistic oracle instead of a local arbiter")
+		minFund   = flag.Int64("min-funding", 0, "minimum requestIndexing deposit above the bond, in wei")
+		reward    = flag.Int64("reward-per-block", 1e12, "paid to the publisher per newly covered block of a funded asset, in wei")
+		blocks    = flag.Int64("funded-blocks", 20000, "how many blocks of coverage the demo request pays for")
 	)
 	flag.Parse()
 
@@ -59,12 +63,21 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
-	if err := run(ctx, *nodeURL, *users, *out, *dsn, *listen, *bondWei, *challenge, *oracle); err != nil {
+	econ := economics{bond: *bondWei, challengeWindow: *challenge, minFunding: *minFund, rewardPerBlock: *reward, fundedBlocks: *blocks}
+	if err := run(ctx, *nodeURL, *users, *out, *dsn, *listen, econ, *oracle); err != nil {
 		log.Fatal(err)
 	}
 }
 
-func run(ctx context.Context, nodeURL string, userCount int, outPath, dsn, listen string, bond, challengeWindow int64, oracleMode bool) error {
+// economics are the HintRegistry constructor parameters, plus how much coverage the
+// demo pays for.
+type economics struct {
+	bond, challengeWindow, minFunding, rewardPerBlock int64
+	fundedBlocks                                      int64
+}
+
+func run(ctx context.Context, nodeURL string, userCount int, outPath, dsn, listen string, econ economics, oracleMode bool) error {
+	bond := econ.bond
 	node, err := chain.Dial(ctx, nodeURL, true)
 	if err != nil {
 		return err
@@ -109,8 +122,18 @@ func run(ctx context.Context, nodeURL string, userCount int, outPath, dsn, liste
 		fmt.Printf("mock oracle   %s  (voter %s)\n", oracleAddr.Hex(), faucet.Hex())
 	}
 
-	registry, err := d.deploy(ctx, "HintRegistry", oracleAddr, bondToken, arbiter,
-		big.NewInt(bond), big.NewInt(bond), big.NewInt(challengeWindow))
+	// The registry advertises this daemon as an ERC-3668 gateway, so contractsOf
+	// resolves through it. It goes in at construction because in oracle mode no
+	// setter is reachable afterwards.
+	gateway := fmt.Sprintf("http://%s/ccip/{sender}/{data}.json", listen)
+	registry, err := d.deploy(ctx, "HintRegistry", hintreg.ConstructorArgs(oracleAddr, bondToken, arbiter,
+		hintreg.Economics{
+			AssetBond:       big.NewInt(bond),
+			PublisherBond:   big.NewInt(bond),
+			ChallengeWindow: big.NewInt(econ.challengeWindow),
+			MinFunding:      big.NewInt(econ.minFunding),
+			RewardPerBlock:  big.NewInt(econ.rewardPerBlock),
+		}, []string{gateway})...)
 	if err != nil {
 		return fmt.Errorf("deploy HintRegistry: %w", err)
 	}
@@ -311,7 +334,7 @@ func run(ctx context.Context, nodeURL string, userCount int, outPath, dsn, liste
 		addr common.Address
 		kind uint8
 	}
-	for _, h := range []hint{{usdc, 20}, {weth, 20}, {nft, 21}} {
+	for _, h := range []hint{{usdc, 20}, {weth, 20}} {
 		data, err := regABI.Pack("registerAsset", chainID, h.addr, h.kind, uint64(0))
 		if err != nil {
 			return err
@@ -320,12 +343,30 @@ func run(ctx context.Context, nodeURL string, userCount int, outPath, dsn, liste
 			return fmt.Errorf("registerAsset %s: %w", h.addr.Hex(), err)
 		}
 	}
+	// The NFT goes in through the paid path: whatever is paid above the bond is the
+	// asset's funding, paid out per block of coverage when the publisher's epochs
+	// finalize. Enough blocks that the loop stays visible for a while in the demo.
+	funding := new(big.Int).Mul(big.NewInt(econ.rewardPerBlock), big.NewInt(econ.fundedBlocks))
+	if funding.Cmp(big.NewInt(econ.minFunding)) < 0 {
+		funding = big.NewInt(econ.minFunding)
+	}
+	sponsor := new(big.Int).Add(big.NewInt(bond), funding)
+	data, err := regABI.Pack("requestIndexing", chainID, nft, uint8(21), uint64(0))
+	if err != nil {
+		return err
+	}
+	if _, err := d.sendFaucet(ctx, &registry, sponsor, data, callGas); err != nil {
+		return fmt.Errorf("requestIndexing %s: %w", nft.Hex(), err)
+	}
 	if err := d.wait(ctx); err != nil {
 		return err
 	}
 
+	fmt.Printf("gateway       %s\n", gateway)
+
 	head, _ := node.HeadBlock(ctx)
-	fmt.Printf("\nregistered 3 assets in HintRegistry; head is block %d\n", head)
+	fmt.Printf("\nregistered 3 assets in HintRegistry (1 via requestIndexing, funding %s wei = %d blocks at %d wei/block); head is block %d\n",
+		funding, econ.fundedBlocks, econ.rewardPerBlock, head)
 
 	if outPath != "" {
 		if err := writeConfig(outPath, dsn, listen, nodeURL, chainID, registry, publisherKey, px); err != nil {
@@ -638,6 +679,10 @@ registry:
   sync_interval: 5s
   auto_publish_interval: 0
   commitment_uri: ""
+  publisher:
+    mode: eoa
+    submit_timeout: 2m
+    stale_after: 10m
 
 chains:
   - chain_id: %d

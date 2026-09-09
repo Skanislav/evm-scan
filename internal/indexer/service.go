@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -67,7 +68,18 @@ type Service struct {
 	// here rather than at genesis, so the deployment never depends on a node that
 	// kept all history.
 	historyFloor atomic.Uint64
+
+	// Liveness, for the health endpoint. runErr is set when Run gives up;
+	// failStreak counts consecutive failed follow ticks.
+	healthMu   sync.Mutex
+	runErr     error
+	failStreak int
 }
+
+// maxFailStreak is how many consecutive failed follow ticks count as unhealthy. One
+// or two failures are normal when a node hiccups; a run of them means nothing is
+// being indexed.
+const maxFailStreak = 5
 
 // New builds a Service for an already-dialled source.
 func New(src chain.Source, st *store.Store, chainID uint64, opt Options, log *slog.Logger) *Service {
@@ -83,6 +95,39 @@ func New(src chain.Source, st *store.Store, chainID uint64, opt Options, log *sl
 
 // Run drives the follower and backfiller until ctx is cancelled.
 func (s *Service) Run(ctx context.Context) error {
+	err := s.run(ctx)
+	if err != nil && ctx.Err() == nil {
+		s.healthMu.Lock()
+		s.runErr = err
+		s.healthMu.Unlock()
+	}
+	return err
+}
+
+// Health reports nil while the workers are running and making progress.
+func (s *Service) Health() error {
+	s.healthMu.Lock()
+	defer s.healthMu.Unlock()
+	if s.runErr != nil {
+		return fmt.Errorf("indexer stopped: %w", s.runErr)
+	}
+	if s.failStreak >= maxFailStreak {
+		return fmt.Errorf("indexer failing: %d consecutive follow ticks failed", s.failStreak)
+	}
+	return nil
+}
+
+func (s *Service) noteTick(err error) {
+	s.healthMu.Lock()
+	defer s.healthMu.Unlock()
+	if err != nil {
+		s.failStreak++
+		return
+	}
+	s.failStreak = 0
+}
+
+func (s *Service) run(ctx context.Context) error {
 	if err := s.st.UpsertChain(ctx, s.chainID, s.opt.ChainName); err != nil {
 		return err
 	}
@@ -98,8 +143,12 @@ func (s *Service) Run(ctx context.Context) error {
 	defer ticker.Stop()
 
 	for {
-		if err := s.followTick(ctx); err != nil && ctx.Err() == nil {
+		err := s.followTick(ctx)
+		if err != nil && ctx.Err() == nil {
 			s.log.Error("follow tick failed", "err", err)
+		}
+		if ctx.Err() == nil {
+			s.noteTick(err)
 		}
 		select {
 		case <-ctx.Done():
@@ -476,9 +525,14 @@ func (s *Service) resolveHistoryFloor(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("history floor: head: %w", err)
 	}
-	floor, err := chain.HistoryFloor(ctx, s.src, head)
+	probe, err := chain.ProbeHistoryFloor(ctx, s.src, head, chain.HistoryFloorOptions{Anchor: s.historyAnchor(ctx)})
 	if err != nil {
 		return fmt.Errorf("history floor: %w", err)
+	}
+	floor := probe.Floor
+	if probe.Boundary == chain.LogsErrUnknown && probe.BoundaryErr != nil {
+		s.log.Warn("history floor inferred from an eth_getLogs error this build does not recognise; treat it as a guess",
+			"floor", floor, "err", probe.BoundaryErr)
 	}
 
 	s.historyFloor.Store(floor)

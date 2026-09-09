@@ -1,0 +1,64 @@
+# Hosted deployment: Sepolia through a Helios light client running in the same
+# container. Secrets come from the environment (see docs/RAILWAY.md):
+#   EVMSCAN_DATABASE_DSN, EVMSCAN_REGISTRY_ADDRESS, EVMSCAN_PUBLISHER_KEY,
+#   EVMSCAN_API_LISTEN (set by the entrypoint from $PORT).
+
+database:
+  dsn: ""
+  auto_migrate: true
+
+api:
+  listen: "0.0.0.0:8080"
+  cors_origin: "*"
+  allow_registration: false
+
+registry:
+  chain_id: 11155111
+  address: ""
+  publisher_key: ""
+  sync_interval: 60s
+  # Post a commitment on a timer. Identical roots are skipped, so this is an upper
+  # bound on how often gas is spent, not a guarantee that it is.
+  auto_publish_interval: 30m
+  commitment_uri: ""
+  publisher:
+    mode: eoa
+    submit_timeout: 3m
+    stale_after: 30m
+    # Helios may not implement eth_estimateGas; publishIndex, finalizeIndex and a
+    # claimCoverage over a handful of assets all fit comfortably in this.
+    fallback_gas: 400000
+    # Roughly what those three transactions cost on Sepolia at a few gwei. An epoch
+    # whose funded coverage is worth less than this is not posted.
+    min_expected_reward_wei: "2000000000000000"
+
+chains:
+  - chain_id: 11155111
+    name: sepolia
+    # Helios, started by deploy/entrypoint.sh, on loopback. It verifies every
+    # answer against beacon headers, so this is honestly our own node.
+    node: "http://127.0.0.1:8545"
+    require_local_node: true
+    confirmations: 6
+    # Helios proves logs for at most 4096 blocks per eth_getLogs, and every block
+    # with a matching log costs one verified receipts fetch upstream. Keep windows
+    # small.
+    backfill_window: 2000
+    tail_window: 500
+    poll_interval: 12s
+    backfill_interval: 3s
+
+    discovery:
+      enabled: true
+      # Helios can only verify blocks the EIP-2935 history contract still covers,
+      # roughly the last 8191. Looking back further would just probe the floor.
+      lookback: 6000
+      max_blocks_per_tick: 2000
+      interval: 15s
+      # Index first, register later: promote on activity alone, and let an on-chain
+      # requestIndexing make it durable and funded. Thresholds are high because
+      # Sepolia is full of spam tokens and every promotion costs a verified backfill.
+      auto_promote: true
+      min_events: 200
+      min_blocks: 50
+      max_promotions_per_tick: 2
