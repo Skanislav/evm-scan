@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 
@@ -38,6 +39,9 @@ type Worker interface {
 	// DiscoveryThresholds are the activity levels at which a candidate qualifies
 	// for promotion.
 	DiscoveryThresholds() (minEvents, minBlocks uint64)
+	// Health reports whether the worker is still doing its job. A worker that
+	// exited, or that has been failing every tick, is unhealthy.
+	Health() error
 }
 
 // Deps is everything the HTTP layer needs.
@@ -83,6 +87,9 @@ func New(d Deps) *Server {
 	s.mux.HandleFunc("POST /v1/epochs", s.createEpoch)
 	s.mux.HandleFunc("GET /v1/epochs/{id}", s.getEpoch)
 	s.mux.HandleFunc("GET /v1/epochs/{id}/proof", s.epochProof)
+	// ERC-3668 gateway for HintRegistry.contractsOf.
+	s.mux.HandleFunc("GET /ccip/{sender}/{data}", s.ccipGet)
+	s.mux.HandleFunc("POST /ccip", s.ccipPost)
 
 	if d.WebDir != "" {
 		s.mux.Handle("/", http.FileServer(http.Dir(d.WebDir)))
@@ -167,8 +174,47 @@ func standardName(s uint8) string { return evmlog.Standard(s).String() }
 // Health and status
 // --------------------------------------------------------------------------
 
+// health is what a supervisor should probe. It fails when the database is
+// unreachable, a node stops answering, or an indexer has died or is failing every
+// tick; a process in any of those states should be restarted, not left serving
+// stale answers.
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+
+	checks := map[string]string{}
+	healthy := true
+	fail := func(name string, err error) {
+		checks[name] = err.Error()
+		healthy = false
+	}
+
+	if err := s.d.Store.Ping(ctx); err != nil {
+		fail("database", err)
+	} else {
+		checks["database"] = "ok"
+	}
+	for _, id := range s.chains {
+		name := fmt.Sprintf("chain_%d", id)
+		if _, err := s.d.Sources[id].HeadBlock(ctx); err != nil {
+			fail(name+"_node", err)
+		} else {
+			checks[name+"_node"] = "ok"
+		}
+		if wk, ok := s.d.Workers[id]; ok {
+			if err := wk.Health(); err != nil {
+				fail(name+"_indexer", err)
+			} else {
+				checks[name+"_indexer"] = "ok"
+			}
+		}
+	}
+
+	code, status := http.StatusOK, "ok"
+	if !healthy {
+		code, status = http.StatusServiceUnavailable, "degraded"
+	}
+	writeJSON(w, code, map[string]any{"status": status, "checks": checks})
 }
 
 type chainStatus struct {
@@ -198,6 +244,10 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		Registry *struct {
 			ChainID uint64 `json:"chain_id"`
 			Address string `json:"address"`
+			// RewardPerBlockWei is what the registry pays a publisher per newly covered
+			// block of a funded asset; MinFundingWei is the least a request deposits.
+			RewardPerBlockWei string `json:"reward_per_block_wei,omitempty"`
+			MinFundingWei     string `json:"min_funding_wei,omitempty"`
 		} `json:"registry,omitempty"`
 		Publisher string `json:"publisher,omitempty"`
 	}{}
@@ -242,9 +292,17 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 
 	if s.d.Registry != nil {
 		out.Registry = &struct {
-			ChainID uint64 `json:"chain_id"`
-			Address string `json:"address"`
+			ChainID           uint64 `json:"chain_id"`
+			Address           string `json:"address"`
+			RewardPerBlockWei string `json:"reward_per_block_wei,omitempty"`
+			MinFundingWei     string `json:"min_funding_wei,omitempty"`
 		}{ChainID: s.d.RegistryChainID, Address: s.d.Registry.Address().Hex()}
+		if v, err := s.d.Registry.RewardPerBlock(ctx); err == nil {
+			out.Registry.RewardPerBlockWei = v.String()
+		}
+		if v, err := s.d.Registry.MinFunding(ctx); err == nil {
+			out.Registry.MinFundingWei = v.String()
+		}
 	}
 	if s.d.Publisher != nil {
 		out.Publisher = s.d.Publisher.Address().Hex()

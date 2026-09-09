@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
+
 	"github.com/Skanislav/evm-scan/internal/hintreg"
 	"github.com/Skanislav/evm-scan/internal/indexer"
 	"github.com/Skanislav/evm-scan/internal/store"
@@ -40,6 +42,12 @@ type assetJSON struct {
 	BackfillFloor   uint64 `json:"backfill_floor"`
 	HistoryComplete bool   `json:"history_complete"`
 	Promoted        bool   `json:"promoted_from_discovery,omitempty"`
+	// FundingWei is what the registry still holds to pay for indexing this asset;
+	// PaidFrom/PaidTo is the block range publishers have already been paid for.
+	// Absent when no registry is configured.
+	FundingWei string `json:"funding_wei,omitempty"`
+	PaidFrom   uint64 `json:"paid_from,omitempty"`
+	PaidTo     uint64 `json:"paid_to,omitempty"`
 }
 
 func (s *Server) assetView(ctx context.Context, a store.Asset) assetJSON {
@@ -68,6 +76,12 @@ func (s *Server) assetView(ctx context.Context, a store.Asset) assetJSON {
 		// Complete means the walk reached as far back as was asked for, not that it
 		// reached genesis: genesis may simply not be available on this node.
 		v.HistoryComplete = c.BackfillDone && c.BackfillFloor <= a.HintFromBlock
+	}
+	if s.d.Registry != nil {
+		if f, err := s.d.Registry.Funding(ctx, hintreg.AssetKey(a.ChainID, a.Address)); err == nil {
+			v.FundingWei = f.Balance.String()
+			v.PaidFrom, v.PaidTo = f.PaidFrom, f.PaidTo
+		}
 	}
 	return v
 }
@@ -405,11 +419,35 @@ type epochJSON struct {
 	FromBlock  uint64 `json:"from_block"`
 	ToBlock    uint64 `json:"to_block"`
 	MerkleRoot string `json:"merkle_root"`
-	LeafCount  int64  `json:"leaf_count"`
-	URI        string `json:"uri,omitempty"`
-	OnchainID  *int64 `json:"onchain_epoch_id,omitempty"`
-	TxHash     string `json:"tx_hash,omitempty"`
-	Status     string `json:"status"`
+	// CoverageRoot commits to the per-asset block ranges the publisher stands
+	// behind; it is what the registry pays against.
+	CoverageRoot string `json:"coverage_root,omitempty"`
+	LeafCount    int64  `json:"leaf_count"`
+	URI          string `json:"uri,omitempty"`
+	OnchainID    *int64 `json:"onchain_epoch_id,omitempty"`
+	TxHash       string `json:"tx_hash,omitempty"`
+	Status       string `json:"status"`
+	// ExpectedRewardWei is what the registry quoted for the coverage when the epoch
+	// was built; RewardWei and ClaimTx are what was actually paid after finalization.
+	ExpectedRewardWei string `json:"expected_reward_wei,omitempty"`
+	RewardWei         string `json:"reward_wei,omitempty"`
+	ClaimTx           string `json:"claim_tx,omitempty"`
+	// SubmissionRef is what the submitter handed back when the commitment was sent,
+	// present from the moment it left this process.
+	SubmissionRef string `json:"submission_ref,omitempty"`
+	// OnchainStatus and ChallengeDeadline come from the registry itself, so a
+	// consumer of a proposed commitment can see that it is not final yet.
+	OnchainStatus     string `json:"onchain_status,omitempty"`
+	ChallengeDeadline uint64 `json:"challenge_deadline,omitempty"`
+	// Coverage lists the per-asset ranges behind CoverageRoot. Only on GET /v1/epochs/{id}.
+	Coverage []coverageJSON `json:"coverage,omitempty"`
+}
+
+type coverageJSON struct {
+	Asset     string `json:"asset"`
+	Key       string `json:"key"`
+	FromBlock uint64 `json:"from_block"`
+	ToBlock   uint64 `json:"to_block"`
 }
 
 func epochView(e store.Epoch) epochJSON {
@@ -417,9 +455,32 @@ func epochView(e store.Epoch) epochJSON {
 		ID: e.ID, ChainID: e.ChainID, FromBlock: e.FromBlock, ToBlock: e.ToBlock,
 		MerkleRoot: e.MerkleRoot.Hex(), LeafCount: e.LeafCount, URI: e.URI,
 		OnchainID: e.OnchainID, Status: e.Status,
+		ExpectedRewardWei: e.ExpectedRewardWei, RewardWei: e.RewardWei,
+	}
+	if e.CoverageRoot != (common.Hash{}) {
+		v.CoverageRoot = e.CoverageRoot.Hex()
 	}
 	if e.TxHash != nil {
 		v.TxHash = e.TxHash.Hex()
+	}
+	if e.SubmissionRef != nil {
+		v.SubmissionRef = e.SubmissionRef.Hex()
+	}
+	if e.ClaimTx != nil {
+		v.ClaimTx = e.ClaimTx.Hex()
+	}
+	return v
+}
+
+// withOnchain adds the registry's view of a published commitment. Best effort: an
+// unreachable registry leaves the fields empty rather than failing the request.
+func (s *Server) withOnchain(ctx context.Context, v epochJSON) epochJSON {
+	if s.d.Registry == nil || v.OnchainID == nil {
+		return v
+	}
+	if e, err := s.d.Registry.GetEpoch(ctx, *v.OnchainID); err == nil {
+		v.OnchainStatus = e.Status.String()
+		v.ChallengeDeadline = e.ChallengeDeadline
 	}
 	return v
 }
@@ -451,6 +512,8 @@ type createEpochRequest struct {
 	ChainID uint64 `json:"chain_id"`
 	URI     string `json:"uri"`
 	Publish bool   `json:"publish"`
+	// Force builds even when the root matches the last commitment.
+	Force bool `json:"force"`
 }
 
 // createEpoch builds a commitment and optionally posts it on-chain.
@@ -478,9 +541,17 @@ func (s *Server) createEpoch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	e, err := s.d.Publisher.Build(ctx, chainID, req.URI)
+	e, err := s.d.Publisher.Build(ctx, chainID, req.URI, req.Force)
 	if errors.Is(err, hintreg.ErrEmptyIndex) {
 		writeErr(w, http.StatusConflict, "index is empty", err)
+		return
+	}
+	if errors.Is(err, hintreg.ErrUnchanged) {
+		writeErr(w, http.StatusConflict, "index and coverage unchanged since last commitment (set force to build anyway)", err)
+		return
+	}
+	if errors.Is(err, hintreg.ErrUnfunded) {
+		writeErr(w, http.StatusPaymentRequired, "coverage is worth less than the publisher's minimum; fund the assets or lower min_expected_reward_wei", err)
 		return
 	}
 	if err != nil {
@@ -502,7 +573,7 @@ func (s *Server) createEpoch(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "query failed", err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, epochView(stored))
+	writeJSON(w, http.StatusCreated, s.withOnchain(ctx, epochView(stored)))
 }
 
 func (s *Server) getEpoch(w http.ResponseWriter, r *http.Request) {
@@ -520,7 +591,15 @@ func (s *Server) getEpoch(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "query failed", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, epochView(e))
+	v := epochView(e)
+	if cov, err := s.d.Store.EpochCoverage(r.Context(), id); err == nil {
+		for _, c := range cov {
+			v.Coverage = append(v.Coverage, coverageJSON{
+				Asset: c.Asset.Hex(), Key: c.RegistryKey.Hex(), FromBlock: c.FromBlock, ToBlock: c.ToBlock,
+			})
+		}
+	}
+	writeJSON(w, http.StatusOK, s.withOnchain(r.Context(), v))
 }
 
 // epochProof returns everything needed to call HintRegistry.verifyInclusion.
@@ -547,7 +626,7 @@ func (s *Server) epochProof(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	leaf, proof, err := hintreg.ProofFor(ctx, s.d.Store, id, account)
+	pr, err := s.accountProof(ctx, e, account)
 	if errors.Is(err, store.ErrNotFound) {
 		writeErr(w, http.StatusNotFound, "account not in this commitment", nil)
 		return
@@ -557,24 +636,17 @@ func (s *Server) epochProof(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	hexProof := make([]string, len(proof))
-	for i, p := range proof {
+	hexProof := make([]string, len(pr.proof))
+	for i, p := range pr.proof {
 		hexProof[i] = p.Hex()
 	}
-
 	// The asset list is echoed so a verifier can recompute assets_hash independently
 	// rather than taking our digest on trust.
-	assets, err := s.d.Store.AccountAssets(ctx, e.ChainID, account)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "query failed", err)
-		return
+	addrs := make([]string, 0, len(pr.assets))
+	for _, a := range pr.assets {
+		addrs = append(addrs, a.Hex())
 	}
-	addrs := make([]string, 0, len(assets))
-	for _, a := range assets {
-		if a.FirstBlock <= e.ToBlock {
-			addrs = append(addrs, a.Asset.Hex())
-		}
-	}
+	leaf := pr.leaf
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"epoch":            epochView(e),

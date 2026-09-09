@@ -21,9 +21,22 @@ registry:
   # Signs index commitments. Prefer EVMSCAN_PUBLISHER_KEY over writing it here.
   publisher_key: ""
   sync_interval: 30s
-  # Set > 0 to build and post a commitment on a timer.
+  # Set > 0 to build and post a commitment on a timer. Identical roots are skipped.
   auto_publish_interval: 0
   commitment_uri: ""
+  # How commitments reach the chain. "eoa" signs with publisher_key and pays its own
+  # gas; the registry pays it back per block of funded coverage once an epoch finalizes
+  # and its coverage is claimed.
+  publisher:
+    mode: eoa
+    submit_timeout: 3m
+    stale_after: 30m
+    # Used when the node cannot estimate gas (a light client, say). 0 = fail instead.
+    fallback_gas: 0
+    # Do not post an epoch the registry values below this, in wei. Set it to what a
+    # publish + finalize + claim costs in gas and unfunded chains stop costing you.
+    # "0" or empty posts regardless.
+    min_expected_reward_wei: "0"
 
 chains:
   - chain_id: 1

@@ -47,6 +47,9 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 
 func (s *Store) Close() { s.pool.Close() }
 
+// Ping checks the database is reachable. Health checks use it; nothing else should.
+func (s *Store) Ping(ctx context.Context) error { return s.pool.Ping(ctx) }
+
 // Pool exposes the underlying pool for callers that need a transaction.
 func (s *Store) Pool() *pgxpool.Pool { return s.pool }
 

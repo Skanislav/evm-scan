@@ -131,7 +131,12 @@ func (m *Mirror) Sync(ctx context.Context) error {
 	return nil
 }
 
-// registryKey mirrors HintRegistry.assetKey: keccak256(abi.encodePacked(chainId, token)).
+// AssetKey mirrors HintRegistry.assetKey: keccak256(abi.encodePacked(chainId, token)).
+func AssetKey(chainID uint64, token common.Address) common.Hash {
+	return common.BytesToHash(registryKey(chainID, token))
+}
+
+// registryKey is AssetKey as raw bytes, which is how the store keeps it.
 func registryKey(chainID uint64, token common.Address) []byte {
 	buf := make([]byte, 0, 28)
 	for i := 7; i >= 0; i-- {

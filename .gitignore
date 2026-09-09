@@ -21,3 +21,6 @@ scripts/package-lock.json
 .DS_Store
 .idea/
 .vscode/
+
+# Claude Code agent worktrees
+.claude/worktrees/
