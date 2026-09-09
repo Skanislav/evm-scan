@@ -1,0 +1,11 @@
+bin/
+.devchain/
+scripts/node_modules/
+config.demo.yaml
+config.yaml
+*.local.yaml
+.env*
+.git/
+.github/
+.idea/
+.vscode/

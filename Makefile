@@ -3,7 +3,7 @@ BIN     := bin
 SOLC    ?= 0.8.28
 PKGS    := ./...
 
-.PHONY: all build test vet fmt lint contracts clean devchain demo run tidy check
+.PHONY: all build test test-evm vet fmt lint contracts clean devchain demo run tidy check docker-build docker-run
 
 all: build
 
@@ -13,7 +13,8 @@ build:
 	$(GO) build -o $(BIN)/evmscand       ./cmd/evmscand
 	$(GO) build -o $(BIN)/evmscan-demo   ./cmd/evmscan-demo
 	$(GO) build -o $(BIN)/evmscan-verify ./cmd/evmscan-verify
-	@echo "built: $(BIN)/evmscand $(BIN)/evmscan-demo $(BIN)/evmscan-verify"
+	$(GO) build -o $(BIN)/evmscan-deploy ./cmd/evmscan-deploy
+	@echo "built: $(BIN)/evmscand $(BIN)/evmscan-demo $(BIN)/evmscan-verify $(BIN)/evmscan-deploy"
 
 ## test: run unit tests (integration tests skip unless EVMSCAN_TEST_NODE is set)
 test:
@@ -28,13 +29,17 @@ fmt:
 tidy:
 	$(GO) mod tidy
 
+## test-evm: run the lens against a real EVM (own module: heavy, test-only deps)
+test-evm:
+	cd contracts/evmtest && $(GO) test ./...
+
 ## check: what CI runs
-check: fmt vet test
+check: fmt vet test test-evm
 
 ## contracts: recompile Solidity into contracts/out (requires node)
 contracts:
 	@command -v node >/dev/null || { echo "node is required to compile contracts"; exit 1; }
-	@test -d scripts/node_modules || npm --prefix scripts install solc@$(SOLC) --no-audit --no-fund
+	@test -d scripts/node_modules || npm --prefix scripts install solc@$(SOLC) --save-exact --no-audit --no-fund
 	SOLC_HOME=$(PWD)/scripts node scripts/compile.js
 
 ## devchain: run a local geth dev node (foreground)
@@ -51,6 +56,14 @@ demo: build
 ## run: start the indexer and API against config.demo.yaml
 run: build
 	$(BIN)/evmscand -config config.demo.yaml
+
+## docker-build: the image Railway builds (evmscand + Helios sidecar)
+docker-build:
+	docker build -t evmscan:local .
+
+## docker-run: run the image locally; needs .env.railway with the variables from docs/RAILWAY.md
+docker-run: docker-build
+	docker run --rm -p 8080:8080 --env-file .env.railway evmscan:local
 
 clean:
 	rm -rf $(BIN)

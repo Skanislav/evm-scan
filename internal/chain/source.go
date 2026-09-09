@@ -62,6 +62,10 @@ type Source interface {
 	// node has no historical state.
 	CallAtHead(ctx context.Context, msg ethereum.CallMsg) ([]byte, error)
 	CodeAt(ctx context.Context, addr common.Address) ([]byte, error)
+	// NonceAt returns the account's transaction count at head. It is here because
+	// the EVM cannot see it: there is no opcode for another account's nonce, so no
+	// contract call can report one and it has to come off the RPC directly.
+	NonceAt(ctx context.Context, addr common.Address) (uint64, error)
 	Endpoint() Endpoint
 	Close()
 }
@@ -143,6 +147,10 @@ func (n *Node) CallAtHead(ctx context.Context, msg ethereum.CallMsg) ([]byte, er
 
 func (n *Node) CodeAt(ctx context.Context, addr common.Address) ([]byte, error) {
 	return n.eth.CodeAt(ctx, addr, nil)
+}
+
+func (n *Node) NonceAt(ctx context.Context, addr common.Address) (uint64, error) {
+	return n.eth.NonceAt(ctx, addr, nil)
 }
 
 // --------------------------------------------------------------------------

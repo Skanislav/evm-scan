@@ -160,3 +160,19 @@ func Verify(root, leaf common.Hash, proof []common.Hash) bool {
 	}
 	return node == root
 }
+
+// CoverageLeaf mirrors HintRegistry.coverageLeaf:
+// keccak256(abi.encode(assetKey, fromBlock, toBlock)).
+//
+// One leaf per asset an epoch scanned, declaring the block range the publisher stands
+// behind for it. The registry pays coverage rewards against these leaves, so the
+// encoding is as load-bearing as LeafHash.
+func CoverageLeaf(assetKey common.Hash, fromBlock, toBlock uint64) common.Hash {
+	buf := make([]byte, 96)
+	copy(buf[0:32], assetKey[:])
+	for i := 0; i < 8; i++ {
+		buf[63-i] = byte(fromBlock >> (8 * i))
+		buf[95-i] = byte(toBlock >> (8 * i))
+	}
+	return crypto.Keccak256Hash(buf)
+}

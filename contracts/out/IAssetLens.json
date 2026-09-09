@@ -1,0 +1,311 @@
+{
+  "contractName": "IAssetLens",
+  "sourceName": "AssetLens.sol",
+  "abi": [
+    {
+      "inputs": [
+        {
+          "components": [
+            {
+              "internalType": "address",
+              "name": "account",
+              "type": "address"
+            },
+            {
+              "internalType": "address[]",
+              "name": "spenders",
+              "type": "address[]"
+            },
+            {
+              "components": [
+                {
+                  "internalType": "address",
+                  "name": "token",
+                  "type": "address"
+                },
+                {
+                  "internalType": "uint256[]",
+                  "name": "ids",
+                  "type": "uint256[]"
+                }
+              ],
+              "internalType": "struct TokenQuery[]",
+              "name": "tokens",
+              "type": "tuple[]"
+            },
+            {
+              "internalType": "bool",
+              "name": "includeUri",
+              "type": "bool"
+            },
+            {
+              "internalType": "bool",
+              "name": "includeCode",
+              "type": "bool"
+            },
+            {
+              "internalType": "uint256",
+              "name": "enumerateLimit",
+              "type": "uint256"
+            },
+            {
+              "internalType": "uint256",
+              "name": "gasPerCall",
+              "type": "uint256"
+            },
+            {
+              "internalType": "uint256",
+              "name": "maxStringBytes",
+              "type": "uint256"
+            }
+          ],
+          "internalType": "struct Request",
+          "name": "req",
+          "type": "tuple"
+        }
+      ],
+      "name": "query",
+      "outputs": [
+        {
+          "components": [
+            {
+              "components": [
+                {
+                  "internalType": "uint256",
+                  "name": "chainId",
+                  "type": "uint256"
+                },
+                {
+                  "internalType": "uint256",
+                  "name": "blockNumber",
+                  "type": "uint256"
+                },
+                {
+                  "internalType": "bytes32",
+                  "name": "parentHash",
+                  "type": "bytes32"
+                },
+                {
+                  "internalType": "uint256",
+                  "name": "timestamp",
+                  "type": "uint256"
+                },
+                {
+                  "internalType": "uint256",
+                  "name": "baseFee",
+                  "type": "uint256"
+                }
+              ],
+              "internalType": "struct ChainInfo",
+              "name": "chain",
+              "type": "tuple"
+            },
+            {
+              "components": [
+                {
+                  "internalType": "address",
+                  "name": "account",
+                  "type": "address"
+                },
+                {
+                  "internalType": "uint256",
+                  "name": "balance",
+                  "type": "uint256"
+                },
+                {
+                  "internalType": "bytes32",
+                  "name": "codeHash",
+                  "type": "bytes32"
+                },
+                {
+                  "internalType": "uint256",
+                  "name": "codeSize",
+                  "type": "uint256"
+                },
+                {
+                  "internalType": "bool",
+                  "name": "isContract",
+                  "type": "bool"
+                },
+                {
+                  "internalType": "bool",
+                  "name": "isDelegated",
+                  "type": "bool"
+                },
+                {
+                  "internalType": "address",
+                  "name": "delegate",
+                  "type": "address"
+                },
+                {
+                  "internalType": "bytes",
+                  "name": "code",
+                  "type": "bytes"
+                }
+              ],
+              "internalType": "struct AccountInfo",
+              "name": "account",
+              "type": "tuple"
+            },
+            {
+              "components": [
+                {
+                  "internalType": "address",
+                  "name": "token",
+                  "type": "address"
+                },
+                {
+                  "internalType": "bool",
+                  "name": "isContract",
+                  "type": "bool"
+                },
+                {
+                  "internalType": "uint8",
+                  "name": "standard",
+                  "type": "uint8"
+                },
+                {
+                  "internalType": "bool",
+                  "name": "supportsErc165",
+                  "type": "bool"
+                },
+                {
+                  "internalType": "bool",
+                  "name": "isErc721",
+                  "type": "bool"
+                },
+                {
+                  "internalType": "bool",
+                  "name": "isErc1155",
+                  "type": "bool"
+                },
+                {
+                  "internalType": "bool",
+                  "name": "isEnumerable",
+                  "type": "bool"
+                },
+                {
+                  "internalType": "string",
+                  "name": "symbol",
+                  "type": "string"
+                },
+                {
+                  "internalType": "string",
+                  "name": "name",
+                  "type": "string"
+                },
+                {
+                  "internalType": "uint8",
+                  "name": "decimals",
+                  "type": "uint8"
+                },
+                {
+                  "internalType": "bool",
+                  "name": "hasDecimals",
+                  "type": "bool"
+                },
+                {
+                  "internalType": "uint256",
+                  "name": "totalSupply",
+                  "type": "uint256"
+                },
+                {
+                  "internalType": "bool",
+                  "name": "hasTotalSupply",
+                  "type": "bool"
+                },
+                {
+                  "internalType": "uint256",
+                  "name": "balance",
+                  "type": "uint256"
+                },
+                {
+                  "internalType": "bool",
+                  "name": "hasBalance",
+                  "type": "bool"
+                },
+                {
+                  "internalType": "uint256[]",
+                  "name": "allowances",
+                  "type": "uint256[]"
+                },
+                {
+                  "internalType": "bool[]",
+                  "name": "allowanceKnown",
+                  "type": "bool[]"
+                },
+                {
+                  "internalType": "bool[]",
+                  "name": "approvedForAll",
+                  "type": "bool[]"
+                },
+                {
+                  "components": [
+                    {
+                      "internalType": "uint256",
+                      "name": "id",
+                      "type": "uint256"
+                    },
+                    {
+                      "internalType": "address",
+                      "name": "owner",
+                      "type": "address"
+                    },
+                    {
+                      "internalType": "bool",
+                      "name": "ownerKnown",
+                      "type": "bool"
+                    },
+                    {
+                      "internalType": "uint256",
+                      "name": "balance",
+                      "type": "uint256"
+                    },
+                    {
+                      "internalType": "bool",
+                      "name": "balanceKnown",
+                      "type": "bool"
+                    },
+                    {
+                      "internalType": "address",
+                      "name": "approved",
+                      "type": "address"
+                    },
+                    {
+                      "internalType": "bool",
+                      "name": "approvedKnown",
+                      "type": "bool"
+                    },
+                    {
+                      "internalType": "string",
+                      "name": "uri",
+                      "type": "string"
+                    },
+                    {
+                      "internalType": "bool",
+                      "name": "uriTruncated",
+                      "type": "bool"
+                    }
+                  ],
+                  "internalType": "struct TokenIdInfo[]",
+                  "name": "ids",
+                  "type": "tuple[]"
+                }
+              ],
+              "internalType": "struct TokenInfo[]",
+              "name": "tokens",
+              "type": "tuple[]"
+            }
+          ],
+          "internalType": "struct Result",
+          "name": "res",
+          "type": "tuple"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    }
+  ],
+  "bytecode": "0x",
+  "deployedBytecode": "0x"
+}
