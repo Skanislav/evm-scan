@@ -317,6 +317,10 @@ func tooBig(err error) bool {
 		"max code size exceeded", "max initcode size exceeded", "code size",
 		"out of gas", "gas required exceeds", "exceeds block gas limit",
 		"intrinsic gas", "response size", "returned more than", "-32005",
+		// Helios stops executing a call that runs too long or reads more state than
+		// it will verify, and reports it as a halt rather than as gas. A smaller
+		// batch is the same answer here as it is for a node that says "out of gas".
+		"execution halted",
 	} {
 		if strings.Contains(s, needle) {
 			return true

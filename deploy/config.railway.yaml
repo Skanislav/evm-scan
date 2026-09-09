@@ -53,6 +53,14 @@ chains:
     poll_interval: 12s
     backfill_interval: 3s
 
+    # Prices are read with a second deployless call, and on a light client that
+    # verifies every slot it touches — about a minute for a cold read on mainnet.
+    # The 12s default assumes a local node and would re-read on nearly every
+    # request; hold quotes long enough that the slow path is rare. Nothing about
+    # pricing touches the commitment, so a slightly old quote costs nothing.
+    pricing:
+      cache_ttl: 10m
+
     discovery:
       enabled: true
       # Helios can only verify blocks the EIP-2935 history contract still covers,

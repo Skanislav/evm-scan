@@ -211,7 +211,12 @@ func (s *Server) pricerFor(chainID uint64) *price.Pricer {
 // quotes prices a token list, tolerating failure: a portfolio without prices is
 // still a portfolio, so a pricing error is logged and reported, never fatal.
 func (s *Server) quotes(ctx context.Context, p *price.Pricer, tokens []common.Address) (*price.Result, string) {
-	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	// A price read is one deployless eth_call per batch, and against a light client
+	// each of those verifies every slot it touches: measured at about a minute on
+	// mainnet through Helios for the quote tokens alone. Twenty seconds was budgeted
+	// for a local node and turned every hosted price into an error. The cache is what
+	// keeps this off the common path, so the timeout only has to cover a cold read.
+	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 	res, err := p.Prices(ctx, tokens)
 	if err != nil {
