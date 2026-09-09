@@ -476,9 +476,14 @@ func (s *Service) resolveHistoryFloor(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("history floor: head: %w", err)
 	}
-	floor, err := chain.HistoryFloor(ctx, s.src, head)
+	probe, err := chain.ProbeHistoryFloor(ctx, s.src, head, chain.HistoryFloorOptions{Anchor: s.historyAnchor(ctx)})
 	if err != nil {
 		return fmt.Errorf("history floor: %w", err)
+	}
+	floor := probe.Floor
+	if probe.Boundary == chain.LogsErrUnknown && probe.BoundaryErr != nil {
+		s.log.Warn("history floor inferred from an eth_getLogs error this build does not recognise; treat it as a guess",
+			"floor", floor, "err", probe.BoundaryErr)
 	}
 
 	s.historyFloor.Store(floor)

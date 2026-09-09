@@ -63,6 +63,34 @@ there is no RPC for this) and treats that as a hard floor. Backfills stop there.
 whose history is truncated by the floor reports `history_complete: false` rather than
 implying coverage it does not have.
 
+The probe uses errors as evidence, so it is careful about which errors count
+(`chain.ClassifyLogsError`, `chain.ProbeHistoryFloor`):
+
+- A *definite* "history unavailable" answer marks a block pruned. For geth that is
+  `pruned history unavailable` (JSON-RPC code 4444, `core/history.PrunedHistoryError`)
+  once history pruning is on, and `failed to get logs for block #N` / `header not found`
+  while ancient receipts are still missing after snap sync.
+- A *transient* failure — timeout, connection reset, EOF, `429`/rate limit, a busy or
+  restarting server — is retried with bounded backoff and never moves the floor. If the
+  retries run out the probe returns an error and the daemon keeps its previous floor
+  instead of adopting a wrong one.
+- An error the classifier does not recognise is read as "pruned" (the conservative
+  choice for a backfill floor) but logged as a guess, so an unfamiliar client's wording
+  shows up in the log rather than silently shaping the floor.
+- A node that answers a pruned block with an *empty* log set instead of an error would
+  fool any error-based probe into reporting floor 0. So the probe is cross-checked
+  against an *anchor*: a block known to hold logs (the oldest block discovery has
+  already read a watched event from). If the node claims to serve the anchor but
+  returns nothing for it, the probe fails with `ErrEmptyHistory` rather than reporting
+  history the node does not have. On a first start there is no anchor yet and the
+  check is skipped; it strengthens as discovery runs.
+
+Only geth's error semantics have been exercised against a live node. The wordings
+listed for other clients (Erigon, Nethermind, Reth, Besu) are taken from their sources
+and reports, not verified here; on such a node expect the "unknown boundary" warning
+until its messages are added to the classifier, and supply an anchor so an empty
+answer for pruned history is caught.
+
 That is why discovery runs forward from the head rather than backward from genesis:
 history is the scarce resource, and the system only spends it on contracts something has
 already decided are worth indexing.
@@ -303,6 +331,9 @@ Being explicit about what this does *not* do:
 - **History is only as deep as your node.** The floor is probed, respected and reported,
   but an asset promoted on a node without ancient receipts simply has shallower history.
   `history_complete` on the asset says whether the walk reached what was asked for.
+  The probe has been validated against geth only; other clients' pruned-history
+  errors are matched by wording and fall back to a logged guess. The floor is re-probed
+  after a backfill failure, not on a schedule.
 - **Candidate ranking is crude** — event count and distinct blocks. It separates active
   contracts from idle ones, but not a widely-held token from a large spam airdrop. That
   is why `auto_promote` defaults to off and the on-chain registry stays authoritative.

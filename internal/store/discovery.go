@@ -224,3 +224,22 @@ func (s *Store) CandidateStats(ctx context.Context, chainID, minEvents, minBlock
 		Scan(&st.Observed, &st.Promoted, &st.Promotable)
 	return st, err
 }
+
+// OldestCandidateBlock returns the earliest block in which discovery saw a watched
+// event on this chain, and whether there is one. That row exists only because
+// eth_getLogs returned at least one log for the block, which makes it a block the
+// node has demonstrably served — the anchor chain.ProbeHistoryFloor uses to catch a
+// node that answers pruned blocks with an empty result.
+func (s *Store) OldestCandidateBlock(ctx context.Context, chainID uint64) (block uint64, ok bool, err error) {
+	var b *int64
+	err = s.pool.QueryRow(ctx,
+		`SELECT MIN(first_seen_block) FROM candidates WHERE chain_id = $1`,
+		int64(chainID)).Scan(&b)
+	if err != nil {
+		return 0, false, err
+	}
+	if b == nil {
+		return 0, false, nil
+	}
+	return uint64(*b), true, nil
+}
