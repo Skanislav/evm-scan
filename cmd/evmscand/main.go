@@ -80,6 +80,9 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 	}
 
 	sources := map[uint64]chain.Source{}
+	// Config order, kept because ranging the map above does not preserve it and the
+	// API needs to know which chain a request without an explicit chain_id means.
+	var chainOrder []uint64
 	services := map[uint64]*indexer.Service{}
 	workers := map[uint64]api.Worker{}
 	pricers := map[uint64]*price.Pricer{}
@@ -108,6 +111,7 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 		}
 
 		sources[c.ChainID] = node
+		chainOrder = append(chainOrder, c.ChainID)
 		svc := indexer.New(node, st, c.ChainID, indexer.Options{
 			ChainName:        c.Name,
 			Confirmations:    c.Confirmations,
@@ -221,6 +225,7 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 		Handler: api.New(api.Deps{
 			Store:             st,
 			Sources:           sources,
+			ChainOrder:        chainOrder,
 			Workers:           workers,
 			Pricers:           pricers,
 			Registry:          regClient,

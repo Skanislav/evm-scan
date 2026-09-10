@@ -244,6 +244,14 @@ func (c *Config) applyEnv() {
 	if v := os.Getenv("EVMSCAN_NODE"); v != "" && len(c.Chains) > 0 {
 		c.Chains[0].Node = v
 	}
+	// EVMSCAN_NODE_<chain id> names a chain explicitly, which is what a deployment
+	// with more than one needs: a registry on an L2 is reached over a URL with a key
+	// in it, and that cannot live in a committed profile.
+	for i := range c.Chains {
+		if v := os.Getenv(fmt.Sprintf("EVMSCAN_NODE_%d", c.Chains[i].ChainID)); v != "" {
+			c.Chains[i].Node = v
+		}
+	}
 }
 
 func (c *Config) validate() error {

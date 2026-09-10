@@ -1,0 +1,130 @@
+# Hosted deployment: index Ethereum mainnet through a Helios light client, and
+# commit the result to a HintRegistry on Base.
+#
+# Why the split. The registry never asks which chain it is on: publishIndex takes a
+# chainId, assetKey and contractsOf take a chainId, Epoch stores one, and
+# block.chainid appears nowhere in HintRegistry.sol. A commitment is a statement
+# about a chain, not a statement made on it — so the index can be mainnet's while
+# the bond, the challenge window and the gas live somewhere they cost less.
+# docs/TOKENOMICS.md section 6.2 is the argument for doing that.
+#
+# What it costs. The container runs one Helios, so mainnet gets the verified node
+# and Base is reached over an ordinary RPC with require_local_node off. That is a
+# real concession and worth being precise about: the index is still built entirely
+# from Helios-verified mainnet logs, and the root is derived locally from them. What
+# becomes trust-me is reading registry state and submitting transactions. A lying
+# Base RPC can mislead this daemon about an epoch's status; it cannot forge a root
+# or corrupt the index.
+#
+# Chain order matters. The API answers a request without an explicit chain_id with
+# the first chain listed here, so mainnet is first and Base second. Base carries no
+# indexing of its own.
+#
+# Secrets come from the environment (see docs/MAINNET.md):
+#   EVMSCAN_DATABASE_DSN, EVMSCAN_REGISTRY_ADDRESS, EVMSCAN_PUBLISHER_KEY,
+#   EVMSCAN_NODE_8453 (the Base RPC, which has a key in it),
+#   EVMSCAN_API_LISTEN (set by the entrypoint from $PORT).
+database:
+  dsn: ""
+  auto_migrate: true
+
+api:
+  listen: "0.0.0.0:8080"
+  cors_origin: "*"
+  # Mainnet: a promotion costs a verified backfill against a paid RPC quota, so the
+  # open registration endpoint is off. Assets arrive through requestIndexing, which
+  # is the path that pays for them.
+  allow_registration: false
+
+registry:
+  # Base. Not the chain being indexed — see the header.
+  chain_id: 8453
+  address: ""
+  publisher_key: ""
+  sync_interval: 60s
+  # Base gas is cheap enough that the timer, not the cost, is what bounds how often
+  # a commitment is posted. Identical roots are skipped either way.
+  auto_publish_interval: 1h
+  commitment_uri: ""
+  publisher:
+    mode: eoa
+    submit_timeout: 10m
+    stale_after: 2h
+    # Only used when Helios cannot estimate. This is sized for oracle mode, where
+    # publishIndex pulls the bond with transferFrom, approves the oracle and calls
+    # UMA's assertTruth on top of its own storage writes. Confirm it against a real
+    # receipt on Sepolia in oracle mode before trusting it here; too low burns the
+    # gas and reverts, too high only reserves headroom.
+    fallback_gas: 1200000
+    # Publish + finalize + claim is roughly 1.5M gas across three transactions. Base
+    # was quoting 0.006 gwei when this was written, which puts that at about
+    # 0.000009 ETH — call it 0.00002 ETH to leave room for a busier fee market. An
+    # L1-sized figure here (0.02 ETH, as config.mainnet.yaml carries) would refuse
+    # every epoch as unprofitable. Confirm against real receipts before trusting it;
+    # docs/MAINNET.md section 2 is that procedure.
+    min_expected_reward_wei: "20000000000000"
+
+chains:
+  - chain_id: 1
+    name: mainnet
+    # Helios, started by deploy/entrypoint.sh, on loopback. It verifies every answer
+    # against beacon headers, so this is honestly our own node.
+    node: "http://127.0.0.1:8545"
+    require_local_node: true
+    # ~2.5 minutes. Mainnet reorgs past two epochs are a consensus failure, not an
+    # operating condition, but commitments are bonded, so pay for the depth.
+    confirmations: 12
+    # Helios's 4096-block eth_getLogs ceiling is never what binds; the response size
+    # is. Measured cold against mainnet through Ankr (10 MB cap), discovery topics
+    # unfiltered by address: 10 blocks is 4.6 MB, 20 blocks is 6-8.6 MB depending on
+    # depth, and 50 blocks is refused outright. Latency is not the problem — the
+    # 20-block call takes two seconds — so this is sized for the cap, with room for
+    # the density swing, not for time.
+    backfill_window: 10
+    tail_window: 10
+    poll_interval: 12s
+    backfill_interval: 5s
+
+    # Prices are read with a second deployless call, and on a light client that
+    # verifies every slot it touches — about a minute for a cold read on mainnet.
+    # The 12s default assumes a local node and would re-read on nearly every
+    # request; hold quotes long enough that the slow path is rare. Nothing about
+    # pricing touches the commitment, so a slightly old quote costs nothing.
+    pricing:
+      cache_ttl: 10m
+
+    discovery:
+      enabled: true
+      # Inside the ~8191-block window Helios can verify, with room for the daemon to
+      # have been restarted.
+      lookback: 6000
+      # Same cap. A cold start walks 6000 blocks at ten per tick; at the interval
+      # below that is under an hour, and every tick actually completes.
+      max_blocks_per_tick: 10
+      interval: 30s
+      # Off by default on mainnet. Every promotion spends verified RPC quota on a
+      # backfill nobody has paid for, and the funded path — requestIndexing — is the
+      # one that reimburses it. Turn this on only if you are sponsoring the gas.
+      auto_promote: false
+      min_events: 2000
+      min_blocks: 500
+      max_promotions_per_tick: 1
+
+  # Base: present so the daemon can read the registry and send its transactions.
+  # Nothing here is indexed — no discovery, and no assets will ever be registered
+  # against chain 8453 unless someone asks for them explicitly.
+  - chain_id: 8453
+    name: base
+    # An ordinary RPC. The one Helios in this container is spent on mainnet, and
+    # Base is not what the commitments are about.
+    node: ""
+    require_local_node: false
+    confirmations: 12
+    backfill_window: 200
+    tail_window: 100
+    poll_interval: 2s
+    backfill_interval: 5s
+
+    discovery:
+      enabled: false
+      auto_promote: false

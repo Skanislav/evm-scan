@@ -47,6 +47,7 @@ COPY deploy/config.railway.yaml           /app/config.yaml
 # default because it is the one that can be run without spending real money.
 COPY deploy/config.railway.yaml           /app/config.sepolia.yaml
 COPY deploy/config.mainnet.yaml           /app/config.mainnet.yaml
+COPY deploy/config.mainnet-base.yaml      /app/config.mainnet-base.yaml
 COPY deploy/entrypoint.sh                 /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh && mkdir -p /data/helios && chown -R evmscan:evmscan /data
 USER evmscan

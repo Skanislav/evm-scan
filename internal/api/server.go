@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -52,7 +53,12 @@ type Deps struct {
 	Workers map[uint64]Worker
 	// Pricers read on-chain price sources per chain. A chain without one simply
 	// serves portfolios without values.
-	Pricers           map[uint64]*price.Pricer
+	Pricers map[uint64]*price.Pricer
+	// ChainOrder is the configured order of Sources. Sources is a map, so ranging
+	// it gives a different answer every start; anything that means "the chain this
+	// deployment is mainly about" has to come from here. The first entry is what a
+	// request without an explicit chain_id gets.
+	ChainOrder        []uint64
 	Registry          *hintreg.Client
 	RegistryChainID   uint64
 	Publisher         *hintreg.Publisher
@@ -76,7 +82,15 @@ type Server struct {
 // New builds the router.
 func New(d Deps) *Server {
 	s := &Server{d: d, mux: http.NewServeMux()}
+	for _, id := range d.ChainOrder {
+		if _, ok := d.Sources[id]; ok {
+			s.chains = append(s.chains, id)
+		}
+	}
 	for id := range d.Sources {
+		if slices.Contains(s.chains, id) {
+			continue
+		}
 		s.chains = append(s.chains, id)
 	}
 
@@ -152,11 +166,14 @@ func writeErr(w http.ResponseWriter, code int, msg string, detail error) {
 func (s *Server) chainOf(r *http.Request) (uint64, chain.Source, error) {
 	raw := r.URL.Query().Get("chain_id")
 	if raw == "" {
-		if len(s.chains) == 1 {
+		// A second chain is usually there to host the registry, not because the
+		// deployment is equally about both, so default to the first configured one
+		// rather than making every caller name it. An explicit chain_id still wins.
+		if len(s.chains) > 0 {
 			id := s.chains[0]
 			return id, s.d.Sources[id], nil
 		}
-		return 0, nil, fmt.Errorf("chain_id is required when multiple chains are indexed")
+		return 0, nil, fmt.Errorf("no chains are configured")
 	}
 	id, err := strconv.ParseUint(raw, 10, 64)
 	if err != nil {
