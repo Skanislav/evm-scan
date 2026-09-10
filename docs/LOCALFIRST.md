@@ -37,6 +37,19 @@ is blind by construction — it moves encrypted rows and fingerprints and cannot
 them — and it is interchangeable, because nothing about the verification depends on
 which relay served a row.
 
+### Where this sits relative to docs/CLIENT-SIDE.md
+
+That document asks which *work* can leave the daemon, and draws its line at whether a
+client's answer ends up in the database — inside a root the publisher has bonded.
+This lands on the safe side of that line, and not by accident: a mirror **writes
+nothing back**. It consumes a commitment that already exists. A relay serving bad
+rows lies only to readers who can detect it, exactly as a reader who supplies a lying
+RPC to the lens lies only to themselves.
+
+So this is the read-side counterpart to Tier 1 rather than a step toward Tier 3.
+Tier 3 — clients computing index rows — is still blocked on the omission problem
+described there, and nothing here touches it.
+
 ### What is Aztec-shaped about this, and what is not
 
 The resemblance is real but narrow, and it is worth being exact about, because the
