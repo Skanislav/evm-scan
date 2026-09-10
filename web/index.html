@@ -75,6 +75,36 @@
   .value-summary .total { font-size: 24px; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
   .value-summary .meta { color: var(--muted); font-size: 12.5px; }
   .src { color: var(--muted); font-size: 11.5px; white-space: nowrap; }
+
+  /* Networks. A chain is a thing you pick, so it reads as a row of cards rather
+     than a table: which one is active matters more than any single column. */
+  .chains { display: flex; flex-wrap: wrap; gap: 10px; }
+  .chip {
+    display: flex; align-items: center; gap: 9px; padding: 9px 13px; cursor: pointer;
+    border: 1px solid var(--line); border-radius: 9px; background: var(--bg);
+    color: inherit; font: inherit; text-align: left;
+  }
+  .chip.active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  .chip.down { opacity: .55; }
+  .chip .nm { font-weight: 600; font-size: 14px; }
+  .chip .id { color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+  .chip .ico { width: 22px; height: 22px; border-radius: 50%; flex: 0 0 22px;
+               background: var(--line); object-fit: cover; }
+  /* Trust is the one thing on this page that is about money rather than data, so
+     it gets a colour of its own rather than another grey tag. */
+  .trust { font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em;
+           padding: 1px 6px; border-radius: 20px; border: 1px solid; }
+  .trust.verified { color: var(--ok); border-color: var(--ok); }
+  .trust.unverified { color: var(--warn); border-color: var(--warn); }
+  .trust.quarantined { color: #b3261e; border-color: #b3261e; }
+  .card { border: 1px solid var(--line); border-radius: 9px; padding: 14px;
+          margin-top: 12px; background: var(--bg); }
+  .card .hd { display: flex; align-items: center; gap: 11px; }
+  .card .hd img { width: 30px; height: 30px; border-radius: 50%; }
+  .card .hd .nm { font-size: 17px; font-weight: 600; }
+  .kv { display: flex; flex-wrap: wrap; gap: 18px; margin-top: 10px; }
+  .kv .k { font-size: 10.5px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); }
+  .kv .v { font-size: 13.5px; font-variant-numeric: tabular-nums; }
 </style>
 </head>
 <body>
@@ -95,6 +125,57 @@
   <h2>Node &amp; index</h2>
   <div class="stats" id="stats"><span class="empty">loading…</span></div>
   <div class="note" id="node-note" hidden></div>
+</section>
+
+<section>
+  <h2>Networks</h2>
+  <div id="chain-list"><span class="empty">loading…</span></div>
+
+  <div id="add-chain" hidden style="margin-top:18px; border-top:1px solid var(--line); padding-top:16px">
+    <div class="row">
+      <input type="text" id="chain-name" placeholder="a chain name — base, optimism, arbitrum" spellcheck="false" autocomplete="off">
+      <button id="chain-resolve">Look it up</button>
+      <button id="chain-manual-open" class="ghost">Enter it by hand</button>
+    </div>
+    <div class="hint" id="chain-resolve-hint">
+      Names resolve through ENS's <code>on.eth</code> chain registry, on Ethereum mainnet — one
+      <code>eth_call</code>, on-chain, no gateway. It answers with the chain id, so you do not have to
+      remember it. It deliberately publishes no RPC endpoints: an endpoint URL is where an API key
+      lives, so that part stays yours to supply.
+    </div>
+    <div class="err" id="chain-err" hidden></div>
+
+    <div id="chain-card" hidden></div>
+
+    <div id="chain-manual" hidden style="margin-top:12px">
+      <div class="row">
+        <input type="text" id="chain-manual-id" placeholder="chain id — e.g. 421614" spellcheck="false" autocomplete="off" style="flex:0 1 220px">
+        <input type="text" id="chain-manual-name" placeholder="a short name" spellcheck="false" autocomplete="off" style="flex:0 1 220px">
+        <input type="text" id="chain-manual-symbol" placeholder="native symbol (ETH)" spellcheck="false" autocomplete="off" style="flex:0 1 200px">
+      </div>
+      <div class="hint">Most chains are not in the registry — it is new, and testnets are not its early
+        population. Typing the id is an ordinary way in, not a failure; everything downstream is identical,
+        including the check below.</div>
+    </div>
+
+    <div id="chain-commit" hidden style="margin-top:12px">
+      <div class="row">
+        <input type="text" id="chain-node" placeholder="https://… your own RPC for this network" spellcheck="false" autocomplete="off">
+        <button id="chain-add">Start indexing</button>
+        <button id="chain-cancel" class="ghost">Cancel</button>
+      </div>
+      <div class="hint">Sent to the daemon and stored so a restart can bring the chain back. It is never
+        returned in an API response — the URL usually carries a provider's key. Before anything is written,
+        the daemon dials it and asks the node for <em>its own</em> chain id: if that disagrees with the
+        number above, the network is refused. That check is what makes a typo loud instead of silent.
+        <br>A chain reached over somebody else's RPC starts <strong>unverified</strong>: it is indexed and
+        served, but nothing it produces can back an on-chain commitment until you say so deliberately.
+        <br>Head discovery starts off. The sweep asks for logs with no address filter, which is the first
+        thing a shared endpoint refuses; turn it on once you know what your provider allows. Registered
+        and promoted assets are followed either way.</div>
+    </div>
+  </div>
+  <div class="hint" id="add-chain-off" hidden>This deployment does not allow adding networks at runtime.</div>
 </section>
 
 <section>
@@ -241,9 +322,14 @@ function setOperatorToken(v) {
   try { v ? localStorage.setItem(TOKEN_KEY, v) : localStorage.removeItem(TOKEN_KEY); } catch { /* private window */ }
 }
 
+// The methods the daemon guards. Adding a network and changing its trust spend as
+// surely as publishing does — the first is a per-block RPC bill from then on, the
+// second puts the publisher's bond behind somebody else's node.
+const SPENDING_METHODS = ['POST', 'PATCH', 'DELETE'];
+
 async function api(path, opts) {
   const tok = operatorToken();
-  if (tok && opts && opts.method === 'POST') {
+  if (tok && opts && SPENDING_METHODS.includes(opts.method)) {
     opts = { ...opts, headers: { ...(opts.headers || {}), authorization: `Bearer ${tok}` } };
   }
   const res = await fetch(path, opts);
@@ -261,6 +347,16 @@ async function api(path, opts) {
     throw err;
   }
   return body;
+}
+
+// onChain appends the selected chain to a path. Every read below is about one
+// chain, and until there was a picker they all just took the daemon's default —
+// which is right when there is one chain and silently wrong the moment there are
+// three.
+function onChain(path) {
+  const id = typeof activeChainID === 'function' ? activeChainID() : INDEXED_CHAIN;
+  if (!id) return path;
+  return path + (path.includes('?') ? '&' : '?') + 'chain_id=' + id;
 }
 
 function showErr(el, err) {
@@ -285,7 +381,12 @@ function formatUnits(raw, decimals) {
 async function loadStatus() {
   try {
     const s = await api('/v1/status');
-    const c = s.chains && s.chains[0];
+    // Whichever chain is selected, not whichever the daemon happened to list
+    // first. With one chain configured these are the same thing, which is why
+    // this went unnoticed for as long as there was only ever one.
+    const chains = s.chains || [];
+    const want = activeChainID();
+    const c = chains.find(x => x.chain_id === want) || chains[0];
     if (!c) return;
     REG = s.registry || null;
     HEAD = c.head_block || 0;
@@ -321,7 +422,7 @@ async function loadStatus() {
 
 async function loadAssets() {
   try {
-    const { assets = [] } = await api('/v1/assets');
+    const { assets = [] } = await api(onChain('/v1/assets'));
     $('assets-table').querySelector('tbody').innerHTML = assets.length ? assets.map(a => `
       <tr>
         <td class="mono addr">${a.address}</td>
@@ -370,6 +471,243 @@ function priceCell(p) {
   if (p.route && p.route.length > 1) label += ` → ${p.route[1].pair.split(' ')[0].split('/')[0]}`;
   return `<span class="conf ${p.confidence}"></span><span class="mono" title="${route}">${usd(p.usd)}</span>
           <div class="src">${label}${p.stale ? ' · stale' : ''}</div>`;
+}
+
+// --------------------------------------------------------------------------
+// Networks
+//
+// Two jobs. Picking which chain the rest of the page is about, which used to be
+// whatever the daemon listed first and nothing you could change. And adding one,
+// which used to be a config file and a restart.
+// --------------------------------------------------------------------------
+
+// PICKED is the chain the user chose; null means "whatever the daemon defaults
+// to". Kept separate so a chain added later cannot silently move the selection.
+let PICKED = null;
+let CHAINS = [];
+// The chain the daemon itself treats as the default. Not the same as "first in
+// this list": /v1/chains sorts for display, the daemon's default comes from the
+// order its chains were started in. Taking the first row instead would highlight
+// one chain in the picker while the panels below described another.
+let DEFAULT_CHAIN = 0;
+// What the resolve step (or the manual form) produced, waiting for an endpoint.
+let PENDING = null;
+
+// An avatar comes from the registry, which means it comes from whoever controls
+// that name. Most are ipfs://, which needs a gateway to render — and reaching for
+// one would tell a third party which chain you are looking at, on a page whose
+// whole argument is that it reads from your own node. So https only, and no icon
+// otherwise. That means usually no icon, which is the right trade here.
+function iconURL(avatar) {
+  if (!avatar || !/^https:\/\//i.test(avatar)) return '';
+  return avatar;
+}
+
+function activeChainID() {
+  if (PICKED && CHAINS.some(c => c.chain_id === PICKED && c.running)) return PICKED;
+  if (DEFAULT_CHAIN) return DEFAULT_CHAIN;
+  const running = CHAINS.filter(c => c.running);
+  return running.length ? running[0].chain_id : INDEXED_CHAIN;
+}
+
+async function loadChains() {
+  let data;
+  try {
+    data = await api('/v1/chains');
+  } catch {
+    return; // the panel is not worth an error banner; /v1/status already shouts
+  }
+  CHAINS = data.chains || [];
+  DEFAULT_CHAIN = data.default_chain_id || 0;
+  $('add-chain').hidden = !data.can_add;
+  $('add-chain-off').hidden = !!data.can_add;
+  if (!data.ens_available) {
+    $('chain-name').placeholder = 'name resolution unavailable — add by chain id';
+    $('chain-resolve').disabled = true;
+    $('chain-resolve-hint').innerHTML =
+      'This deployment has no Ethereum mainnet endpoint, so it cannot resolve names ' +
+      '(the <code>on.eth</code> registry lives there). Add a network by chain id instead, ' +
+      'or set <code>ens.node</code>.';
+  }
+  renderChains();
+}
+
+function renderChains() {
+  const el = $('chain-list');
+  if (!CHAINS.length) { el.innerHTML = '<span class="empty">no networks</span>'; return; }
+  const active = activeChainID();
+
+  el.innerHTML = '<div class="chains">' + CHAINS.map(c => {
+    const cls = ['chip', c.chain_id === active ? 'active' : '', c.running ? '' : 'down']
+      .filter(Boolean).join(' ');
+    const why = c.running
+      ? (c.node_local ? 'your own node' : 'a third-party RPC')
+      : (c.last_error || 'not running');
+    return `<button class="${cls}" data-chain="${c.chain_id}" title="${esc(why)}">
+      <span>
+        <span class="nm">${esc(c.name || 'chain ' + c.chain_id)}</span>
+        <span class="trust ${c.trust}">${c.trust}</span>
+        <br><span class="id">${c.chain_id}${c.head_block ? ' · head ' + c.head_block.toLocaleString() : ''}${c.running ? '' : ' · stopped'}</span>
+      </span>
+    </button>`;
+  }).join('') + '</div>';
+
+  el.querySelectorAll('[data-chain]').forEach(b => {
+    b.addEventListener('click', () => {
+      const id = Number(b.dataset.chain);
+      const c = CHAINS.find(x => x.chain_id === id);
+      if (!c || !c.running) return;
+      PICKED = id;
+      INDEXED_CHAIN = id;
+      renderChains();
+      renderRequestSection();
+      // Everything below is about one chain, so re-ask for all of it.
+      loadStatus(); loadAssets(); loadCandidates();
+      if ($('account').value.trim()) lookup();
+    });
+  });
+
+  const unverified = CHAINS.filter(c => c.running && c.trust === 'unverified').length;
+  const note = $('chain-list').querySelector('.chains');
+  if (unverified && note) {
+    note.insertAdjacentHTML('afterend',
+      `<div class="hint">${unverified} network${unverified === 1 ? ' is' : 's are'} unverified:
+       indexed and served, but never committed on-chain. A bond is money staked on logs, and
+       these were served by a machine this deployment does not run.</div>`);
+  }
+}
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, ch =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+}
+
+async function resolveChainName() {
+  const raw = $('chain-name').value.trim();
+  showErr('chain-err', null);
+  $('chain-card').hidden = true;
+  $('chain-manual').hidden = true;
+  $('chain-commit').hidden = true;
+  if (!raw) return;
+
+  const btn = $('chain-resolve');
+  btn.disabled = true;
+  try {
+    const r = await api(`/v1/chains/resolve?name=${encodeURIComponent(raw)}`);
+    PENDING = { chain_id: r.chain_id, ens_name: r.label, name: r.suggested?.name || r.label };
+    renderChainCard(r);
+    $('chain-commit').hidden = false;
+    $('chain-node').focus();
+  } catch (e) {
+    if (e.status === 404) {
+      // Not a failure. Most chains are not in the registry, and the next move is
+      // to type the details rather than to give up.
+      showErr('chain-err', new Error(
+        `${raw} is not in the on.eth registry — which is ordinary; most chains are not. ` +
+        `Enter its details below.`));
+      openManual(raw);
+    } else {
+      showErr('chain-err', e);
+    }
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function renderChainCard(r) {
+  const s = r.suggested || {};
+  const ico = iconURL(r.avatar);
+  $('chain-card').hidden = false;
+  $('chain-card').innerHTML = `
+    <div class="card">
+      <div class="hd">
+        ${ico ? `<img src="${esc(ico)}" alt="">` : ''}
+        <div>
+          <div class="nm">${esc(s.name || r.label)}</div>
+          <div class="id mono">${esc(r.ens_name)} → chain ${r.chain_id}</div>
+        </div>
+      </div>
+      <div class="kv">
+        <div><div class="k">chain id</div><div class="v">${r.chain_id}</div></div>
+        <div><div class="k">native</div><div class="v">${esc(s.native?.symbol || '?')}</div></div>
+        <div><div class="k">block time</div><div class="v">${esc(s.block_time || '?')}</div></div>
+        <div><div class="k">confirmations</div><div class="v">${s.confirmations ?? '?'}</div></div>
+        <div><div class="k">log window</div><div class="v">${s.backfill_window ?? '?'} / ${s.tail_window ?? '?'}</div></div>
+        ${r.url ? `<div><div class="k">site</div><div class="v"><a href="${esc(r.url)}" target="_blank" rel="noopener noreferrer">${esc(r.url.replace(/^https?:\/\//, '').replace(/\/$/, ''))}</a></div></div>` : ''}
+      </div>
+      <div class="hint">Resolved by <span class="mono addr">${esc(r.resolver)}</span> on mainnet.
+        ${r.known_profile
+          ? 'The tuning above is this chain\'s own, not Ethereum\'s.'
+          : '<strong>No built-in tuning for this chain</strong>, so those numbers are conservative guesses — safe, and slower than they need to be.'}
+        ${r.already_running ? '<br><strong>Already running here.</strong>' : ''}
+      </div>
+    </div>`;
+}
+
+function openManual(prefillName) {
+  PENDING = null;
+  $('chain-card').hidden = true;
+  $('chain-manual').hidden = false;
+  $('chain-commit').hidden = false;
+  if (prefillName) $('chain-manual-name').value = prefillName;
+  $('chain-manual-id').focus();
+}
+
+function resetAddChain() {
+  PENDING = null;
+  showErr('chain-err', null);
+  ['chain-name', 'chain-node', 'chain-manual-id', 'chain-manual-name', 'chain-manual-symbol']
+    .forEach(id => { $(id).value = ''; });
+  $('chain-card').hidden = true;
+  $('chain-manual').hidden = true;
+  $('chain-commit').hidden = true;
+}
+
+async function addChain() {
+  const node = $('chain-node').value.trim();
+  showErr('chain-err', null);
+  if (!node) {
+    showErr('chain-err', new Error('an RPC endpoint is required — the registry names chains, it does not publish endpoints'));
+    return;
+  }
+
+  const body = { node };
+  if (PENDING) {
+    body.ens_name = PENDING.ens_name;
+  } else {
+    const id = Number($('chain-manual-id').value.trim());
+    if (!Number.isInteger(id) || id <= 0) {
+      showErr('chain-err', new Error('a chain id is required'));
+      return;
+    }
+    body.chain_id = id;
+    body.name = $('chain-manual-name').value.trim() || `chain-${id}`;
+    const sym = $('chain-manual-symbol').value.trim();
+    if (sym) body.native = { symbol: sym, decimals: 18 };
+  }
+
+  const btn = $('chain-add');
+  btn.disabled = true;
+  try {
+    const r = await api('/v1/chains', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    resetAddChain();
+    await loadChains();
+    const c = r.chain || {};
+    if (c.chain_id) {
+      PICKED = c.chain_id;
+      INDEXED_CHAIN = c.chain_id;
+      renderChains();
+      loadStatus(); loadAssets(); loadCandidates();
+    }
+  } catch (e) {
+    showErr('chain-err', e);
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 function renderValuation(v, rows) {
@@ -632,7 +970,7 @@ async function heldBalancesViaRpc(addr, assets) {
 async function heldBalances(addr) {
   let assets = [];
   try {
-    ({ assets = [] } = await api('/v1/assets'));
+    ({ assets = [] } = await api(onChain('/v1/assets')));
   } catch { return []; }
   const addrs = assets.map(a => a.address).filter(Boolean);
   if (!addrs.length) return [];
@@ -656,7 +994,7 @@ async function heldBalances(addr) {
   if (!results) {
     results = await Promise.all(batches.map(async chunk => {
       try {
-        const p = await api(`/v1/accounts/${addr}/portfolio?tokens=${chunk.join(',')}`);
+        const p = await api(onChain(`/v1/accounts/${addr}/portfolio?tokens=${chunk.join(",")}`));
         return p.tokens || [];
       } catch { return []; }
     }));
@@ -810,7 +1148,7 @@ async function lookup() {
     const resolved = await resolveAccount(typed);
     const addr = resolved.address;
     showResolved(resolved.name ? resolved : null);
-    const r = await api(`/v1/accounts/${addr}`);
+    const r = await api(onChain(`/v1/accounts/${addr}`));
     let rows = r.assets || [];
     let heldOnly = false;
     // The index only knows events the node could still serve. An account whose last
@@ -859,7 +1197,7 @@ async function register() {
       await api('/v1/assets', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ address }),
+        body: JSON.stringify({ address, chain_id: activeChainID() }),
       });
     } catch (e) {
       // The hosted profiles switch direct registration off, because the funded
@@ -867,7 +1205,7 @@ async function register() {
       // and reaches the same place, so an operator asking for a specific token by
       // hand does not have to care which profile is running.
       if (e.status !== 403) throw e;
-      await api(`/v1/candidates/${address}/promote`, {
+      await api(onChain(`/v1/candidates/${address}/promote`), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ reason: 'asked for from the page' }),
@@ -922,7 +1260,7 @@ async function buildEpoch() {
 
 async function loadCandidates() {
   try {
-    const { candidates = [], thresholds = {} } = await api('/v1/candidates?include_promoted=true&limit=50');
+    const { candidates = [], thresholds = {} } = await api(onChain('/v1/candidates?include_promoted=true&limit=50'));
     const tbody = $('cand-table').querySelector('tbody');
     tbody.innerHTML = candidates.length ? candidates.map(c => `
       <tr>
@@ -953,7 +1291,7 @@ async function promote(address, btn) {
   showErr('cand-err', null);
   if (btn) btn.disabled = true;
   try {
-    await api(`/v1/candidates/${address}/promote`, {
+    await api(onChain(`/v1/candidates/${address}/promote`), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ reason: 'manual: promoted from the demo UI' }),
@@ -1014,8 +1352,16 @@ if (deepLinked) {
   lookup();
 }
 
+$('chain-resolve').addEventListener('click', resolveChainName);
+$('chain-name').addEventListener('keydown', e => { if (e.key === 'Enter') resolveChainName(); });
+$('chain-manual-open').addEventListener('click', () => openManual(''));
+$('chain-add').addEventListener('click', addChain);
+$('chain-cancel').addEventListener('click', resetAddChain);
+$('chain-node').addEventListener('keydown', e => { if (e.key === 'Enter') addChain(); });
+
+loadChains();
 loadStatus(); loadAssets(); loadEpochs(); loadCandidates();
-setInterval(() => { loadStatus(); loadAssets(); loadCandidates(); }, 5000);
+setInterval(() => { loadChains(); loadStatus(); loadAssets(); loadCandidates(); }, 5000);
 </script>
 </body>
 </html>

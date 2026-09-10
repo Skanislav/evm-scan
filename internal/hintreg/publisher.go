@@ -25,6 +25,22 @@ var ErrEmptyIndex = errors.New("hintreg: index is empty, nothing to commit")
 // consumers nothing new and earn nothing.
 var ErrUnchanged = errors.New("hintreg: index and coverage unchanged since last commitment")
 
+// ErrUntrusted is returned for a chain whose logs came from a node this deployment
+// does not run.
+//
+// This is the check that makes the trust level mean something. A commitment is
+// bonded: posting one stakes real money on the claim that these logs are what the
+// chain actually emitted. For a chain read over somebody else's RPC we have no
+// way to know that — the provider could have omitted a log, and the first anyone
+// would learn of it is a successful challenge. Indexing such a chain and serving
+// it is fine, and useful; committing to it is not ours to do until an operator
+// says otherwise, deliberately, by promoting the chain.
+//
+// Unlike ErrUnchanged, force does not override this. Forcing is for "post it
+// anyway, I know the root is the same"; there is no corresponding "stake the bond
+// anyway" worth having behind a boolean.
+var ErrUntrusted = errors.New("hintreg: chain is not verified; its data may not back a bonded commitment")
+
 // ErrUnfunded is returned when the registry quotes less for an epoch's coverage than
 // the publisher's configured floor. Nothing is stored: the index has not earned a
 // commitment yet.
@@ -59,6 +75,9 @@ type epochStore interface {
 	PublishedUnfinalized(ctx context.Context, chainID uint64) ([]store.Epoch, error)
 	UnclaimedFinalized(ctx context.Context, chainID uint64) ([]store.Epoch, error)
 	LatestCommittedRoots(ctx context.Context, chainID uint64) (root, coverage common.Hash, ok bool, err error)
+	// GetChainProfile is read for one field, trust, and it is the field that
+	// decides whether this chain's data may sit behind a bond at all.
+	GetChainProfile(ctx context.Context, chainID uint64) (store.ChainProfile, error)
 }
 
 // Publisher builds merkle commitments over the local index and posts them on-chain.
@@ -117,7 +136,13 @@ func (p *Publisher) Address() common.Address { return p.sub.Sender() }
 // Unless force is set, an epoch whose index root and coverage root both match the
 // last commitment is refused with ErrUnchanged. When MinReward is set, an epoch the
 // registry values below it is refused with ErrUnfunded; nothing is stored either way.
+// A chain whose data came from a node this deployment does not run is refused with
+// ErrUntrusted, and force does not override that one.
 func (p *Publisher) Build(ctx context.Context, chainID uint64, uri string, force bool) (store.Epoch, error) {
+	if err := p.checkTrusted(ctx, chainID); err != nil {
+		return store.Epoch{}, err
+	}
+
 	from, to, err := p.st.CoverageRange(ctx, chainID)
 	if err != nil {
 		return store.Epoch{}, err
@@ -680,4 +705,26 @@ func ProofFor(ctx context.Context, st *store.Store, epochID int64, account commo
 		return store.EpochLeaf{}, nil, err
 	}
 	return leaf, proof, nil
+}
+
+// checkTrusted refuses to build for a chain the deployment does not vouch for.
+//
+// A chain with no profile row at all is treated as trusted, which sounds
+// backwards and is not: profiles are written when a chain starts, so the only way
+// to reach this without one is a database that predates migration 0006. Refusing
+// there would silently stop a working deployment from publishing after an
+// upgrade, which is a worse failure than the one this guards against — and every
+// chain that deployment runs came from its own config file.
+func (p *Publisher) checkTrusted(ctx context.Context, chainID uint64) error {
+	prof, err := p.st.GetChainProfile(ctx, chainID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if prof.Trust == store.TrustVerified {
+		return nil
+	}
+	return fmt.Errorf("%w: chain %d is %s", ErrUntrusted, chainID, prof.Trust)
 }

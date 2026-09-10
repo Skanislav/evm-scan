@@ -155,26 +155,33 @@ Runtime mutation makes that a data race. They collapse into one type:
 type Set struct { mu sync.RWMutex; entries map[uint64]*Entry; order []uint64 }
 
 type Entry struct {
-    ID      uint64
-    Profile store.ChainProfile
-    Source  chain.Source
-    Worker  *indexer.Service
-    Pricer  *price.Pricer
-    Trust   store.Trust
-    cancel  context.CancelFunc
+    ID     uint64
+    Name   string
+    Source chain.Source
+    Worker Worker          // the interface, not *indexer.Service
+    Pricer *price.Pricer
 }
 
-func (s *Set) Start(ctx context.Context, p store.ChainProfile) error
-func (s *Set) Stop(id uint64) error
+func (s *Set) Add(e *Entry) error
+func (s *Set) Remove(id uint64) (*Entry, bool)
 func (s *Set) Get(id uint64) (*Entry, bool)
-func (s *Set) IDs() []uint64          // stable order: config first, then added
-func (s *Set) Verified() []uint64
+func (s *Set) IDs() []uint64      // stable order: config first, then added
+func (s *Set) First() (*Entry, bool)
 ```
 
-`Start` does what the loop in `main.go` does today — dial, verify the reported chain
-id against the requested one, build the service and pricer, launch the goroutine —
-and then registers the entry under the write lock. Every existing consumer switches
-from a captured map to a `*chainset.Set`:
+**The set does no construction, and that is load-bearing rather than fastidious.**
+The obvious shape is `Set.Start(ctx, profile)` doing dial → verify → build the
+indexer → launch. But `internal/api` reads through this set, and a `chainset` that
+knew how to build an `indexer.Service` would drag that dependency into the API
+through the back door — the exact coupling the `Worker` interface exists to prevent.
+
+So construction stays in `cmd/evmscand/chains.go`, as a `supervisor` holding the
+store, the set, the run context and the WaitGroup. It exposes `StartStored(ctx,
+store.ChainProfile)` and `Stop(ctx, chainID)`, which reach the API as two plain
+funcs on `api.Deps`. `chainset` hands out what it was given, under a lock, and
+nothing else.
+
+Every existing consumer switches from a captured map to a `*chainset.Set`:
 
 - `api.Deps.Sources/Workers/Pricers/ChainOrder` → `api.Deps.Chains *chainset.Set`.
 - `hintreg.NewMirror`'s `head`, `code` and `nudge` closures read through the set, so
@@ -191,8 +198,13 @@ take down the mainnet index. So:
 
 - `source: 'config'` → indexer failure cancels the root context, exactly as now.
 - `source: 'api' | 'demand'` → indexer failure marks the chain `quarantined`, records
-  `last_error`, stops its goroutine, and retries with exponential backoff (1m → 30m).
-  `/v1/health` reports it as degraded but the process stays up and `200`s.
+  `last_error`, drops it from the set and closes its node. The process stays up.
+
+  As built there is no automatic retry: a quarantined chain stays down until an
+  operator restarts it, and the reason is in `last_error` on the chain row. Retrying
+  on a timer would be reasonable and is not there — most quarantines are a wrong URL
+  or a provider refusing a call, and neither improves by being asked again every
+  minute.
 
 ### API
 
@@ -220,10 +232,18 @@ POST /v1/chains
   "native": { "symbol": "ETH", "decimals": 18,
               "wrapped": "0x4200000000000000000000000000000000000006" },
   "confirmations": 8,          // optional; profile default otherwise
-  "discovery": { "enabled": true, "lookback": 5000 },
-  "start": true
+  "discovery": { "enabled": true, "lookback": 5000 }
 }
 ```
+
+Discovery defaults to **off** for a chain added this way, which is not what the
+first draft of this document assumed and is what running it taught. The sweep asks
+`eth_getLogs` with no address filter, and that is the first call a shared endpoint
+refuses: the free Optimism RPC this was tested against wants an address on every
+request and an archive plan for the floor probe. On by default meant a failing tick
+every few seconds on a network the operator had only just pointed at. Registered
+and promoted assets are followed either way; only the whole-chain sweep waits to be
+asked for.
 
 The handler dials, reads `eth_chainId` and refuses a mismatch (same check
 `main.go` does today — a node pointed at the wrong network produces a silently wrong
@@ -768,17 +788,17 @@ exist, `chains.demand_auto_add: true` starts the chain as `source: 'demand'`,
 
 Each step is useful shipped alone, and each is a small commit.
 
-1. `chainprofile` + native asset on the chain row. No behaviour change, fills in what
+1. **Done.** `chainprofile` + native asset on the chain row. No behaviour change, fills in what
    is already missing from portfolio responses.
-2. `chainset` refactor: four maps → one guarded set, still populated only from config.
+2. **Done.** `chainset` refactor: four maps → one guarded set, still populated only from config.
    Pure refactor, `make check` is the whole test.
-3. Migration 0006 + `/v1/chains` read endpoints. Still no runtime mutation.
-4. `internal/ens` + `GET /v1/chains/resolve`. Read-only, testable against mainnet on
+3. **Done.** Migration 0006 + `/v1/chains` read endpoints. Still no runtime mutation.
+4. **Done.** `internal/ens` + `GET /v1/chains/resolve`. Read-only, testable against mainnet on
    its own, and useful before anything can be added: it answers "what chain is this
    name".
-5. `POST/PATCH/DELETE /v1/chains`, trust levels, the `eth_chainId` cross-check,
+5. **Done.** `POST/PATCH/DELETE /v1/chains`, trust levels, the `eth_chainId` cross-check,
    publisher skipping unverified, quarantine-on-failure for API chains.
-6. The `web/index.html` panel. This is where it becomes "add a network" rather than
+6. **Done.** The `web/index.html` panel. This is where it becomes "add a network" rather than
    "an endpoint that adds a network".
 7. Migration 0007 + curated seed + `ProbeOrigin` + `/v1/assets/{a}/peers`. This is the
    "same token elsewhere" feature, with no account flow yet.
@@ -790,5 +810,12 @@ Steps 1–6 make the daemon multichain and give it a way in. 7–8 make it *feel
 multichain. 9–10 make it pay for itself.
 
 The target topology — mainnet indexed, the `HintRegistry` on Base, and a testnet like
-Arc added from the browser — is done at step 6, and the mainnet node it already runs
-is the same one that resolves the names.
+Arc added from the browser — works at step 6, and the mainnet node the deployment
+already runs is the same one that resolves the names.
+
+Steps 1–6 are built and exercised end to end against anvil, Postgres 16 and live
+public RPCs: `base.on.eth` resolves to 8453 with its site and tuning, the network is
+added from the browser and starts following the head, a chain entered by hand with
+no ENS name at all works identically, a promotion to `verified` survives a restart
+with its audit trail, and `Publisher.Build` refuses an unverified chain whether it
+is asked by the auto-publish loop or by `POST /v1/epochs`.
