@@ -71,6 +71,11 @@ type HistoryProbe struct {
 	BoundaryErr error
 	// Probes is the number of eth_getLogs calls made, retries included.
 	Probes int
+	// NonMonotone is set when a block above the floor the search found turned out to
+	// be unservable. It means the node answers some blocks it cannot actually serve
+	// history for — a light client does this for blocks with no matching logs — and
+	// that the floor reported here comes from sampling rather than from the search.
+	NonMonotone bool
 	// AnchorChecked reports whether the anchor cross-check ran.
 	AnchorChecked bool
 }
@@ -188,6 +193,56 @@ func ProbeHistoryFloor(ctx context.Context, src Source, head uint64, opts Histor
 		res.Floor = hi
 	}
 
+	// The search assumes availability is monotone: serve a block, serve everything
+	// above it. A light client breaks that. Helios answers a block whose bloom is
+	// empty without verifying anything — genesis among them — and refuses a block
+	// with content that has fallen out of the EIP-2935 ring buffer. So probe(0)
+	// succeeds, the search never runs, and the floor reads as genesis while every
+	// backfill below head-8191 fails forever.
+	//
+	// Sample the range the search just claimed. Any block in it that answers
+	// "history unavailable" is proof the claim is wrong, and proof of a real floor
+	// above that block, so raise the floor and look again.
+	//
+	// Only a claim of full history is audited. A floor the search found came from
+	// blocks the node refused, which is the node being honest about a boundary; a
+	// floor of zero came from one block answering, and that is the claim worth
+	// checking. Auditing a pruned node too would spend verified calls to confirm
+	// something it already demonstrated.
+	for round := 0; res.Floor == 0 && round < monotonicityRounds; round++ {
+		bad, kind, cause, err := highestUnservable(ctx, probe, res.Floor, head)
+		if err != nil {
+			return res, err
+		}
+		if !bad.found {
+			break
+		}
+		// A block that is refused is a floor below which nothing can be read, so the
+		// real one is in (bad, head]. Blocks that carry logs are the ones a light
+		// client actually refuses, and in a range where most of them do, availability
+		// is monotone again — so bisect, rather than leaving the floor wherever the
+		// sample happened to land. Landing short is not a rounding error here: it is
+		// a backfill that fails forever and coverage that claims a range nothing can
+		// serve.
+		lo, hi := bad.block, head
+		for hi-lo > 1 {
+			mid := lo + (hi-lo)/2
+			_, ok, k, c, err := probe(mid)
+			if err != nil {
+				return res, err
+			}
+			if ok {
+				hi = mid
+			} else {
+				lo = mid
+				kind, cause = k, c
+			}
+		}
+		res.Floor = hi
+		res.Boundary, res.BoundaryErr = kind, cause
+		res.NonMonotone = true
+	}
+
 	if a := opts.Anchor; a != nil && a.Block <= head && a.Block >= res.Floor {
 		want := a.MinLogs
 		if want <= 0 {
@@ -210,6 +265,60 @@ func ProbeHistoryFloor(ctx context.Context, src Source, head uint64, opts Histor
 		}
 	}
 	return res, nil
+}
+
+// monotonicityRounds bounds how many times the floor is raised by sampling. Each
+// round at most halves the range, so a handful is plenty and a pathological node
+// cannot spin here.
+const monotonicityRounds = 8
+
+// monotonicitySamples is how many blocks each round looks at. Enough to land on a
+// block with logs in a range where most have them, few enough that the whole audit
+// costs less than the search that preceded it.
+const monotonicitySamples = 12
+
+type unservable struct {
+	found bool
+	block uint64
+}
+
+// highestUnservable samples (floor, head) and returns the highest block in it that
+// the node says it cannot serve. Sampling rather than searching is deliberate: with
+// availability non-monotone there is no boundary to bisect for, only evidence to
+// collect, and one unservable block above the floor is enough to know the floor is
+// wrong.
+func highestUnservable(
+	ctx context.Context,
+	probe func(uint64) (int, bool, LogsErrorKind, error, error),
+	floor, head uint64,
+) (unservable, LogsErrorKind, error, error) {
+	var out unservable
+	var kind LogsErrorKind
+	var cause error
+	if head <= floor+1 {
+		return out, kind, cause, nil
+	}
+	span := head - floor
+	for i := 1; i <= monotonicitySamples; i++ {
+		if err := ctx.Err(); err != nil {
+			return out, kind, cause, err
+		}
+		n := floor + span*uint64(i)/uint64(monotonicitySamples+1)
+		if n <= floor || n >= head {
+			continue
+		}
+		_, ok, k, c, err := probe(n)
+		if err != nil {
+			return out, kind, cause, err
+		}
+		if ok {
+			continue
+		}
+		if k == LogsErrHistoryUnavailable && n > out.block {
+			out.found, out.block, kind, cause = true, n, k, c
+		}
+	}
+	return out, kind, cause, nil
 }
 
 // sleep waits for d or until ctx is done, whichever comes first.

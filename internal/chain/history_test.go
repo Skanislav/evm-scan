@@ -3,6 +3,7 @@ package chain
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"syscall"
 	"testing"
@@ -44,7 +45,14 @@ type prunedNode struct {
 	failAlways map[uint64]error
 	// flaky makes the first call for every block fail with a timeout.
 	flaky bool
-	seen  map[uint64]bool
+	// lightClient models Helios: a block below the floor answers with an empty log
+	// set when it has no matching logs (nothing to verify, so nothing is refused)
+	// and reports the EIP-2935 ring buffer when it does. Availability is therefore
+	// not monotone — genesis answers, the block after it does not.
+	lightClient bool
+	// hasLogs marks the blocks that carry logs; used with lightClient.
+	hasLogs func(uint64) bool
+	seen    map[uint64]bool
 }
 
 func (p *prunedNode) Logs(_ context.Context, q Query) ([]types.Log, error) {
@@ -69,6 +77,18 @@ func (p *prunedNode) Logs(_ context.Context, q Query) ([]types.Log, error) {
 		}
 	}
 	if q.From < p.floor {
+		if p.lightClient {
+			has := p.hasLogs
+			if has == nil {
+				has = func(n uint64) bool { return n != 0 }
+			}
+			if !has(q.From) {
+				return nil, nil
+			}
+			return nil, fmt.Errorf(
+				"block %d is outside EIP-2935 ring buffer range (latest: %d, buffer size: 8191)",
+				q.From, p.head)
+		}
 		if p.emptyForPruned {
 			return nil, nil
 		}
@@ -121,8 +141,13 @@ func TestHistoryFloorReportsZeroForFullHistory(t *testing.T) {
 	if got != 0 {
 		t.Errorf("floor = %d, want 0", got)
 	}
-	if node.probes > 2 {
-		t.Errorf("took %d probes for a full-history node, want at most 2", node.probes)
+	// A node claiming to serve everything is the one claim worth checking, because
+	// it is what a light client produces by answering a block with no logs without
+	// verifying it. Confirming the claim costs a sample of the range; two probes
+	// were only ever enough while the claim was taken on trust, and taking it on
+	// trust is what put a coverage claim on-chain for a range nothing could read.
+	if node.probes > 20 {
+		t.Errorf("took %d probes for a full-history node, want at most 20", node.probes)
 	}
 }
 
@@ -391,5 +416,70 @@ func TestClassifyLogsError(t *testing.T) {
 		if got := ClassifyLogsError(c.err); got != c.want {
 			t.Errorf("%s: %v -> %s, want %s", c.name, c.err, got, c.want)
 		}
+	}
+}
+
+// TestProbeSurvivesNonMonotoneAvailability covers the shape a light client has:
+// a block with no matching logs is answered without verifying anything, so genesis
+// comes back empty and successful, while a block with logs below the EIP-2935 ring
+// buffer is refused. The old probe asked block 0, got an answer, and reported the
+// node as serving history back to genesis — after which every backfill below the
+// real floor failed forever and the coverage a publisher committed claimed a range
+// the node could not read.
+func TestProbeSurvivesNonMonotoneAvailability(t *testing.T) {
+	const head = 25_943_793
+	const realFloor = head - 8191
+
+	node := &prunedNode{
+		floor:       realFloor,
+		head:        head,
+		lightClient: true,
+		// Mainnet-ish: essentially every block carries a Transfer, except genesis.
+		hasLogs: func(n uint64) bool { return n != 0 },
+		logsAt:  map[uint64]int{},
+	}
+	// Servable blocks answer with logs.
+	for n := uint64(realFloor); n <= head; n++ {
+		if n%1000 == 0 || n == head || n == realFloor {
+			node.logsAt[n] = 3
+		}
+	}
+
+	got, err := ProbeHistoryFloor(context.Background(), node, head, HistoryFloorOptions{})
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	if got.Floor == 0 {
+		t.Fatal("probe reported history back to genesis; the node cannot serve below the ring buffer")
+	}
+	if !got.NonMonotone {
+		t.Error("probe should report that availability was not monotone")
+	}
+	// The audit samples rather than bisects, so it lands above the true floor
+	// without necessarily hitting it exactly. What matters is that the floor is
+	// inside the window the node can actually serve.
+	if got.Floor < realFloor {
+		t.Errorf("floor %d is below what the node serves (%d): backfills there fail forever",
+			got.Floor, realFloor)
+	}
+	if got.Floor > head {
+		t.Errorf("floor %d is above head %d", got.Floor, head)
+	}
+}
+
+// TestProbeStillTrustsAFullNode makes sure the audit does not punish a node that
+// genuinely holds everything: nothing is unservable, so nothing is raised.
+func TestProbeStillTrustsAFullNode(t *testing.T) {
+	const head = 5_000
+	node := &prunedNode{floor: 0, head: head, logsAt: map[uint64]int{0: 1, head: 1}}
+	got, err := ProbeHistoryFloor(context.Background(), node, head, HistoryFloorOptions{})
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	if got.Floor != 0 {
+		t.Errorf("floor = %d, want 0 for a node serving everything", got.Floor)
+	}
+	if got.NonMonotone {
+		t.Error("a full node's availability is monotone")
 	}
 }
