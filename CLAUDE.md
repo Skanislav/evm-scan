@@ -101,6 +101,10 @@ shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module 
   `merkle.CoverageLeaf` must match `HintRegistry.coverageLeaf` byte-for-byte; the
   hermetic `registry_sim_test.go` runs the whole loop on go-ethereum's simulated backend.
   docs/TOKENOMICS.md is the full design; only its minimum is built.
+- Chains are fixed at startup and assets are keyed `(chain_id, address)` with no
+  identity above a chain. docs/MULTICHAIN.md designs runtime chain registration
+  (ENS `on.eth` name -> chain id, operator-supplied RPC) and cross-chain asset
+  groups; none of it is built, so treat that file as intent, not description.
 - `internal/merkle` must match `HintRegistry.leafHash` / `verifyInclusion` byte-for-byte:
   leaf = `keccak256(abi.encode(account, chainId, keccak256(abi.encodePacked(sorted unique
   assets))))`, sorted-pair keccak tree. Changing either side requires changing the other and
