@@ -409,7 +409,7 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		ep := src.Endpoint()
 		cs := chainStatus{
 			ChainID:       id,
-			Node:          ep.Raw,
+			Node:          ep.Redacted(),
 			NodeTransport: string(ep.Transport),
 			NodeLocal:     ep.Local,
 		}

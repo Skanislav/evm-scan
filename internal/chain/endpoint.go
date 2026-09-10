@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"sort"
 	"strings"
 )
 
@@ -87,5 +88,69 @@ func (e Endpoint) String() string {
 	if e.Local {
 		locality = "local"
 	}
-	return fmt.Sprintf("%s (%s, %s)", e.Raw, e.Transport, locality)
+	return fmt.Sprintf("%s (%s, %s)", e.Redacted(), e.Transport, locality)
+}
+
+// Redacted renders the endpoint with any credential removed.
+//
+// Providers put the API key straight in the URL — a path segment on dRPC and Ankr,
+// a query parameter elsewhere — so the endpoint string is a secret, and it was
+// being served by an unauthenticated /v1/status and written to logs. Anyone who
+// could reach the status page could take the key and spend the operator's quota.
+//
+// The rule is deliberately blunt: keep the scheme, host and the first path segment
+// (which names the network on most providers, and is not secret), and drop
+// everything after it along with every query value. Over-redacting an endpoint
+// costs nothing; under-redacting one hands out a credential.
+func (e Endpoint) Redacted() string {
+	if e.Transport == TransportIPC {
+		return e.Raw
+	}
+	u, err := url.Parse(e.Raw)
+	if err != nil {
+		// Unparseable, so nothing can be said about which part is the secret.
+		return "(redacted)"
+	}
+
+	// Assembled by hand rather than through url.String, which percent-escapes the
+	// marker and turns a readable endpoint into line noise.
+	var b strings.Builder
+	b.WriteString(u.Scheme)
+	b.WriteString("://")
+	if u.User != nil {
+		b.WriteString("***@")
+	}
+	b.WriteString(u.Host)
+
+	segs := strings.Split(strings.Trim(u.Path, "/"), "/")
+	switch {
+	case len(segs) == 1 && segs[0] == "":
+		// no path at all
+	case len(segs) == 1:
+		// A single segment may itself be the key (…/<key>), so keep it only when it
+		// is short enough to be a network name.
+		if len(segs[0]) > 24 {
+			b.WriteString("/***")
+		} else {
+			b.WriteString("/" + segs[0])
+		}
+	default:
+		b.WriteString("/" + segs[0] + "/***")
+	}
+
+	if u.RawQuery != "" {
+		keys := make([]string, 0, 4)
+		for k := range u.Query() {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		b.WriteString("?")
+		for i, k := range keys {
+			if i > 0 {
+				b.WriteString("&")
+			}
+			b.WriteString(k + "=***")
+		}
+	}
+	return b.String()
 }

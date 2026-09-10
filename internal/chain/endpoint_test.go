@@ -2,6 +2,7 @@ package chain
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -123,5 +124,40 @@ func TestChunkOptsDefaults(t *testing.T) {
 	o2 := ChunkOpts{Max: 10, Min: 500}.withDefaults()
 	if o2.Min > o2.Max {
 		t.Errorf("min %d exceeds max %d after clamping", o2.Min, o2.Max)
+	}
+}
+
+// The endpoint string carries the provider's API key, and it was being served by an
+// unauthenticated /v1/status and written to logs. Redacting it is the difference
+// between a status page and a credential giveaway, so the cases are pinned.
+func TestRedactedRemovesCredentials(t *testing.T) {
+	const key = "AmAMU_uMEEY-lo9KaFQ_Z5O3OYnZrLUR8YgBzu2G7ZgM"
+	for _, tc := range []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{"drpc path key", "https://lb.drpc.live/base/" + key, "https://lb.drpc.live/base/***"},
+		{"ankr path key", "https://rpc.ankr.com/eth/" + key, "https://rpc.ankr.com/eth/***"},
+		{"query key", "https://lb.drpc.org/ogrpc?network=base&dkey=" + key, "https://lb.drpc.org/ogrpc?dkey=***&network=***"},
+		{"alchemy style", "https://eth-sepolia.g.alchemy.com/v2/" + key, "https://eth-sepolia.g.alchemy.com/v2/***"},
+		{"bare key as only segment", "https://example.com/" + key, "https://example.com/***"},
+		{"no credential to hide", "http://127.0.0.1:8545", "http://127.0.0.1:8545"},
+		{"public host with a network path", "https://mainnet.base.org", "https://mainnet.base.org"},
+		{"basic auth", "https://user:pass@node.example.com/eth", "https://***@node.example.com/eth"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ep, err := ParseEndpoint(tc.raw)
+			if err != nil {
+				t.Fatalf("ParseEndpoint: %v", err)
+			}
+			got := ep.Redacted()
+			if got != tc.want {
+				t.Errorf("Redacted() = %q, want %q", got, tc.want)
+			}
+			if strings.Contains(got, key) || strings.Contains(got, "pass") {
+				t.Errorf("Redacted() leaked the credential: %q", got)
+			}
+		})
 	}
 }
