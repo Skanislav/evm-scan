@@ -317,14 +317,19 @@ func publisherLoop(ctx context.Context, p *hintreg.Publisher, cfg *config.Config
 	defer t.Stop()
 
 	for {
+		// Settle before waiting, not after. A ticker does not fire until a full
+		// interval has passed, so waiting first means every restart postpones
+		// finalizing and claiming by the whole interval — and a deployment that
+		// restarts more often than the interval would never settle anything at all.
+		// Everything in a tick is idempotent: nothing is due, nothing is sent.
+		for _, c := range cfg.Chains {
+			publishTick(ctx, p, c.ChainID, cfg.Registry.CommitmentURI, log)
+		}
+
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-		}
-
-		for _, c := range cfg.Chains {
-			publishTick(ctx, p, c.ChainID, cfg.Registry.CommitmentURI, log)
 		}
 	}
 }

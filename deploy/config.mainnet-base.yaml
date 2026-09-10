@@ -126,8 +126,13 @@ chains:
     confirmations: 12
     backfill_window: 200
     tail_window: 100
-    poll_interval: 2s
-    backfill_interval: 5s
+    # Base carries no index of its own, so this leg only exists to read the registry
+    # and send to it. Polling it on the block time buys nothing and, against a public
+    # or metered endpoint, is what actually spends the quota: a rate-limited Base RPC
+    # takes down more than Base, because one indexer's failure cancels the context the
+    # mainnet indexer and the publisher share. Poll on the registry's own cadence.
+    poll_interval: 30s
+    backfill_interval: 60s
 
     discovery:
       enabled: false
