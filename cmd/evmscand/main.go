@@ -241,6 +241,7 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 			Publisher:         publisher,
 			AllowRegistration: cfg.API.AllowRegistration,
 			AuthToken:         cfg.API.AuthToken,
+			Cost:              cfg.Cost,
 			CORSOrigin:        cfg.API.CORSOrigin,
 			WebDir:            webDir,
 			Log:               log,

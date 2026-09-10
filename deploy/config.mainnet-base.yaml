@@ -79,6 +79,27 @@ registry:
     # docs/MAINNET.md section 2 is that procedure.
     min_expected_reward_wei: "20000000000000"
 
+# What the RPC bill is made of. Providers meter per request, so the only lever on
+# cost is how many requests this daemon makes — which is what /v1/status reports,
+# per chain, alongside the money.
+#
+# cu_per_request is measured, not assumed: on dRPC, 32,780 CU over 1,639 requests
+# and 40,780 over 2,039 are both exactly 20 CU per call, on two different chains,
+# so the unit is flat per request rather than per method.
+#
+# usd_per_million_cu has to come from the plan in use. The dashboard rounds to the
+# cent, which only bounds it: two readings of $0.01 put the rate somewhere between
+# $0.15 and $0.37 per million CU, and this is the middle of that. Replace it with
+# the real figure before quoting any of these numbers at anyone.
+#
+# Note that only a chain dialled directly has counts that are also its bill. The
+# mainnet leg goes through Helios on loopback, and the provider bills for what
+# Helios fetches upstream to verify each answer — several requests per call, none
+# of them visible from inside this process. /v1/status flags that per chain.
+cost:
+  cu_per_request: 20
+  usd_per_million_cu: 0.26
+
 chains:
   - chain_id: 1
     name: mainnet

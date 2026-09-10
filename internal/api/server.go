@@ -23,6 +23,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 
 	"github.com/Skanislav/evm-scan/internal/chain"
+	"github.com/Skanislav/evm-scan/internal/config"
 	"github.com/Skanislav/evm-scan/internal/evmlog"
 	"github.com/Skanislav/evm-scan/internal/hintreg"
 	"github.com/Skanislav/evm-scan/internal/price"
@@ -67,7 +68,9 @@ type Deps struct {
 	AllowRegistration bool
 	// AuthToken, when set, is required as a bearer token on every endpoint that
 	// spends something. Empty leaves those endpoints open.
-	AuthToken  string
+	AuthToken string
+	// Cost prices RPC traffic so /v1/status can report what the deployment spends.
+	Cost       config.Cost
 	CORSOrigin string
 	WebDir     string
 	Log        *slog.Logger
@@ -75,9 +78,11 @@ type Deps struct {
 
 // Server routes and serves the API.
 type Server struct {
-	d      Deps
-	mux    *http.ServeMux
-	chains []uint64
+	d   Deps
+	mux *http.ServeMux
+	// started is the epoch for RPC counters, which are per-process.
+	started time.Time
+	chains  []uint64
 	// meta caches token symbol/name/decimals by chain and address. A deployed
 	// contract's metadata does not change, and reading it costs a verified eth_call
 	// on a light client, so it is worth never asking twice.
@@ -86,7 +91,7 @@ type Server struct {
 
 // New builds the router.
 func New(d Deps) *Server {
-	s := &Server{d: d, mux: http.NewServeMux()}
+	s := &Server{d: d, mux: http.NewServeMux(), started: time.Now()}
 	for _, id := range d.ChainOrder {
 		if _, ok := d.Sources[id]; ok {
 			s.chains = append(s.chains, id)
@@ -300,7 +305,70 @@ type chainStatus struct {
 	CandidatesReady int64  `json:"candidates_promotable"`
 	// Pricing says where this chain's prices come from, or that they do not.
 	Pricing *pricingStatus `json:"pricing,omitempty"`
-	Error   string         `json:"error,omitempty"`
+	// RPC is what this chain has asked its endpoint for, and what that costs.
+	RPC   *rpcStatus `json:"rpc,omitempty"`
+	Error string     `json:"error,omitempty"`
+}
+
+// rpcStatus reports RPC usage for one chain since this process started.
+//
+// BilledDirectly is the field to read first. When it is false the endpoint is a
+// local light client, and the provider is billed for what that client fetches
+// upstream to verify each answer — several requests per call, none of them visible
+// here. Calls is then a lower bound on the bill, not the bill.
+type rpcStatus struct {
+	Calls          map[string]uint64 `json:"calls"`
+	Total          uint64            `json:"total"`
+	BilledDirectly bool              `json:"billed_directly"`
+	Since          string            `json:"since"`
+	// Per-hour rates, which is what a monthly bill is actually made of.
+	CallsPerHour float64  `json:"calls_per_hour"`
+	ComputeUnits *float64 `json:"compute_units,omitempty"`
+	USD          *float64 `json:"estimated_usd,omitempty"`
+	USDPerDay    *float64 `json:"estimated_usd_per_day,omitempty"`
+	Note         string   `json:"note,omitempty"`
+}
+
+// rpcUsage turns a chain's call counters into a bill.
+//
+// The rate is per request because that is how the metering measured out: on dRPC,
+// 32,780 CU over 1,639 requests and 40,780 over 2,039 are both exactly 20 CU per
+// call, so nothing here needs a per-method table.
+func (s *Server) rpcUsage(src chain.Source) *rpcStatus {
+	m, ok := src.(chain.MeteredSource)
+	if !ok {
+		return nil
+	}
+	calls, total := m.RPCCalls()
+	uptime := time.Since(s.started)
+	hours := uptime.Hours()
+
+	out := &rpcStatus{
+		Calls:          calls,
+		Total:          total,
+		BilledDirectly: m.BilledDirectly(),
+		Since:          uptime.Round(time.Second).String(),
+	}
+	if hours > 0 {
+		out.CallsPerHour = float64(total) / hours
+	}
+	if !out.BilledDirectly {
+		out.Note = "endpoint is a local light client; the provider is billed for its " +
+			"upstream fetches, which are several per call and not counted here. Treat " +
+			"these numbers as a lower bound."
+	}
+
+	if rate := s.d.Cost.Rate(); rate > 0 {
+		cu := float64(total) * s.d.Cost.CUPerRequest
+		usd := float64(total) * rate
+		out.ComputeUnits = &cu
+		out.USD = &usd
+		if hours > 0 {
+			perDay := usd / hours * 24
+			out.USDPerDay = &perDay
+		}
+	}
+	return out
 }
 
 type pricingStatus struct {
@@ -371,6 +439,7 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 				cs.Candidates, cs.CandidatesReady = cst.Observed, cst.Promotable
 			}
 		}
+		cs.RPC = s.rpcUsage(src)
 		cs.Pricing = &pricingStatus{}
 		if p := s.pricerFor(id); p != nil {
 			src := p.Sources()

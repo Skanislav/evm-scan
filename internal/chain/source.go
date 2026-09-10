@@ -72,9 +72,10 @@ type Source interface {
 
 // Node is a Source backed by a go-ethereum execution client.
 type Node struct {
-	ep  Endpoint
-	rpc *rpc.Client
-	eth *ethclient.Client
+	ep    Endpoint
+	rpc   *rpc.Client
+	eth   *ethclient.Client
+	meter *Meter
 }
 
 // Dial connects to a node. When requireLocal is set, a non-loopback endpoint is
@@ -97,7 +98,7 @@ func Dial(ctx context.Context, raw string, requireLocal bool) (*Node, error) {
 	if err != nil {
 		return nil, fmt.Errorf("chain: dial %s: %w", ep, err)
 	}
-	return &Node{ep: ep, rpc: c, eth: ethclient.NewClient(c)}, nil
+	return &Node{ep: ep, rpc: c, eth: ethclient.NewClient(c), meter: NewMeter()}, nil
 }
 
 func (n *Node) Endpoint() Endpoint { return n.ep }
@@ -105,6 +106,7 @@ func (n *Node) Endpoint() Endpoint { return n.ep }
 func (n *Node) Close() { n.rpc.Close() }
 
 func (n *Node) ChainID(ctx context.Context) (uint64, error) {
+	n.meter.add("eth_chainId")
 	id, err := n.eth.ChainID(ctx)
 	if err != nil {
 		return 0, err
@@ -116,10 +118,12 @@ func (n *Node) ChainID(ctx context.Context) (uint64, error) {
 }
 
 func (n *Node) HeadBlock(ctx context.Context) (uint64, error) {
+	n.meter.add("eth_blockNumber")
 	return n.eth.BlockNumber(ctx)
 }
 
 func (n *Node) HeaderHash(ctx context.Context, number uint64) (common.Hash, error) {
+	n.meter.add("eth_getBlockByNumber")
 	h, err := n.eth.HeaderByNumber(ctx, new(big.Int).SetUint64(number))
 	if err != nil {
 		return common.Hash{}, err
@@ -128,6 +132,7 @@ func (n *Node) HeaderHash(ctx context.Context, number uint64) (common.Hash, erro
 }
 
 func (n *Node) Logs(ctx context.Context, q Query) ([]types.Log, error) {
+	n.meter.add("eth_getLogs")
 	return n.eth.FilterLogs(ctx, q.filter())
 }
 
@@ -141,15 +146,18 @@ func (n *Node) SubscribeLogs(ctx context.Context, q Query, out chan<- types.Log)
 }
 
 func (n *Node) CallAtHead(ctx context.Context, msg ethereum.CallMsg) ([]byte, error) {
+	n.meter.add("eth_call")
 	// nil blockNumber == "latest".
 	return n.eth.CallContract(ctx, msg, nil)
 }
 
 func (n *Node) CodeAt(ctx context.Context, addr common.Address) ([]byte, error) {
+	n.meter.add("eth_getCode")
 	return n.eth.CodeAt(ctx, addr, nil)
 }
 
 func (n *Node) NonceAt(ctx context.Context, addr common.Address) (uint64, error) {
+	n.meter.add("eth_getTransactionCount")
 	return n.eth.NonceAt(ctx, addr, nil)
 }
 

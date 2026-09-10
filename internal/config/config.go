@@ -17,6 +17,28 @@ type Config struct {
 	API      API      `yaml:"api"`
 	Registry Registry `yaml:"registry"`
 	Chains   []Chain  `yaml:"chains"`
+	// Cost prices the RPC bill. Providers meter per request, so what a deployment
+	// costs is a function of how many it makes; this turns the counters into money.
+	Cost Cost `yaml:"cost"`
+}
+
+// Cost describes a provider's metering so the daemon can price its own traffic.
+//
+// Defaults are dRPC's, measured rather than assumed: 32,780 CU over 1,639 requests
+// and 40,780 over 2,039 both give exactly 20 CU per request, on two chains, so the
+// unit is flat per call and not per method. Set these to whatever the provider in
+// use actually charges.
+type Cost struct {
+	CUPerRequest    float64 `yaml:"cu_per_request"`
+	USDPerMillionCU float64 `yaml:"usd_per_million_cu"`
+}
+
+// Rate returns the dollars a single request costs, or 0 when unpriced.
+func (c Cost) Rate() float64 {
+	if c.CUPerRequest <= 0 || c.USDPerMillionCU <= 0 {
+		return 0
+	}
+	return c.CUPerRequest * c.USDPerMillionCU / 1e6
 }
 
 type Database struct {
