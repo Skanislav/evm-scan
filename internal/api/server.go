@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -23,6 +22,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 
 	"github.com/Skanislav/evm-scan/internal/chain"
+	"github.com/Skanislav/evm-scan/internal/chainset"
 	"github.com/Skanislav/evm-scan/internal/config"
 	"github.com/Skanislav/evm-scan/internal/evmlog"
 	"github.com/Skanislav/evm-scan/internal/hintreg"
@@ -34,34 +34,18 @@ import (
 //
 // Kept as an interface so the API depends on behaviour rather than on the indexer
 // package, and so promotion goes through the same path the discovery sweep uses.
-type Worker interface {
-	// Nudge asks the follower to run a tick promptly.
-	Nudge()
-	// Promote turns an observed contract into an indexed asset.
-	Promote(ctx context.Context, addr common.Address, reason string) error
-	// HistoryFloor is the oldest block this chain's node can serve logs for.
-	HistoryFloor() uint64
-	// DiscoveryThresholds are the activity levels at which a candidate qualifies
-	// for promotion.
-	DiscoveryThresholds() (minEvents, minBlocks uint64)
-	// Health reports whether the worker is still doing its job. A worker that
-	// exited, or that has been failing every tick, is unhealthy.
-	Health() error
-}
+// It is defined next to the chain set, which speaks in the same terms.
+type Worker = chainset.Worker
 
 // Deps is everything the HTTP layer needs.
 type Deps struct {
-	Store   *store.Store
-	Sources map[uint64]chain.Source
-	Workers map[uint64]Worker
-	// Pricers read on-chain price sources per chain. A chain without one simply
-	// serves portfolios without values.
-	Pricers map[uint64]*price.Pricer
-	// ChainOrder is the configured order of Sources. Sources is a map, so ranging
-	// it gives a different answer every start; anything that means "the chain this
-	// deployment is mainly about" has to come from here. The first entry is what a
-	// request without an explicit chain_id gets.
-	ChainOrder        []uint64
+	Store *store.Store
+	// Chains is the live set of chains this process runs — their nodes, indexers
+	// and pricers. It is read through rather than copied, because it changes while
+	// the server is up: a chain added over the API has to be visible to the next
+	// request, not to the next restart. Its order is the configured order, and its
+	// first entry is what a request without an explicit chain_id gets.
+	Chains            *chainset.Set
 	Registry          *hintreg.Client
 	RegistryChainID   uint64
 	Publisher         *hintreg.Publisher
@@ -82,7 +66,6 @@ type Server struct {
 	mux *http.ServeMux
 	// started is the epoch for RPC counters, which are per-process.
 	started time.Time
-	chains  []uint64
 	// meta caches token symbol/name/decimals by chain and address. A deployed
 	// contract's metadata does not change, and reading it costs a verified eth_call
 	// on a light client, so it is worth never asking twice.
@@ -92,17 +75,6 @@ type Server struct {
 // New builds the router.
 func New(d Deps) *Server {
 	s := &Server{d: d, mux: http.NewServeMux(), started: time.Now()}
-	for _, id := range d.ChainOrder {
-		if _, ok := d.Sources[id]; ok {
-			s.chains = append(s.chains, id)
-		}
-	}
-	for id := range d.Sources {
-		if slices.Contains(s.chains, id) {
-			continue
-		}
-		s.chains = append(s.chains, id)
-	}
 
 	s.mux.HandleFunc("GET /v1/health", s.health)
 	s.mux.HandleFunc("GET /v1/status", s.status)
@@ -214,17 +186,17 @@ func (s *Server) chainOf(r *http.Request) (uint64, chain.Source, error) {
 		// A second chain is usually there to host the registry, not because the
 		// deployment is equally about both, so default to the first configured one
 		// rather than making every caller name it. An explicit chain_id still wins.
-		if len(s.chains) > 0 {
-			id := s.chains[0]
-			return id, s.d.Sources[id], nil
+		e, ok := s.d.Chains.First()
+		if !ok {
+			return 0, nil, fmt.Errorf("no chains are configured")
 		}
-		return 0, nil, fmt.Errorf("no chains are configured")
+		return e.ID, e.Source, nil
 	}
 	id, err := strconv.ParseUint(raw, 10, 64)
 	if err != nil {
 		return 0, nil, fmt.Errorf("chain_id %q is not a number", raw)
 	}
-	src, ok := s.d.Sources[id]
+	src, ok := s.d.Chains.Source(id)
 	if !ok {
 		return 0, nil, fmt.Errorf("chain_id %d is not indexed by this deployment", id)
 	}
@@ -265,14 +237,15 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	} else {
 		checks["database"] = "ok"
 	}
-	for _, id := range s.chains {
+	for _, e := range s.d.Chains.Entries() {
+		id := e.ID
 		name := fmt.Sprintf("chain_%d", id)
-		if _, err := s.d.Sources[id].HeadBlock(ctx); err != nil {
+		if _, err := e.Source.HeadBlock(ctx); err != nil {
 			fail(name+"_node", err)
 		} else {
 			checks[name+"_node"] = "ok"
 		}
-		if wk, ok := s.d.Workers[id]; ok {
+		if wk, ok := s.d.Chains.Worker(id); ok {
 			if err := wk.Health(); err != nil {
 				fail(name+"_indexer", err)
 			} else {
@@ -406,8 +379,8 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		Publisher string `json:"publisher,omitempty"`
 	}{}
 
-	for _, id := range s.chains {
-		src := s.d.Sources[id]
+	for _, e := range s.d.Chains.Entries() {
+		id, src := e.ID, e.Source
 		ep := src.Endpoint()
 		cs := chainStatus{
 			ChainID:       id,
@@ -434,7 +407,7 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		if cur, err := s.d.Store.DiscoveryCursor(ctx, id); err == nil {
 			cs.DiscoveryCursor = cur
 		}
-		if w, ok := s.d.Workers[id]; ok {
+		if w, ok := s.d.Chains.Worker(id); ok {
 			cs.HistoryFloor = w.HistoryFloor()
 			minEvents, minBlocks := w.DiscoveryThresholds()
 			if cst, err := s.d.Store.CandidateStats(ctx, id, minEvents, minBlocks); err == nil {

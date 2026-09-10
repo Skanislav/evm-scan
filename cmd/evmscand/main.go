@@ -26,10 +26,10 @@ import (
 
 	"github.com/Skanislav/evm-scan/internal/api"
 	"github.com/Skanislav/evm-scan/internal/chain"
+	"github.com/Skanislav/evm-scan/internal/chainset"
 	"github.com/Skanislav/evm-scan/internal/config"
 	"github.com/Skanislav/evm-scan/internal/hintreg"
 	"github.com/Skanislav/evm-scan/internal/indexer"
-	"github.com/Skanislav/evm-scan/internal/price"
 	"github.com/Skanislav/evm-scan/internal/store"
 )
 
@@ -79,18 +79,12 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 		log.Info("database schema up to date")
 	}
 
-	sources := map[uint64]chain.Source{}
-	// Config order, kept because ranging the map above does not preserve it and the
-	// API needs to know which chain a request without an explicit chain_id means.
-	var chainOrder []uint64
-	services := map[uint64]*indexer.Service{}
-	workers := map[uint64]api.Worker{}
-	pricers := map[uint64]*price.Pricer{}
-	defer func() {
-		for _, s := range sources {
-			s.Close()
-		}
-	}()
+	// One set rather than four parallel maps. Config order is its insertion order,
+	// which is what "the chain this deployment is mainly about" means to the API,
+	// and it is guarded because it stops being immutable as soon as a chain can be
+	// added over HTTP.
+	set := chainset.New()
+	defer set.CloseAll()
 
 	for _, c := range cfg.Chains {
 		node, err := chain.Dial(ctx, c.Node, c.RequireLocal())
@@ -110,8 +104,6 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 			return fmt.Errorf("chain %d: node at %s reports chain id %d", c.ChainID, c.Node, actual)
 		}
 
-		sources[c.ChainID] = node
-		chainOrder = append(chainOrder, c.ChainID)
 		svc := indexer.New(node, st, c.ChainID, indexer.Options{
 			ChainName:        c.Name,
 			Confirmations:    c.Confirmations,
@@ -130,8 +122,7 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 				MaxPromotionsPerTick: c.Discovery.MaxPromotionsPerTick,
 			},
 		}, log)
-		services[c.ChainID] = svc
-		workers[c.ChainID] = svc
+		entry := &chainset.Entry{ID: c.ChainID, Name: c.Name, Source: node, Worker: svc}
 
 		log.Info("chain ready",
 			"chain_id", c.ChainID, "name", c.Name,
@@ -142,7 +133,7 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 		// whatever oracles and pools the chain has. Where they come from is worth
 		// a log line: it is the only third-party code in the read path.
 		if p := newPricer(node, c, log); p != nil {
-			pricers[c.ChainID] = p
+			entry.Pricer = p
 			src := p.Sources()
 			log.Info("price discovery enabled",
 				"chain_id", c.ChainID,
@@ -156,6 +147,11 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 		} else {
 			log.Info("price discovery off: no on-chain sources configured for this chain", "chain_id", c.ChainID)
 		}
+
+		if err := set.Add(entry); err != nil {
+			node.Close()
+			return err
+		}
 	}
 
 	var (
@@ -165,14 +161,19 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 	)
 
 	if addr, ok := cfg.RegistryAddress(); ok {
-		regSrc := sources[cfg.Registry.ChainID]
+		regSrc, ok := set.Source(cfg.Registry.ChainID)
+		if !ok {
+			return fmt.Errorf("registry chain %d is not among the configured chains", cfg.Registry.ChainID)
+		}
 		regClient, err = hintreg.NewClient(regSrc, addr)
 		if err != nil {
 			return err
 		}
 
+		// All three read through the set rather than closing over a snapshot of
+		// it, so a chain added while the mirror is running is mirrored at once.
 		head := func(ctx context.Context, chainID uint64) (uint64, bool, error) {
-			src, ok := sources[chainID]
+			src, ok := set.Source(chainID)
 			if !ok {
 				return 0, false, nil
 			}
@@ -181,18 +182,17 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 		}
 
 		code := func(ctx context.Context, chainID uint64, addr common.Address) ([]byte, error) {
-			src, ok := sources[chainID]
+			src, ok := set.Source(chainID)
 			if !ok {
 				return nil, fmt.Errorf("no source for chain %d", chainID)
 			}
 			return src.CodeAt(ctx, addr)
 		}
 
-		nudgeMap := map[uint64]hintreg.Nudger{}
-		for id, svc := range services {
-			nudgeMap[id] = svc
+		nudge := func(chainID uint64) (hintreg.Nudger, bool) {
+			return set.Worker(chainID)
 		}
-		mirror = hintreg.NewMirror(regClient, st, cfg.Registry.ChainID, head, code, nudgeMap, log)
+		mirror = hintreg.NewMirror(regClient, st, cfg.Registry.ChainID, head, code, nudge, log)
 
 		// How this registry settles disputes is fixed at its deployment and is not
 		// something an operator can change, so it belongs in the startup log where it
@@ -232,10 +232,7 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 		Addr: cfg.API.Listen,
 		Handler: api.New(api.Deps{
 			Store:             st,
-			Sources:           sources,
-			ChainOrder:        chainOrder,
-			Workers:           workers,
-			Pricers:           pricers,
+			Chains:            set,
 			Registry:          regClient,
 			RegistryChainID:   cfg.Registry.ChainID,
 			Publisher:         publisher,
@@ -253,7 +250,11 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	for id, svc := range services {
+	for _, e := range set.Entries() {
+		svc, ok := e.Worker.(*indexer.Service)
+		if !ok {
+			continue
+		}
 		wg.Add(1)
 		go func(id uint64, svc *indexer.Service) {
 			defer wg.Done()
@@ -264,7 +265,7 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 				log.Error("indexer stopped", "chain_id", id, "err", err)
 				cancel()
 			}
-		}(id, svc)
+		}(e.ID, svc)
 	}
 
 	if mirror != nil {
@@ -279,7 +280,7 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			publisherLoop(runCtx, publisher, cfg, log)
+			publisherLoop(runCtx, publisher, set, cfg, log)
 		}()
 	}
 
@@ -312,10 +313,10 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 // its challenge window, claim the coverage reward on what has finalized (which is
 // what pays the publisher back), and post a new commitment only when the index or
 // its coverage has actually changed and the registry says it is worth posting.
-func publisherLoop(ctx context.Context, p *hintreg.Publisher, cfg *config.Config, log *slog.Logger) {
-	for _, c := range cfg.Chains {
-		if _, err := p.ResumePending(ctx, c.ChainID); err != nil && ctx.Err() == nil {
-			log.Error("resume pending submissions failed", "chain_id", c.ChainID, "err", err)
+func publisherLoop(ctx context.Context, p *hintreg.Publisher, set *chainset.Set, cfg *config.Config, log *slog.Logger) {
+	for _, id := range set.IDs() {
+		if _, err := p.ResumePending(ctx, id); err != nil && ctx.Err() == nil {
+			log.Error("resume pending submissions failed", "chain_id", id, "err", err)
 		}
 	}
 	if cfg.Registry.AutoPublishInterval <= 0 {
@@ -331,8 +332,8 @@ func publisherLoop(ctx context.Context, p *hintreg.Publisher, cfg *config.Config
 		// finalizing and claiming by the whole interval — and a deployment that
 		// restarts more often than the interval would never settle anything at all.
 		// Everything in a tick is idempotent: nothing is due, nothing is sent.
-		for _, c := range cfg.Chains {
-			publishTick(ctx, p, c.ChainID, cfg.Registry.CommitmentURI, log)
+		for _, id := range set.IDs() {
+			publishTick(ctx, p, id, cfg.Registry.CommitmentURI, log)
 		}
 
 		select {

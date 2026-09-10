@@ -157,10 +157,12 @@ func (s *Server) registerAsset(w http.ResponseWriter, r *http.Request) {
 	}
 
 	chainID := req.ChainID
-	if chainID == 0 && len(s.chains) == 1 {
-		chainID = s.chains[0]
+	if chainID == 0 && s.d.Chains.Len() == 1 {
+		if e, ok := s.d.Chains.First(); ok {
+			chainID = e.ID
+		}
 	}
-	src, ok := s.d.Sources[chainID]
+	src, ok := s.d.Chains.Source(chainID)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "unknown chain", nil)
 		return
@@ -208,7 +210,7 @@ func (s *Server) registerAsset(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "registration failed", err)
 		return
 	}
-	if wk, ok := s.d.Workers[chainID]; ok {
+	if wk, ok := s.d.Chains.Worker(chainID); ok {
 		wk.Nudge()
 	}
 
@@ -579,10 +581,12 @@ func (s *Server) createEpoch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	chainID := req.ChainID
-	if chainID == 0 && len(s.chains) == 1 {
-		chainID = s.chains[0]
+	if chainID == 0 && s.d.Chains.Len() == 1 {
+		if e, ok := s.d.Chains.First(); ok {
+			chainID = e.ID
+		}
 	}
-	if _, ok := s.d.Sources[chainID]; !ok {
+	if _, ok := s.d.Chains.Source(chainID); !ok {
 		writeErr(w, http.StatusBadRequest, "unknown chain", nil)
 		return
 	}
@@ -753,7 +757,7 @@ func (s *Server) listCandidates(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var minEvents, minBlocks uint64
-	if wk, ok := s.d.Workers[chainID]; ok {
+	if wk, ok := s.d.Chains.Worker(chainID); ok {
 		minEvents, minBlocks = wk.DiscoveryThresholds()
 	}
 
@@ -776,7 +780,7 @@ func (s *Server) listCandidates(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if src, ok := s.d.Sources[chainID]; ok {
+	if src, ok := s.d.Chains.Source(chainID); ok {
 		addrs := make([]common.Address, len(out))
 		for i := range out {
 			addrs[i] = common.HexToAddress(out[i].Address)
@@ -813,7 +817,7 @@ func (s *Server) promoteCandidate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad address", err)
 		return
 	}
-	worker, ok := s.d.Workers[chainID]
+	worker, ok := s.d.Chains.Worker(chainID)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "unknown chain", nil)
 		return
