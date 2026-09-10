@@ -29,7 +29,6 @@ import (
 	"github.com/Skanislav/evm-scan/internal/chainset"
 	"github.com/Skanislav/evm-scan/internal/config"
 	"github.com/Skanislav/evm-scan/internal/hintreg"
-	"github.com/Skanislav/evm-scan/internal/indexer"
 	"github.com/Skanislav/evm-scan/internal/store"
 )
 
@@ -86,54 +85,26 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 	set := chainset.New()
 	defer set.CloseAll()
 
+	var wg sync.WaitGroup
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	sv := &supervisor{st: st, set: set, log: log, runCtx: runCtx, cancel: cancel, wg: &wg}
+
 	for _, c := range cfg.Chains {
-		node, err := chain.Dial(ctx, c.Node, c.RequireLocal())
-		if err != nil {
+		if err := sv.startConfigChain(ctx, c); err != nil {
 			return err
 		}
-
-		// A node pointed at the wrong network would silently produce a wrong index,
-		// so verify rather than trust the config.
-		actual, err := node.ChainID(ctx)
-		if err != nil {
-			node.Close()
-			return fmt.Errorf("chain %d: read chain id: %w", c.ChainID, err)
-		}
-		if actual != c.ChainID {
-			node.Close()
-			return fmt.Errorf("chain %d: node at %s reports chain id %d", c.ChainID, c.Node, actual)
-		}
-
-		svc := indexer.New(node, st, c.ChainID, indexer.Options{
-			ChainName:        c.Name,
-			Confirmations:    c.Confirmations,
-			BackfillWindow:   c.BackfillWindow,
-			TailWindow:       c.TailWindow,
-			PollInterval:     c.PollInterval.D(),
-			BackfillInterval: c.BackfillInterval.D(),
-			Discovery: indexer.DiscoveryOptions{
-				Enabled:              c.Discovery.Enabled,
-				Lookback:             c.Discovery.Lookback,
-				MaxBlocksPerTick:     c.Discovery.MaxBlocksPerTick,
-				Interval:             c.Discovery.Interval.D(),
-				AutoPromote:          c.Discovery.AutoPromote,
-				MinEvents:            c.Discovery.MinEvents,
-				MinBlocks:            c.Discovery.MinBlocks,
-				MaxPromotionsPerTick: c.Discovery.MaxPromotionsPerTick,
-			},
-		}, log)
-		entry := &chainset.Entry{ID: c.ChainID, Name: c.Name, Source: node, Worker: svc}
-
+		e, _ := set.Get(c.ChainID)
 		log.Info("chain ready",
 			"chain_id", c.ChainID, "name", c.Name,
-			"node", node.Endpoint().String(), "confirmations", c.Confirmations,
+			"node", e.Source.Endpoint().String(), "confirmations", c.Confirmations,
 			"discovery", c.Discovery.Enabled, "auto_promote", c.Discovery.AutoPromote)
 
 		// Prices come off the same node, through the same deployless trick, from
 		// whatever oracles and pools the chain has. Where they come from is worth
 		// a log line: it is the only third-party code in the read path.
-		if p := newPricer(node, c, log); p != nil {
-			entry.Pricer = p
+		if p := e.Pricer; p != nil {
 			src := p.Sources()
 			log.Info("price discovery enabled",
 				"chain_id", c.ChainID,
@@ -147,12 +118,32 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 		} else {
 			log.Info("price discovery off: no on-chain sources configured for this chain", "chain_id", c.ChainID)
 		}
+	}
 
-		if err := set.Add(entry); err != nil {
-			node.Close()
-			return err
+	// Chains somebody added over the API in an earlier run. They come up after
+	// the config ones, so the configured first chain stays the one a request
+	// without a chain_id means. A failure here is not fatal — the operator can
+	// fix the endpoint through the same API that added it.
+	if stored, err := st.ListChainProfiles(ctx, true); err == nil {
+		for _, p := range stored {
+			if p.Source == store.ChainSourceConfig {
+				continue
+			}
+			if _, running := set.Get(p.ChainID); running {
+				continue
+			}
+			if err := sv.StartStored(ctx, p); err != nil {
+				log.Warn("could not restart a chain added earlier",
+					"chain_id", p.ChainID, "name", p.Name, "err", err)
+			}
 		}
 	}
+
+	// Chain names resolve through ENS's on.eth registry, which lives on Ethereum
+	// mainnet. A deployment that indexes mainnet already has the node for it and
+	// pays nothing extra; one that does not can point ens.node at any mainnet
+	// endpoint, since this is a read at head and nothing else.
+	ensResolver := newENSResolver(ctx, set, cfg, log)
 
 	var (
 		regClient *hintreg.Client
@@ -233,6 +224,9 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 		Handler: api.New(api.Deps{
 			Store:             st,
 			Chains:            set,
+			StartChain:        sv.StartStored,
+			StopChain:         sv.Stop,
+			ENS:               ensResolver,
 			Registry:          regClient,
 			RegistryChainID:   cfg.Registry.ChainID,
 			Publisher:         publisher,
@@ -244,28 +238,6 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 			Log:               log,
 		}).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
-	}
-
-	var wg sync.WaitGroup
-	runCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	for _, e := range set.Entries() {
-		svc, ok := e.Worker.(*indexer.Service)
-		if !ok {
-			continue
-		}
-		wg.Add(1)
-		go func(id uint64, svc *indexer.Service) {
-			defer wg.Done()
-			if err := svc.Run(runCtx); err != nil && runCtx.Err() == nil {
-				// An indexer that cannot run is a process that cannot do its job.
-				// Exit so the supervisor restarts it, rather than serving stale
-				// answers behind a healthy-looking API.
-				log.Error("indexer stopped", "chain_id", id, "err", err)
-				cancel()
-			}
-		}(e.ID, svc)
 	}
 
 	if mirror != nil {

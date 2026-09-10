@@ -24,6 +24,7 @@ import (
 	"github.com/Skanislav/evm-scan/internal/chain"
 	"github.com/Skanislav/evm-scan/internal/chainset"
 	"github.com/Skanislav/evm-scan/internal/config"
+	"github.com/Skanislav/evm-scan/internal/ens"
 	"github.com/Skanislav/evm-scan/internal/evmlog"
 	"github.com/Skanislav/evm-scan/internal/hintreg"
 	"github.com/Skanislav/evm-scan/internal/price"
@@ -45,7 +46,18 @@ type Deps struct {
 	// the server is up: a chain added over the API has to be visible to the next
 	// request, not to the next restart. Its order is the configured order, and its
 	// first entry is what a request without an explicit chain_id gets.
-	Chains            *chainset.Set
+	Chains *chainset.Set
+	// StartChain brings a chain up: dial, verify the node's own chain id against
+	// the one asked for, persist, start indexing. Supplied by cmd/evmscand,
+	// because that is the only place that knows how to build an indexer — putting
+	// it behind a func is what keeps this package's dependency on the indexer down
+	// to the Worker interface. Nil means this deployment cannot add chains.
+	StartChain func(ctx context.Context, p store.ChainProfile) error
+	// StopChain stops one and closes its node.
+	StopChain func(ctx context.Context, chainID uint64) error
+	// ENS resolves chain names through the on.eth registry. Nil where the
+	// deployment has no Ethereum mainnet endpoint to ask.
+	ENS               *ens.Resolver
 	Registry          *hintreg.Client
 	RegistryChainID   uint64
 	Publisher         *hintreg.Publisher
@@ -78,6 +90,11 @@ func New(d Deps) *Server {
 
 	s.mux.HandleFunc("GET /v1/health", s.health)
 	s.mux.HandleFunc("GET /v1/status", s.status)
+	s.mux.HandleFunc("GET /v1/chains", s.listChains)
+	s.mux.HandleFunc("GET /v1/chains/resolve", s.resolveChain)
+	s.mux.HandleFunc("POST /v1/chains", s.addChain)
+	s.mux.HandleFunc("PATCH /v1/chains/{id}", s.patchChain)
+	s.mux.HandleFunc("DELETE /v1/chains/{id}", s.deleteChain)
 	s.mux.HandleFunc("GET /v1/assets", s.listAssets)
 	s.mux.HandleFunc("POST /v1/assets", s.registerAsset)
 	s.mux.HandleFunc("GET /v1/assets/{address}", s.getAsset)
@@ -112,7 +129,7 @@ func (s *Server) withMiddleware(next http.Handler) http.Handler {
 		if o := s.d.CORSOrigin; o != "" {
 			w.Header().Set("Access-Control-Allow-Origin", o)
 			w.Header().Set("Access-Control-Allow-Headers", "content-type, authorization")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
 		}
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
@@ -131,12 +148,23 @@ func (s *Server) withMiddleware(next http.Handler) http.Handler {
 // quota: publishing an epoch is the publisher's gas, and promoting or registering
 // an asset is a backfill against a paid RPC. Reads are never guarded — the whole
 // point of the index is that anyone can query it.
+//
+// Adding a chain is the largest of these by some way. An epoch or a promotion is
+// one bounded spend; a chain is a per-block RPC bill from then on. And a PATCH
+// that sets trust to "verified" is larger still, because it puts the publisher's
+// bond behind logs served by a node we do not run — the only call here that can
+// lose money that gas and quota cannot. Both are behind the token.
 func spendsSomething(r *http.Request) bool {
-	if r.Method != http.MethodPost {
+	p := r.URL.Path
+	switch r.Method {
+	case http.MethodPost:
+		return p == "/v1/epochs" || p == "/v1/assets" || p == "/v1/chains" ||
+			strings.HasSuffix(p, "/promote")
+	case http.MethodPatch, http.MethodDelete:
+		return strings.HasPrefix(p, "/v1/chains/")
+	default:
 		return false
 	}
-	p := r.URL.Path
-	return p == "/v1/epochs" || p == "/v1/assets" || strings.HasSuffix(p, "/promote")
 }
 
 // authorized checks the bearer token on the endpoints that spend. With no token

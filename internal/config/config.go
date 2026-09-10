@@ -17,6 +17,9 @@ type Config struct {
 	API      API      `yaml:"api"`
 	Registry Registry `yaml:"registry"`
 	Chains   []Chain  `yaml:"chains"`
+	// ENS resolves chain names through the on.eth registry, so a network can be
+	// added by name rather than by chain id.
+	ENS ENS `yaml:"ens"`
 	// Cost prices the RPC bill. Providers meter per request, so what a deployment
 	// costs is a function of how many it makes; this turns the counters into money.
 	Cost Cost `yaml:"cost"`
@@ -40,6 +43,29 @@ func (c Cost) Rate() float64 {
 	}
 	return c.CUPerRequest * c.USDPerMillionCU / 1e6
 }
+
+// ENS configures chain-name resolution through the on.eth registry.
+//
+// The registry lives on Ethereum mainnet and holds identity only: a name, a chain
+// id, a website, an icon. It publishes no RPC endpoints — which is right, since
+// an endpoint URL is where an API key lives — so this never removes the need for
+// the operator to supply a node, it only removes the need to remember a number.
+type ENS struct {
+	// Disabled turns name resolution off entirely. Chains can still be added by
+	// chain id, which is how most of them are added anyway.
+	Disabled bool `yaml:"disabled"`
+	// Node is a mainnet endpoint used only for resolution, for deployments that
+	// do not index mainnet. Left empty, an indexed mainnet chain is used and
+	// nothing extra is dialled.
+	Node string `yaml:"node"`
+	// Resolver overrides the on.eth chain resolver address. Empty uses the
+	// well-known deployment, which is echoed in every response that used it.
+	Resolver string `yaml:"resolver"`
+}
+
+// Enabled resolves the flag. Resolution is on by default: it costs one eth_call
+// on a node the deployment already has, and only when somebody asks.
+func (e ENS) Enabled() bool { return !e.Disabled }
 
 type Database struct {
 	DSN string `yaml:"dsn"`
