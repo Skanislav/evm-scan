@@ -53,6 +53,21 @@ fs.writeFileSync(
   JSON.stringify(input, null, 2) + '\n',
 );
 
+// The compiler's own full version, which is the one an explorer wants: a release
+// is identified by its commit, and "0.8.28" alone is rejected as unsupported.
+// solc reports it with a build suffix that the explorer does not use, so record
+// both rather than leaving a script to guess which form is wanted.
+const fullVersion = solc.version();
+const commitMatch = /^(\d+\.\d+\.\d+\+commit\.[0-9a-f]+)/.exec(fullVersion);
+fs.writeFileSync(
+  path.join(OUT, 'compiler.json'),
+  JSON.stringify({
+    version: fullVersion,
+    etherscan: commitMatch ? `v${commitMatch[1]}` : null,
+    settings: input.settings,
+  }, null, 2) + '\n',
+);
+
 let failed = false;
 for (const err of out.errors || []) {
   const msg = err.formattedMessage || err.message;

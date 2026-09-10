@@ -13,13 +13,14 @@ than because of the arguments.
 
 import json
 import sys
+import time
 import urllib.request
 
 
-def rpc(url, method, params, tries=4):
+def rpc(url, method, params, tries=5):
     body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
     last = None
-    for _ in range(tries):
+    for attempt in range(tries):
         try:
             req = urllib.request.Request(
                 url, body.encode(), {"content-type": "application/json"}
@@ -27,7 +28,11 @@ def rpc(url, method, params, tries=4):
             return json.load(urllib.request.urlopen(req, timeout=60))
         except Exception as exc:  # a rate limit or a blip, not an answer
             last = exc
-    raise SystemExit(f"rpc {method} failed: {last}")
+            if attempt < tries - 1:
+                # Retrying a rate limit immediately just spends the next token on
+                # another refusal; back off instead.
+                time.sleep(2 ** attempt)
+    raise SystemExit(f"rpc {method} failed after {tries} attempts: {last}")
 
 
 def creation_code(artifact):

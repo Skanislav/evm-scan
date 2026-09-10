@@ -1,0 +1,20 @@
+{
+  "version": "0.8.28+commit.7893614a.Emscripten.clang",
+  "etherscan": "v0.8.28+commit.7893614a",
+  "settings": {
+    "optimizer": {
+      "enabled": true,
+      "runs": 200
+    },
+    "evmVersion": "cancun",
+    "outputSelection": {
+      "*": {
+        "*": [
+          "abi",
+          "evm.bytecode.object",
+          "evm.deployedBytecode.object"
+        ]
+      }
+    }
+  }
+}

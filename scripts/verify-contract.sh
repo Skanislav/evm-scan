@@ -37,16 +37,21 @@ done
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 INPUT="$ROOT/contracts/out/standard-input.json"
+COMPILER="$ROOT/contracts/out/compiler.json"
 ART="$ROOT/contracts/out/$NAME.json"
-for f in "$INPUT" "$ART"; do
+for f in "$INPUT" "$COMPILER" "$ART"; do
   [[ -f "$f" ]] || { echo "$f missing; run: make contracts" >&2; exit 1; }
 done
 
 ARGS="$(python3 "$ROOT/scripts/ctor-args.py" "$RPC" "$TX" "$ART")"
-SOLC="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["dependencies"]["solc"].lstrip("^~="))' "$ROOT/scripts/package.json")"
+# An explorer identifies a release by its commit: "v0.8.28" alone is rejected as an
+# unsupported version. compiler.json carries the form it wants, recorded by the
+# build rather than assembled here from a semver range in package.json.
+SOLC="$(python3 -c 'import json,sys; v=json.load(open(sys.argv[1]))["etherscan"]; print(v or "")' "$COMPILER")"
+[[ -n "$SOLC" ]] || { echo "no etherscan compiler version in $COMPILER; run: make contracts" >&2; exit 1; }
 
 echo "verifying $NAME at $ADDRESS on chain $CHAIN"
-echo "  compiler   v$SOLC"
+echo "  compiler   $SOLC"
 echo "  ctor args  ${#ARGS} hex chars"
 
 RESP="$(curl -s -X POST "https://api.etherscan.io/v2/api?chainid=$CHAIN" \
@@ -56,7 +61,7 @@ RESP="$(curl -s -X POST "https://api.etherscan.io/v2/api?chainid=$CHAIN" \
   --data-urlencode "codeformat=solidity-standard-json-input" \
   --data-urlencode "contractaddress=$ADDRESS" \
   --data-urlencode "contractname=$NAME.sol:$NAME" \
-  --data-urlencode "compilerversion=v$SOLC" \
+  --data-urlencode "compilerversion=$SOLC" \
   --data-urlencode "constructorArguements=$ARGS" \
   --data-urlencode "sourceCode@$INPUT")"
 
