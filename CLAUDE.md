@@ -101,10 +101,33 @@ shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module 
   `merkle.CoverageLeaf` must match `HintRegistry.coverageLeaf` byte-for-byte; the
   hermetic `registry_sim_test.go` runs the whole loop on go-ethereum's simulated backend.
   docs/TOKENOMICS.md is the full design; only its minimum is built.
-- Chains are fixed at startup and assets are keyed `(chain_id, address)` with no
-  identity above a chain. docs/MULTICHAIN.md designs runtime chain registration
-  (ENS `on.eth` name -> chain id, operator-supplied RPC) and cross-chain asset
-  groups; none of it is built, so treat that file as intent, not description.
+- `internal/chainset` is the live set of running chains — source, worker, pricer per
+  chain, behind an RWMutex, in config order. Everything that used to range a map of
+  chains reads through it, because the set changes while the process is up. It does
+  no construction on purpose: that lives in `cmd/evmscand/chains.go` (`supervisor`),
+  which is what keeps `internal/api`'s dependency on the indexer down to the `Worker`
+  interface. `supervisor.StartStored` is what `POST /v1/chains` calls.
+- A network can be added at runtime: `POST /v1/chains` dials the operator's RPC,
+  cross-checks `eth_chainId` against the id asked for, persists to `chains`
+  (migration 0006) and starts indexing. `internal/ens` resolves `<label>.on.eth`
+  through ENS's chain registry on mainnet — ENSIP-10 wildcard `resolve` wrapping an
+  ENSIP-24 `data()` record holding an ERC-7930 chain-only address — so a network can
+  be named rather than numbered. It is on-chain, one `eth_call` at head, no gateway.
+  The registry carries identity only; the RPC endpoint is always operator-supplied.
+  `internal/chainprofile` holds the per-chain tuning ENS does not carry (block time,
+  confirmations, log windows, native asset), since a confirmation depth copied
+  between chains means a different amount of wall clock on each.
+- `chains.trust` decides whether a chain's data may back a commitment. Loopback and
+  verifying light clients are `verified`; a third-party RPC is `unverified` and
+  `Publisher.Build` refuses it with `ErrUntrusted` — a bond is money staked on logs
+  we did not verify. An operator may promote a chain with
+  `PATCH /v1/chains/{id} {"trust":"verified"}`, which is behind `EVMSCAN_API_TOKEN`
+  and recorded in `trust_set_at`/`trust_set_by`. Resolving a chain's ENS name proves
+  a name maps to a chain id and says nothing about who serves the logs; it must never
+  raise trust.
+- docs/MULTICHAIN.md is the full design. Steps 1–6 of its §12 are built; cross-chain
+  asset identity (`asset_groups`, the bridge-selector probe, the lens fan-out) and the
+  registry demand table are designed and not built.
 - `internal/merkle` must match `HintRegistry.leafHash` / `verifyInclusion` byte-for-byte:
   leaf = `keccak256(abi.encode(account, chainId, keccak256(abi.encodePacked(sorted unique
   assets))))`, sorted-pair keccak tree. Changing either side requires changing the other and

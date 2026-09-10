@@ -31,13 +31,25 @@ type memStore struct {
 	cursors  []store.Cursor
 	from     uint64
 	to       uint64
+	// profiles is empty by default, which means "no chain row", which Build
+	// treats as trusted — that is the pre-0006 database case, and it keeps every
+	// existing test here about what it was about.
+	profiles map[uint64]store.ChainProfile
 }
 
 func newMemStore() *memStore {
 	return &memStore{
 		epochs: map[int64]*store.Epoch{}, coverage: map[int64][]store.EpochCoverage{},
-		nextID: 1, from: 10, to: 20,
+		nextID: 1, from: 10, to: 20, profiles: map[uint64]store.ChainProfile{},
 	}
+}
+
+func (m *memStore) GetChainProfile(_ context.Context, chainID uint64) (store.ChainProfile, error) {
+	p, ok := m.profiles[chainID]
+	if !ok {
+		return store.ChainProfile{}, store.ErrNotFound
+	}
+	return p, nil
 }
 
 func (m *memStore) CoverageRange(context.Context, uint64) (uint64, uint64, error) {
@@ -267,6 +279,55 @@ func newFixture(t *testing.T) *fixture {
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	pub := newPublisher(reg, sub, st, log)
 	return &fixture{st: st, sub: sub, reg: reg, pub: pub}
+}
+
+// TestBuildRefusesUntrustedChain is what makes the trust level mean something
+// rather than being a label in an API response.
+//
+// A commitment is bonded. For a chain read over a third-party RPC we cannot know
+// the logs are complete — a provider that dropped one would be discovered by a
+// successful challenge, which is to say by losing the bond. So the refusal lives
+// in Build rather than in the auto-publish loop, because POST /v1/epochs reaches
+// Build without going anywhere near the loop.
+func TestBuildRefusesUntrustedChain(t *testing.T) {
+	for _, trust := range []string{store.TrustUnverified, store.TrustQuarantined} {
+		t.Run(trust, func(t *testing.T) {
+			f := newFixture(t)
+			f.st.profiles[1] = store.ChainProfile{ChainID: 1, Trust: trust}
+			ctx := context.Background()
+
+			if _, err := f.pub.Build(ctx, 1, "", false); !errors.Is(err, ErrUntrusted) {
+				t.Fatalf("Build = %v, want ErrUntrusted", err)
+			}
+			// force means "post it anyway, the root has not changed". There is no
+			// version of it that should mean "stake the bond anyway".
+			if _, err := f.pub.Build(ctx, 1, "", true); !errors.Is(err, ErrUntrusted) {
+				t.Errorf("force overrode the trust check: %v", err)
+			}
+			if len(f.st.epochs) != 0 {
+				t.Errorf("a refused build stored %d epochs", len(f.st.epochs))
+			}
+		})
+	}
+}
+
+func TestBuildAllowsVerifiedChain(t *testing.T) {
+	f := newFixture(t)
+	f.st.profiles[1] = store.ChainProfile{ChainID: 1, Trust: store.TrustVerified}
+	if _, err := f.pub.Build(context.Background(), 1, "", false); err != nil {
+		t.Fatalf("Build on a verified chain: %v", err)
+	}
+}
+
+// TestBuildAllowsChainWithNoProfile pins the upgrade path. Profiles are written
+// when a chain starts, so the only way to reach Build without one is a database
+// that predates migration 0006 — where refusing would silently stop a working
+// deployment from publishing, which is worse than what the check guards against.
+func TestBuildAllowsChainWithNoProfile(t *testing.T) {
+	f := newFixture(t)
+	if _, err := f.pub.Build(context.Background(), 1, "", false); err != nil {
+		t.Fatalf("Build with no chain row: %v", err)
+	}
 }
 
 // publishedReceipt fakes a successful publishIndex receipt carrying IndexPublished.

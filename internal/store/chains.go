@@ -45,8 +45,8 @@ type ChainProfile struct {
 	NativeDecimals int16
 	WrappedNative  *common.Address
 
-	// Tuning is the raw JSON of the per-chain knobs. Opaque here on purpose: the
-	// store's job is to keep it, not to understand it.
+	// Tuning is the per-chain knobs, stored as one JSON blob because it is written
+	// and read whole and never queried into. ChainTuning is its shape.
 	Tuning json.RawMessage
 
 	ENSName     string
@@ -228,6 +228,28 @@ func scanChainProfile(r scannable) (ChainProfile, error) {
 	}
 	p.Tuning = json.RawMessage(tuning)
 	return p, nil
+}
+
+// ChainTuning is the shape of ChainProfile.Tuning.
+//
+// It lives here, next to the column that holds it, because both ends of the round
+// trip need it: the API writes one when a chain is added, and the daemon reads it
+// back to build an indexer. Two independent copies of these field names would be a
+// silent-drift bug waiting for somebody to rename a JSON tag on one side only.
+//
+// Durations are strings so the blob stays readable in psql — "2s" rather than
+// 2000000000 — and so an unset one is distinguishable from a zero.
+type ChainTuning struct {
+	Confirmations    uint64 `json:"confirmations"`
+	BackfillWindow   uint64 `json:"backfill_window"`
+	TailWindow       uint64 `json:"tail_window"`
+	PollInterval     string `json:"poll_interval"`
+	BackfillInterval string `json:"backfill_interval"`
+	Discovery        struct {
+		Enabled  bool   `json:"enabled"`
+		Lookback uint64 `json:"lookback"`
+		Interval string `json:"interval"`
+	} `json:"discovery"`
 }
 
 func nullStr(s string) *string {

@@ -287,21 +287,8 @@ func trustForEndpoint(ep chain.Endpoint) string {
 // The tuning blob
 // --------------------------------------------------------------------------
 
-type chainTuning struct {
-	Confirmations    uint64 `json:"confirmations"`
-	BackfillWindow   uint64 `json:"backfill_window"`
-	TailWindow       uint64 `json:"tail_window"`
-	PollInterval     string `json:"poll_interval"`
-	BackfillInterval string `json:"backfill_interval"`
-	Discovery        struct {
-		Enabled  bool   `json:"enabled"`
-		Lookback uint64 `json:"lookback"`
-		Interval string `json:"interval"`
-	} `json:"discovery"`
-}
-
 func tuningJSON(o indexer.Options) json.RawMessage {
-	var t chainTuning
+	var t store.ChainTuning
 	t.Confirmations = o.Confirmations
 	t.BackfillWindow = o.BackfillWindow
 	t.TailWindow = o.TailWindow
@@ -321,8 +308,8 @@ func tuningJSON(o indexer.Options) json.RawMessage {
 // chain's built-in profile. A zero window is not a valid instruction — SweepLogs
 // would silently substitute its own default, which is the "inherited the wrong
 // chain's numbers" failure chainprofile exists to prevent.
-func parseTuning(raw json.RawMessage, p chainprofile.Profile) chainTuning {
-	var t chainTuning
+func parseTuning(raw json.RawMessage, p chainprofile.Profile) store.ChainTuning {
+	var t store.ChainTuning
 	if len(raw) > 0 {
 		_ = json.Unmarshal(raw, &t)
 	}

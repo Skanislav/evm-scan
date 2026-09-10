@@ -265,22 +265,6 @@ type addChainRequest struct {
 	} `json:"discovery"`
 }
 
-// tuning is the JSON blob stored in chains.profile, and what cmd/evmscand reads
-// back to build an indexer. Kept here rather than in store because store's job is
-// to keep it, not to understand it.
-type tuning struct {
-	Confirmations    uint64 `json:"confirmations"`
-	BackfillWindow   uint64 `json:"backfill_window"`
-	TailWindow       uint64 `json:"tail_window"`
-	PollInterval     string `json:"poll_interval"`
-	BackfillInterval string `json:"backfill_interval"`
-	Discovery        struct {
-		Enabled  bool   `json:"enabled"`
-		Lookback uint64 `json:"lookback"`
-		Interval string `json:"interval"`
-	} `json:"discovery"`
-}
-
 func (s *Server) addChain(w http.ResponseWriter, r *http.Request) {
 	if s.d.StartChain == nil {
 		writeErr(w, http.StatusNotImplemented, "this deployment cannot add chains at runtime", nil)
@@ -380,13 +364,12 @@ func (s *Server) addChain(w http.ResponseWriter, r *http.Request) {
 		prof.Trust = store.TrustVerified
 	}
 
-	t := tuning{
-		Confirmations:    p.Confirmations,
-		BackfillWindow:   p.BackfillWindow,
-		TailWindow:       p.TailWindow,
-		PollInterval:     p.PollInterval.String(),
-		BackfillInterval: p.BackfillInterval.String(),
-	}
+	var t store.ChainTuning
+	t.Confirmations = p.Confirmations
+	t.BackfillWindow = p.BackfillWindow
+	t.TailWindow = p.TailWindow
+	t.PollInterval = p.PollInterval.String()
+	t.BackfillInterval = p.BackfillInterval.String()
 	// Discovery is off unless asked for, and that default is worth explaining.
 	// The sweep queries eth_getLogs with no address filter, which is the single
 	// most restricted call on a shared endpoint — free tiers routinely answer it

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math/big"
 	"net/http"
 	"strconv"
@@ -603,6 +604,14 @@ func (s *Server) createEpoch(w http.ResponseWriter, r *http.Request) {
 	}
 	if errors.Is(err, hintreg.ErrUnfunded) {
 		writeErr(w, http.StatusPaymentRequired, "coverage is worth less than the publisher's minimum; fund the assets or lower min_expected_reward_wei", err)
+		return
+	}
+	if errors.Is(err, hintreg.ErrUntrusted) {
+		writeErr(w, http.StatusForbidden,
+			fmt.Sprintf("chain %d is not verified, so its data may not back a bonded commitment", chainID),
+			fmt.Errorf("%w — its logs came from a node this deployment does not run; "+
+				`promote it deliberately with PATCH /v1/chains/%d {"trust":"verified"} if you `+
+				"are willing to stake the publisher's bond on that endpoint", err, chainID))
 		return
 	}
 	if err != nil {

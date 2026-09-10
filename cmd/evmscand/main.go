@@ -337,7 +337,11 @@ func publishTick(ctx context.Context, p *hintreg.Publisher, chainID uint64, uri 
 	}
 
 	e, err := p.Build(ctx, chainID, uri, false)
-	if errors.Is(err, hintreg.ErrEmptyIndex) || errors.Is(err, hintreg.ErrUnchanged) || errors.Is(err, hintreg.ErrUnfunded) {
+	// All four are ordinary reasons not to post, not failures: nothing to commit,
+	// nothing new to commit, nobody paying for it, or a chain whose logs came
+	// from a node we do not run and therefore cannot stake a bond on.
+	if errors.Is(err, hintreg.ErrEmptyIndex) || errors.Is(err, hintreg.ErrUnchanged) ||
+		errors.Is(err, hintreg.ErrUnfunded) || errors.Is(err, hintreg.ErrUntrusted) {
 		return
 	}
 	if err != nil {
