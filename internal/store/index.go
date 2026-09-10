@@ -355,37 +355,47 @@ type AssetMembers struct {
 // needs to draw them.
 //
 // It is paged rather than capped so that a caller can keep going. The order —
-// busiest asset first — is total and stable, so page n+1 is the next n assets and
-// never a reshuffle of the ones already drawn. total is the number of assets that
-// have any account at all, which is what says whether another page exists; it is
-// carried on the rows, so a page past the end reports zero of both.
+// busiest asset first, by the logs_seen counter the follower keeps — is total and
+// stable, so page n+1 is the next n assets and never a reshuffle of the ones
+// already drawn. total is the number of assets that have any account at all, which
+// is what says whether another page exists; it is carried on the rows, so a page
+// past the end reports zero of both.
 func (s *Store) GraphMemberships(ctx context.Context, chainID uint64, limit, offset, perAsset int) (rowsOut []AssetMembers, total uint64, err error) {
 	rows, err := s.pool.Query(ctx, `
-		WITH sized AS (
+		WITH ranked AS (
+			-- Ordered by logs_seen, the counter the follower already maintains,
+			-- rather than by a COUNT over interactions. Counting every asset's rows
+			-- to decide which forty to show costs the whole table on every request,
+			-- including every "load more"; this costs one index lookup per asset.
+			-- EXISTS keeps an asset with no accounts out of the page and out of
+			-- total, without counting its rows either.
 			SELECT a.address, a.standard, a.symbol, a.name,
-			       (SELECT COUNT(*) FROM interactions i
-			         WHERE i.chain_id = a.chain_id AND i.asset = a.address) AS holders
+			       COALESCE(c.logs_seen, 0) AS activity,
+			       COUNT(*) OVER () AS total
 			FROM assets a
+			LEFT JOIN asset_cursors c
+			       ON c.chain_id = a.chain_id AND c.address = a.address
 			WHERE a.chain_id = $1 AND a.status <> 'revoked'
-		),
-		top AS (
-			-- The window runs before LIMIT, so this counts every asset with an
-			-- account, not just the ones on this page.
-			SELECT *, COUNT(*) OVER () AS total FROM sized WHERE holders > 0
-			ORDER BY holders DESC, address
+			  AND EXISTS (SELECT 1 FROM interactions i
+			               WHERE i.chain_id = a.chain_id AND i.asset = a.address)
+			ORDER BY activity DESC, a.address
 			LIMIT $2 OFFSET $3
 		)
-		SELECT t.address, t.standard, t.symbol, t.name, t.holders, t.total,
+		SELECT r.address, r.standard, r.symbol, r.name, r.total,
+		       -- Only the assets on this page are counted, so the cost is the page's,
+		       -- not the index's.
+		       (SELECT COUNT(*) FROM interactions i
+		         WHERE i.chain_id = $1 AND i.asset = r.address) AS holders,
 		       m.account, m.first_block, m.last_block, m.event_count, m.roles
-		FROM top t
+		FROM ranked r
 		JOIN LATERAL (
 			SELECT account, first_block, last_block, event_count, roles
 			FROM interactions i
-			WHERE i.chain_id = $1 AND i.asset = t.address
+			WHERE i.chain_id = $1 AND i.asset = r.address
 			ORDER BY event_count DESC, account
 			LIMIT $4
 		) m ON TRUE
-		ORDER BY t.holders DESC, t.address, m.event_count DESC, m.account`,
+		ORDER BY r.activity DESC, r.address, m.event_count DESC, m.account`,
 		int64(chainID), limit, offset, perAsset)
 	if err != nil {
 		return nil, 0, err
@@ -402,7 +412,7 @@ func (s *Store) GraphMemberships(ctx context.Context, chainID uint64, limit, off
 			fb, lb, ec   int64
 			roles        int32
 		)
-		if err := rows.Scan(&addr, &standard, &symbol, &name, &holders, &tot,
+		if err := rows.Scan(&addr, &standard, &symbol, &name, &tot, &holders,
 			&acc, &fb, &lb, &ec, &roles); err != nil {
 			return nil, 0, err
 		}
