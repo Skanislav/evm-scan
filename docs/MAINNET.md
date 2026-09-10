@@ -188,6 +188,24 @@ Approve the bond. The daemon does this itself on its first publish
 tokens to be there: send the publisher EOA at least one bond's worth of the bond
 currency, plus ETH for gas.
 
+## 6b. Verify the source on the explorer
+
+A registry nobody can read is a registry nobody can check. Verification is a
+recompile, so the explorer needs the same input this repo compiled — `make
+contracts` writes `contracts/out/standard-input.json` for exactly that, and the
+constructor arguments are read off the creation transaction rather than re-encoded
+from the flags you believe you passed:
+
+```bash
+ETHERSCAN_API_KEY=... scripts/verify-contract.sh \
+  -chain 8453 -address 0x<registry> -tx 0x<deploy tx> -rpc https://<rpc>
+```
+
+One Etherscan key works across chains on the v2 API, `-chain` selecting which.
+If it reports that the creation code is not a prefix of the deployed input, the
+working tree is not the commit that produced the contract: check that commit out
+and run `make contracts` again.
+
 ## 7. Seed it and test the whole loop
 
 Register and fund the assets you actually want indexed. On mainnet, `fromBlock` should

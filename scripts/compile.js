@@ -43,6 +43,16 @@ const input = {
 
 const out = JSON.parse(solc.compile(JSON.stringify(input)));
 
+// Emit the exact input this build used. A block explorer verifies by recompiling,
+// so it needs the same sources and the same settings — solc version, optimizer runs
+// and evmVersion all change the bytecode. Writing the input we actually compiled
+// removes any chance of a verification attempt guessing them wrong.
+fs.mkdirSync(OUT, { recursive: true });
+fs.writeFileSync(
+  path.join(OUT, 'standard-input.json'),
+  JSON.stringify(input, null, 2) + '\n',
+);
+
 let failed = false;
 for (const err of out.errors || []) {
   const msg = err.formattedMessage || err.message;
