@@ -232,6 +232,7 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 			RegistryChainID:   cfg.Registry.ChainID,
 			Publisher:         publisher,
 			AllowRegistration: cfg.API.AllowRegistration,
+			AuthToken:         cfg.API.AuthToken,
 			CORSOrigin:        cfg.API.CORSOrigin,
 			WebDir:            webDir,
 			Log:               log,

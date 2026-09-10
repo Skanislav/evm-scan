@@ -256,11 +256,13 @@ funding per asset, or redeploy.
   fails until you reset the affected `asset_cursors` rows to a block inside the window.
   `/v1/health` turns 503 while that is true. A Railway restart policy and an alert on
   `/v1/health` are worth more here than anywhere else.
-- **The write endpoints are unauthenticated.** `POST /v1/epochs`, `/promote` and
-  `/v1/assets` let anyone with the URL make the publisher spend gas. On Sepolia that
-  is a nuisance; on mainnet it is your ETH. Put authentication or an allowlist in
-  front of them before the domain is public, or accept that
-  `min_expected_reward_wei` is the only thing bounding the damage.
+- **Set `EVMSCAN_API_TOKEN` before the publisher key.** `POST /v1/epochs`,
+  `/promote` and `/v1/assets` spend something — the publisher's gas, or a backfill
+  against a paid RPC quota — and with no token set they are open to anyone with the
+  URL. With one set they need `Authorization: Bearer <token>`; reads, including the
+  ERC-3668 gateway, are never guarded, because a public index is the point.
+  `min_expected_reward_wei` bounds what a single epoch can waste but not how many
+  someone can ask for.
 - **`auto_promote` is off in the mainnet profile.** Every promotion spends verified
   RPC quota on a backfill nobody paid for. `requestIndexing` is the path that
   reimburses it; leave promotion to that unless you are deliberately sponsoring.

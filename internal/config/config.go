@@ -32,6 +32,11 @@ type API struct {
 	// AllowRegistration lets the HTTP API add asset hints directly, bypassing the
 	// on-chain registry. Convenient for local work; the on-chain path is the real one.
 	AllowRegistration bool `yaml:"allow_registration"`
+	// AuthToken guards the endpoints that spend something: publishing an epoch costs
+	// the publisher's gas, and promoting an asset costs a backfill against a paid RPC
+	// quota. Empty leaves them open, which is right for a laptop and wrong for a
+	// public URL with a funded publisher behind it. Prefer EVMSCAN_API_TOKEN.
+	AuthToken string `yaml:"auth_token"`
 }
 
 // Registry points at the deployed HintRegistry.
@@ -235,6 +240,9 @@ func (c *Config) applyEnv() {
 	}
 	if v := os.Getenv("EVMSCAN_PUBLISHER_KEY"); v != "" {
 		c.Registry.PublisherKey = v
+	}
+	if v := os.Getenv("EVMSCAN_API_TOKEN"); v != "" {
+		c.API.AuthToken = v
 	}
 	if v := os.Getenv("EVMSCAN_REGISTRY_ADDRESS"); v != "" {
 		c.Registry.Address = v

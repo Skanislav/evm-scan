@@ -9,7 +9,9 @@ package api
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -63,9 +65,12 @@ type Deps struct {
 	RegistryChainID   uint64
 	Publisher         *hintreg.Publisher
 	AllowRegistration bool
-	CORSOrigin        string
-	WebDir            string
-	Log               *slog.Logger
+	// AuthToken, when set, is required as a bearer token on every endpoint that
+	// spends something. Empty leaves those endpoints open.
+	AuthToken  string
+	CORSOrigin string
+	WebDir     string
+	Log        *slog.Logger
 }
 
 // Server routes and serves the API.
@@ -126,15 +131,47 @@ func (s *Server) withMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if o := s.d.CORSOrigin; o != "" {
 			w.Header().Set("Access-Control-Allow-Origin", o)
-			w.Header().Set("Access-Control-Allow-Headers", "content-type")
+			w.Header().Set("Access-Control-Allow-Headers", "content-type, authorization")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 		}
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
+		if !s.authorized(r) {
+			writeErr(w, http.StatusUnauthorized, "this endpoint requires a token",
+				errors.New("send it as Authorization: Bearer <token>; it is EVMSCAN_API_TOKEN on the deployment"))
+			return
+		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// spendsSomething reports whether a request would cost the deployment money or
+// quota: publishing an epoch is the publisher's gas, and promoting or registering
+// an asset is a backfill against a paid RPC. Reads are never guarded — the whole
+// point of the index is that anyone can query it.
+func spendsSomething(r *http.Request) bool {
+	if r.Method != http.MethodPost {
+		return false
+	}
+	p := r.URL.Path
+	return p == "/v1/epochs" || p == "/v1/assets" || strings.HasSuffix(p, "/promote")
+}
+
+// authorized checks the bearer token on the endpoints that spend. With no token
+// configured everything stays open, which is what a laptop and the demo want.
+func (s *Server) authorized(r *http.Request) bool {
+	if s.d.AuthToken == "" || !spendsSomething(r) {
+		return true
+	}
+	const prefix = "Bearer "
+	got := r.Header.Get("Authorization")
+	if !strings.HasPrefix(got, prefix) {
+		return false
+	}
+	// Constant time, so a token cannot be recovered by measuring the comparison.
+	return subtle.ConstantTimeCompare([]byte(strings.TrimPrefix(got, prefix)), []byte(s.d.AuthToken)) == 1
 }
 
 // --------------------------------------------------------------------------

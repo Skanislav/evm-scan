@@ -184,6 +184,12 @@
 
 <section>
   <h2>On-chain index commitments</h2>
+  <div class="row" id="op-token-row" hidden>
+    <input type="password" id="op-token" placeholder="operator token" spellcheck="false" autocomplete="off">
+    <button id="op-token-save" class="ghost">Save</button>
+  </div>
+  <div class="hint" id="op-token-hint" hidden>Kept in this browser only, and sent as a bearer token on the actions that
+    spend gas or RPC quota. It is <code>EVMSCAN_API_TOKEN</code> on the deployment.</div>
   <div class="row">
     <button id="build">Build &amp; publish commitment</button>
     <button id="refresh-epochs" class="ghost">Refresh</button>
@@ -205,12 +211,32 @@
 const $ = (id) => document.getElementById(id);
 const short = (h, n = 6) => (h && h.length > 2 * n + 4) ? h.slice(0, n + 2) + '…' + h.slice(-n) : (h || '');
 
+// The endpoints that spend the deployment's money want a bearer token when one is
+// configured. It is an operator's token, not a user's, so it lives in this browser
+// and is only ever sent to the origin that asked for it.
+const TOKEN_KEY = 'evmscan.operator-token';
+function operatorToken() {
+  try { return localStorage.getItem(TOKEN_KEY) || ''; } catch { return ''; }
+}
+function setOperatorToken(v) {
+  try { v ? localStorage.setItem(TOKEN_KEY, v) : localStorage.removeItem(TOKEN_KEY); } catch { /* private window */ }
+}
+
 async function api(path, opts) {
+  const tok = operatorToken();
+  if (tok && opts && opts.method === 'POST') {
+    opts = { ...opts, headers: { ...(opts.headers || {}), authorization: `Bearer ${tok}` } };
+  }
   const res = await fetch(path, opts);
   const text = await res.text();
   let body;
   try { body = text ? JSON.parse(text) : {}; } catch { body = { error: text }; }
   if (!res.ok) {
+    if (res.status === 401) {
+      const box = document.getElementById('op-token-row');
+      const hint = document.getElementById('op-token-hint');
+      if (box) { box.hidden = false; if (hint) hint.hidden = false; box.scrollIntoView({ block: 'center' }); }
+    }
     const err = new Error(body.detail || body.error || res.statusText);
     err.status = res.status;
     throw err;
@@ -667,6 +693,12 @@ $('lookup').addEventListener('click', lookup);
 $('account').addEventListener('keydown', e => { if (e.key === 'Enter') lookup(); });
 $('register').addEventListener('click', register);
 $('new-asset').addEventListener('keydown', e => { if (e.key === 'Enter') register(); });
+$('op-token-save').addEventListener('click', () => {
+  setOperatorToken($('op-token').value.trim());
+  $('op-token').value = '';
+  $('op-token-row').hidden = true;
+  $('op-token-hint').hidden = true;
+});
 $('req-connect').addEventListener('click', connectWallet);
 $('req-send').addEventListener('click', sendRequest);
 $('req-token').addEventListener('keydown', e => { if (e.key === 'Enter' && !$('req-send').disabled) sendRequest(); });

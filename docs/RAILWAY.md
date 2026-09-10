@@ -152,9 +152,11 @@ Verify a proof independently against the Solidity verifier:
   discovery is the main consumer of your RPC quota. Windows in `deploy/config.railway.yaml`
   are sized for that; raise them with care.
 - **`eth_getLogs` is capped at 4096 blocks** per call by Helios. Config windows are 2000.
-- **The write endpoints are open.** `POST /v1/epochs`, `/promote` and `/v1/assets` have
-  no authentication. Anyone with the URL can make the publisher spend gas or start a
-  backfill. Acceptable for a demo; front them with something before it matters.
+- **The write endpoints are open until you set `EVMSCAN_API_TOKEN`.** `POST
+  /v1/epochs`, `/promote` and `/v1/assets` spend gas or RPC quota; with a token set
+  they want `Authorization: Bearer <token>` and the page will ask for it once and
+  keep it in the browser. Reads are never guarded. Fine to leave open for a demo with
+  no publisher key; not once one is set.
 - **Publisher modes.** `registry.publisher.mode` is `eoa` and nothing else today. The
   daemon's `Submitter` interface is where a paymaster, relayer or ERC-4337 account would
   plug in; the contract does not need to change for that.

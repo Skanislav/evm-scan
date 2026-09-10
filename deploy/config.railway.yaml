@@ -11,6 +11,10 @@ api:
   listen: "0.0.0.0:8080"
   cors_origin: "*"
   allow_registration: false
+  # Guards the endpoints that spend: publishing an epoch, promoting an asset,
+  # registering one. Empty leaves them open, which is only defensible while there is
+  # no publisher key. Set EVMSCAN_API_TOKEN on the deployment rather than here.
+  auth_token: ""
 
 registry:
   chain_id: 11155111

@@ -35,6 +35,10 @@ api:
   # open registration endpoint is off. Assets arrive through requestIndexing, which
   # is the path that pays for them.
   allow_registration: false
+  # Guards the endpoints that spend: publishing an epoch, promoting an asset,
+  # registering one. Empty leaves them open, which is only defensible while there is
+  # no publisher key. Set EVMSCAN_API_TOKEN on the deployment rather than here.
+  auth_token: ""
 
 registry:
   # Base. Not the chain being indexed — see the header.
