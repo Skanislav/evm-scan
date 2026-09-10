@@ -103,12 +103,21 @@
     <button id="lookup">Look up</button>
   </div>
   <div class="hint" id="name-note" hidden></div>
+  <div class="hint" id="rpc-note" hidden></div>
+  <div class="row" id="chain-rpc-row" hidden style="margin-top:8px">
+    <input type="text" id="chain-rpc" placeholder="https://… your own RPC for the indexed chain" spellcheck="false" autocomplete="off">
+    <button id="chain-rpc-save" class="ghost">Use it</button>
+    <button id="chain-rpc-clear" class="ghost">Use the daemon</button>
+  </div>
   <div class="row" id="name-rpc-row" hidden style="margin-top:8px">
     <input type="text" id="name-rpc" placeholder="https://… mainnet RPC for name resolution" spellcheck="false" autocomplete="off">
     <button id="name-rpc-save" class="ghost">Save</button>
     <button id="name-rpc-reset" class="ghost">Default</button>
   </div>
   <div class="hint">Balances are read live from the node with <code>eth_call</code> at head — never derived from indexed events.
+    The reader for that is <em>deployless</em> — the call carries its own bytecode — so it runs the same anywhere:
+    <button id="chain-rpc-open" class="ghost" style="padding:2px 8px;font-size:11px">use your own RPC</button>
+    and this page will read your balances in your browser, from your node, without this deployment touching them.
     Prices come from the chain too: Chainlink feeds and Uniswap pools found through a second deployless call, never a quote API.
     <br>Names (<code>.eth</code>, <code>.gwei</code>, <code>.wei</code>) are the one exception to reading only your own node: they
     resolve against a public <strong>mainnet</strong> RPC in your browser, because the registries live on mainnet whichever chain
@@ -527,6 +536,98 @@ async function sendRequest() {
 // Live balances across every registered asset, for an account the index cannot
 // answer for. The lens reads them all in one eth_call per batch; batches stay
 // small because one call over the whole list outruns the node's deadline.
+// ---------------------------------------------------------------------------
+// Running the lens here instead of on the server
+//
+// AssetLens is deployless: eth_call with no `to` executes creation code and returns
+// what the constructor returns, so the whole query is `creation || abi.encode(req)`.
+// Nothing in it is privileged, which means this page can make the identical call
+// against whatever RPC its reader trusts and get the identical answer — the work
+// happens inside the EVM, not in the daemon.
+//
+// It is also where the deployment's money goes. A lens call through the daemon's
+// light client makes Helios re-verify every storage slot the lens touches with
+// eth_getProof, so one balance read fans out into many billed upstream requests.
+// A reader using their own endpoint moves that spend off the deployment, and the
+// answer is no less trustworthy: it is their node, and the bytecode came from an
+// endpoint they can check against the repo.
+//
+// Server-side stays the default. This is opt-in, because a public RPC that returns
+// nonsense would be indistinguishable from a wrong balance.
+// ---------------------------------------------------------------------------
+const CHAIN_RPC_KEY = 'evmscan.chain-rpc';
+function chainRpc() {
+  try { return localStorage.getItem(CHAIN_RPC_KEY) || ''; } catch { return ''; }
+}
+function setChainRpc(v) {
+  try { v ? localStorage.setItem(CHAIN_RPC_KEY, v) : localStorage.removeItem(CHAIN_RPC_KEY); } catch { /* private window */ }
+  lensArtifacts = null;
+}
+
+let lensArtifacts = null;
+async function lenses() {
+  if (!lensArtifacts) {
+    lensArtifacts = api('/v1/lens').then(r => r.lenses).catch(e => { lensArtifacts = null; throw e; });
+  }
+  return lensArtifacts;
+}
+
+async function rpc(url, method, params) {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+  });
+  if (!res.ok) throw new Error(`${method}: ${res.status} ${res.statusText}`);
+  const body = await res.json();
+  if (body.error) throw new Error(`${method}: ${body.error.message || JSON.stringify(body.error)}`);
+  return body.result;
+}
+
+// Runs one lens against the reader's own endpoint. `req` is the constructor tuple
+// as an object; viem encodes it by component name, so its keys have to match the
+// Solidity field names exactly.
+async function lensCall(which, req) {
+  const url = chainRpc();
+  if (!url) throw new Error('no RPC configured');
+  const art = (await lenses())[which];
+  if (!art) throw new Error(`this build does not serve the ${which} lens`);
+
+  const viem = await import(VIEM_MODULE);
+  const encoded = viem.encodeAbiParameters(JSON.parse(JSON.stringify(art.request)), [req]);
+  const data = art.creation + encoded.slice(2);
+  if (data.length / 2 > art.max_payload_bytes) {
+    // EIP-3860 caps initcode; the caller batches under it rather than finding out
+    // as an opaque revert.
+    throw new Error('payload too large; use a smaller batch');
+  }
+  const out = await rpc(url, 'eth_call', [{ data }, 'latest']);
+  if (!out || out === '0x') throw new Error('empty reply (is this an archive-free node at head?)');
+  return viem.decodeAbiParameters(JSON.parse(JSON.stringify(art.reply)), out)[0];
+}
+
+// The same shape heldBalances wants, read entirely client-side.
+async function heldBalancesViaRpc(addr, assets) {
+  const BATCH = 20;
+  const addrs = assets.map(a => a.address).filter(Boolean);
+  const out = [];
+  for (let i = 0; i < addrs.length; i += BATCH) {
+    const chunk = addrs.slice(i, i + BATCH);
+    const reply = await lensCall('asset', {
+      account: addr,
+      spenders: [],
+      tokens: chunk.map(t => ({ token: t, ids: [] })),
+      includeUri: false,
+      includeCode: false,
+      enumerateLimit: 0n,
+      gasPerCall: 0n,
+      maxStringBytes: 64n,
+    });
+    for (const t of (reply.tokens || [])) out.push(t);
+  }
+  return out;
+}
+
 async function heldBalances(addr) {
   let assets = [];
   try {
@@ -539,15 +640,38 @@ async function heldBalances(addr) {
   const batches = [];
   for (let i = 0; i < addrs.length; i += BATCH) batches.push(addrs.slice(i, i + BATCH));
 
-  const results = await Promise.all(batches.map(async chunk => {
+  // The reader's own endpoint first, when they have named one. On failure this
+  // falls back to the daemon rather than showing nothing: a wrong RPC should cost
+  // a round trip, not the answer.
+  let results, servedBy = 'daemon';
+  if (chainRpc()) {
     try {
-      const p = await api(`/v1/accounts/${addr}/portfolio?tokens=${chunk.join(',')}`);
-      return p.tokens || [];
-    } catch { return []; }
-  }));
+      results = [await heldBalancesViaRpc(addr, assets)];
+      servedBy = 'rpc';
+    } catch (e) {
+      showRpcNote(`your RPC could not serve this (${e.message}); read through the daemon instead`, true);
+    }
+  }
+  if (!results) {
+    results = await Promise.all(batches.map(async chunk => {
+      try {
+        const p = await api(`/v1/accounts/${addr}/portfolio?tokens=${chunk.join(',')}`);
+        return p.tokens || [];
+      } catch { return []; }
+    }));
+  } else {
+    showRpcNote(`balances read from <code>${new URL(chainRpc()).host}</code> in your browser — this deployment served none of it`, false);
+  }
+  void servedBy;
 
   const meta = new Map(assets.map(a => [a.address.toLowerCase(), a]));
   return results.flat()
+    // The lens reports a token it could not read as hasBalance=false rather than
+    // as a zero, so absence and emptiness stay distinguishable.
+    .map(t => (t.token && t.address === undefined)
+      ? { address: t.token, symbol: t.symbol, standard: t.standard, decimals: t.hasDecimals ? Number(t.decimals) : undefined,
+          balance: t.hasBalance ? String(t.balance) : undefined }
+      : t)
     .filter(t => t.balance !== undefined && t.balance !== null && t.balance !== '0' && t.balance !== '')
     .map(t => {
       const m = meta.get((t.address || '').toLowerCase()) || {};
@@ -654,6 +778,20 @@ function showResolved(r) {
     + ` <button id="name-rpc-edit" class="ghost" style="padding:2px 8px;font-size:11px">change RPC</button>`;
   note.hidden = false;
   $('name-rpc-edit').addEventListener('click', openNameRpc);
+}
+
+function showRpcNote(html, warn) {
+  const n = $('rpc-note');
+  n.innerHTML = (warn ? '<strong>Heads up:</strong> ' : '') + html
+    + ` <button id="chain-rpc-edit" class="ghost" style="padding:2px 8px;font-size:11px">change</button>`;
+  n.hidden = false;
+  $('chain-rpc-edit').addEventListener('click', openChainRpc);
+}
+
+function openChainRpc() {
+  $('chain-rpc').value = chainRpc();
+  $('chain-rpc-row').hidden = false;
+  $('chain-rpc').focus();
 }
 
 function openNameRpc() {
@@ -828,6 +966,18 @@ async function promote(address, btn) {
 
 $('refresh-cands').addEventListener('click', loadCandidates);
 $('lookup').addEventListener('click', lookup);
+$('chain-rpc-open').addEventListener('click', openChainRpc);
+$('chain-rpc-save').addEventListener('click', () => {
+  setChainRpc($('chain-rpc').value.trim());
+  $('chain-rpc-row').hidden = true;
+  if ($('account').value.trim()) lookup();
+});
+$('chain-rpc-clear').addEventListener('click', () => {
+  setChainRpc('');
+  $('chain-rpc-row').hidden = true;
+  $('rpc-note').hidden = true;
+  if ($('account').value.trim()) lookup();
+});
 $('name-rpc-save').addEventListener('click', () => {
   setNameRpc($('name-rpc').value.trim());
   nameCache.clear();
