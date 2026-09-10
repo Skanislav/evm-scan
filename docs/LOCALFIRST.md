@@ -212,6 +212,16 @@ Whether that wants batching, chunking across ticks, or `ShardOwner` partitions i
 unknown here — it was not measured, and no bulk-insert limit was checked. Steady
 state is not the problem: an epoch that changed 400 accounts writes 400 rows.
 
+**The second is read-after-write visibility.** `markIngested` reads the epoch's
+coverage row back in order to restate it, and `loadQuery` is documented as batched
+and cached — so it may not yet reflect the `putCoverage` that ran moments earlier.
+The adapter throws when the row is missing rather than writing a placeholder,
+because a placeholder would mark the epoch complete with an empty asset set, after
+which `coverage()` returns nothing forever and every later verify reports a
+coverage-root mismatch blamed on an unfinished sync. Failing loudly is the right
+answer, and it is also a path a first real run may find; if it does, the fix is to
+await the mutation (`onComplete`) rather than to soften the check.
+
 This is deliberate, not a shortcut: **Evolu is not a dependency of correctness.**
 The `MirrorStore` interface is the seam, and verification is a hash of rows, not a
 property of where they were kept. If the binding is wrong it will be wrong in ways a

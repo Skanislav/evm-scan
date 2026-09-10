@@ -98,16 +98,31 @@ function parseJsonLossless(text: string): unknown {
     if (ch === "-" || (ch >= "0" && ch <= "9")) {
       let j = i;
       if (text[j] === "-") j++;
-      while (j < text.length && text[j]! >= "0" && text[j]! <= "9") j++;
-      const isInteger = j >= text.length || !".eE".includes(text[j]!);
-      if (isInteger) {
-        out += `"${text.slice(i, j)}"`;
-        i = j - 1;
-        continue;
+      const digits = (): void => {
+        while (j < text.length && text[j]! >= "0" && text[j]! <= "9") j++;
+      };
+      digits();
+      const intEnd = j;
+      // A fraction or an exponent has to be consumed with the token, not left for
+      // the next iteration: emitting only the integer part and then re-quoting the
+      // remaining digits produces invalid JSON, and the failure would read as a
+      // corrupt document rather than an unexpected field.
+      if (text[j] === ".") {
+        j++;
+        digits();
       }
-      // A float is left as-is; no field in this format is one, and JSON.parse
-      // will hand it back as a number that toBigInt refuses.
-      out += text.slice(i, j);
+      if (text[j] === "e" || text[j] === "E") {
+        j++;
+        if (text[j] === "+" || text[j] === "-") j++;
+        digits();
+      }
+      if (j === intEnd) {
+        out += `"${text.slice(i, j)}"`;
+      } else {
+        // A non-integer is left as-is; no field in this format is one, and
+        // JSON.parse hands it back as a number that toBigInt refuses.
+        out += text.slice(i, j);
+      }
       i = j - 1;
       continue;
     }

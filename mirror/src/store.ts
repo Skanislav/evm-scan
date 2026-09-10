@@ -25,6 +25,14 @@ import { rowKey, type VersionRow } from "./state.js";
  * be a no-op, not a second copy. Ingest reruns after a crash, and two versions of
  * one account at one epoch is a state `resolveAsOf` refuses — so a store that
  * duplicated rows would turn "ingest ran twice" into "the relay is lying".
+ *
+ * What the contract deliberately does *not* pin down is which value survives when
+ * one key is written twice with **different** assets: `MemoryStore` keeps the first,
+ * the Evolu binding's `upsert` keeps the last, and neither is more right. A caller
+ * must never do it — `diff` emits at most one row per account per epoch, and an
+ * epoch already ingested returns early — and a store that hid such a write either
+ * way would be hiding the conflict `resolveAsOf` exists to catch. Relying on either
+ * order is therefore a bug in the caller, not a difference to smooth over here.
  */
 export interface MirrorStore {
   /** Every version row held locally, in no particular order. */

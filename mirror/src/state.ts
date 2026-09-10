@@ -53,13 +53,21 @@ function byAccount(a: { account: Hex }, b: { account: Hex }): number {
  */
 export function resolveAsOf(rows: readonly VersionRow[], epoch: bigint): Leaf[] {
   const newest = new Map<string, VersionRow>();
+  // Every version seen, keyed by (account, epoch), so a conflict is detected
+  // whether or not the pair happens to be the winning version. Checking only
+  // against `newest` would make the *detection* depend on arrival order —
+  // `store.rows()` promises no order — so the same poisoned row would fail
+  // verification on one load and pass on the next.
+  const versions = new Map<string, Hex[]>();
   for (const row of rows) {
     if (row.sinceEpoch > epoch) continue;
     const account = normalizeHex(row.account, 20);
-    const held = newest.get(account);
-    if (held === undefined || row.sinceEpoch > held.sinceEpoch) {
-      newest.set(account, { ...row, account });
-    } else if (row.sinceEpoch === held.sinceEpoch && !sameAssets(row.assets, held.assets)) {
+
+    const key = rowKey(account, row.sinceEpoch);
+    const sibling = versions.get(key);
+    if (sibling === undefined) {
+      versions.set(key, row.assets);
+    } else if (!sameAssets(row.assets, sibling)) {
       // Two different asset sets claiming the same (account, epoch) cannot both be
       // what was committed. Resolving it by row order would make the root depend on
       // sync arrival order, which is exactly the bug this layout exists to avoid.
@@ -67,6 +75,11 @@ export function resolveAsOf(rows: readonly VersionRow[], epoch: bigint): Leaf[] 
         `conflicting versions for ${account} at epoch ${row.sinceEpoch}: ` +
           `a relay is serving rows the publisher did not write`,
       );
+    }
+
+    const held = newest.get(account);
+    if (held === undefined || row.sinceEpoch > held.sinceEpoch) {
+      newest.set(account, { ...row, account });
     }
   }
 

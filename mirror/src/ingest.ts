@@ -18,7 +18,7 @@
  * the reader could not tell that from a mid-sync gap.
  */
 
-import type { Hex } from "./merkle.js";
+import { normalizeHex, type Hex } from "./merkle.js";
 import { readCommitment, readSnapshotUri, type EthCall } from "./registry.js";
 import { parseSnapshot, type Snapshot } from "./snapshot.js";
 import { diff, resolveAsOf, type VersionRow } from "./state.js";
@@ -87,12 +87,20 @@ export async function ingestSnapshot(
   // unfinished sync or a dishonest relay. Checking here costs the publisher one
   // root build per epoch and turns that into a loud failure on the machine that
   // can actually fix it.
-  const check = verifyAsOf(await store.rows(), snapshot.coverage, commitment);
+  // Coverage is read back too, not reused from the document: a store that dropped
+  // or reordered it would otherwise pass here and fail in every wallet, which is
+  // the exact failure this check exists to catch.
+  const check = verifyAsOf(
+    await store.rows(),
+    await store.coverage(commitment.epochId),
+    commitment,
+  );
   if (!check.ok) {
     throw new Error(
       `stored rows do not rebuild epoch ${commitment.epochId} (${check.mismatches.join(", ")}): ` +
-        `the document verified but the rows written from it did not, so the leaf ` +
-        `order the publisher committed is not ascending by account`,
+        `the document verified but what was written from it did not — either the ` +
+        `leaf order the publisher committed is not ascending by account, or the ` +
+        `store did not keep the coverage rows as they were given`,
     );
   }
 
@@ -136,13 +144,16 @@ function assertMatches(snapshot: Snapshot, commitment: Commitment): void {
         `${commitment.chainId}`,
     );
   }
-  if (snapshot.root !== commitment.root) {
+  // Normalized on both sides: a `Commitment` is a public type, and one built by
+  // hand from a checksummed or uppercase root would otherwise never match a
+  // rebuilt root, which is always lowercase.
+  if (snapshot.root !== normalizeHex(commitment.root, 32)) {
     throw new Error(
       `snapshot does not match epoch ${commitment.epochId}: rebuilt root ` +
         `${snapshot.root}, registry holds ${commitment.root}`,
     );
   }
-  if (snapshot.coverageRoot !== commitment.coverageRoot) {
+  if (snapshot.coverageRoot !== normalizeHex(commitment.coverageRoot, 32)) {
     throw new Error(
       `snapshot does not match epoch ${commitment.epochId}: rebuilt coverage root ` +
         `${snapshot.coverageRoot}, registry holds ${commitment.coverageRoot}`,

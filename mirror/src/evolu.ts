@@ -79,26 +79,33 @@ export type IdFromString = (value: string) => string;
  *
  * const IndexRowId = id("IndexRow");
  * const Hex42 = maxLength(42, NonEmptyString);
- * const Digits20 = maxLength(20, NonEmptyString);
+ * // A scope is an address, a colon and a chain id, so it does not fit in 42.
+ * const Scope = maxLength(64, NonEmptyString);
+ * // A uint256 in decimal is up to 78 digits; 20 would truncate an epoch id.
+ * const Digits78 = maxLength(78, NonEmptyString);
  * const AssetList = maxLength(65_536, NonEmptyString);
  *
  * const Schema = {
  *   indexRow: {
  *     id: IndexRowId,       // createIdFromString(scopedRowId(...))
- *     scope: Hex42,         // `${registry}:${chainId}` — see scopeOf
+ *     scope: Scope,         // `${registry}:${chainId}` — see scopeOf
  *     account: Hex42,
- *     sinceEpoch: Digits20, // a uint256 epoch id, as decimal text
+ *     sinceEpoch: Digits78, // a uint256 epoch id, as decimal text
  *     assets: AssetList,    // JSON array of addresses, "[]" for a tombstone
  *   },
  *   epochMeta: {
  *     id: id("EpochMeta"),
- *     scope: Hex42,
- *     epoch: Digits20,
+ *     scope: Scope,
+ *     epoch: Digits78,
  *     coverage: AssetList,  // JSON array of {asset, fromBlock, toBlock}
- *     ingested: Digits20,   // "1" once the epoch's rows are all written
+ *     ingested: Digits78,   // "1" once the epoch's rows are all written
  *   },
  * };
  * ```
+ *
+ * The lengths are not decoration: `upsert` validates them and returns a failure,
+ * which `createMirrorStore` turns into a thrown error, so a column too short for
+ * what `scopeOf` or a `uint256` epoch id produces rejects every row.
  *
  * Numbers are stored as decimal text throughout. An epoch id is a `uint256` and a
  * block number a `uint64`; SQLite integers and JS numbers both lose the top of
@@ -235,12 +242,24 @@ export function createMirrorStore(config: MirrorStoreConfig): MirrorStore {
     async markIngested(epoch: bigint): Promise<void> {
       const loaded = await evolu.loadQuery(metaQuery);
       const held = loaded.find((r) => String(r["epoch"]) === epoch.toString());
+      if (held === undefined) {
+        // The upsert below restates the whole row, so writing a placeholder here
+        // would replace the epoch's coverage with an empty list *and* mark it
+        // ingested — after which `coverage(epoch)` returns nothing forever and
+        // every later verify reports a coverage-root mismatch that `explain`
+        // blames on an unfinished sync. Refusing is the only safe answer.
+        throw new Error(
+          `no coverage row for epoch ${epoch} in scope ${scope}: putCoverage must ` +
+            `land before markIngested, or the epoch would be marked complete with ` +
+            `an empty asset set`,
+        );
+      }
       put(MIRROR_TABLES.meta, {
         id: createIdFromString(scopedMetaId(registry, chainId, epoch)),
         scope,
         epoch: epoch.toString(),
         // Keep whatever coverage was written; this call only flips the flag.
-        coverage: held === undefined ? "[]" : String(held["coverage"]),
+        coverage: String(held["coverage"]),
         ingested: "1",
       });
     },

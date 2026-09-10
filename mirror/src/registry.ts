@@ -61,6 +61,12 @@ function padWord(value: bigint): string {
 }
 
 export function encodeLatestFinalizedEpoch(chainId: bigint): Hex {
+  // The parameter is a uint64. Padding a wider value into the word would produce
+  // calldata the contract reverts on, reported as a node error rather than as the
+  // caller's out-of-range chain id.
+  if (chainId < 0n || chainId > 0xffffffffffffffffn) {
+    throw new Error(`not a uint64 chain id: ${chainId}`);
+  }
   return `${selector("latestFinalizedEpoch(uint64)")}${padWord(chainId)}`;
 }
 

@@ -23,7 +23,7 @@ import {
   ZERO_HASH,
   type Hex,
 } from "../src/merkle.js";
-import { parseSnapshot, rootsOf, sortLeaves } from "../src/snapshot.js";
+import { parseHeader, parseSnapshot, rootsOf, sortLeaves } from "../src/snapshot.js";
 
 const testdata = (name: string): string =>
   readFileSync(fileURLToPath(new URL(`../testdata/${name}`, import.meta.url)), "utf8");
@@ -201,6 +201,23 @@ describe("whole snapshot documents", () => {
 
   it("refuses an unknown format", () => {
     expect(() => parseSnapshot('{"format":"evmscan-snapshot/2"}')).toThrow(/unknown snapshot format/);
+  });
+
+  it("says which field is not an integer, rather than failing to parse at all", () => {
+    // The lossless pre-pass quotes bare integers. A fraction or an exponent has to
+    // be consumed whole: emitting only the integer part leaves the remaining digits
+    // to be re-quoted, which yields invalid JSON and a SyntaxError blaming the
+    // document instead of the field.
+    const header = testdata("single.ndjson").split("\n")[0]!;
+    const withToBlock = (value: string): string => `${header.slice(0, -1)},"to_block":${value}}`;
+    for (const value of ["1.5", "-2.25", "1e400"]) {
+      expect(() => parseHeader(withToBlock(value)), value).toThrow(/to_block/);
+    }
+    // A fraction or exponent that names a whole number is still read as one —
+    // proof the token was consumed whole and the JSON not corrupted on the way.
+    for (const value of ["2e2", "2E+2", "200.0", "2.0e2"]) {
+      expect(parseHeader(withToBlock(value)).toBlock, value).toBe(200n);
+    }
   });
 });
 

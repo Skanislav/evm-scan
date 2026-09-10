@@ -183,6 +183,29 @@ describe("resolving an epoch", () => {
     expect(() => resolveAsOf(rows, 9n)).toThrow(/conflicting versions/);
   });
 
+  it("refuses a conflict that is not the winning version, in any row order", () => {
+    // The conflicting pair sits at epoch 4 while a newer version of the same
+    // account exists at epoch 7. `store.rows()` promises no order, so detection
+    // must not depend on which of the three arrives first: otherwise the same
+    // poisoned row fails verification on one load and passes on the next.
+    const poison: VersionRow[] = [
+      { account: account(1), sinceEpoch: 4n, assets: [A1] },
+      { account: account(1), sinceEpoch: 4n, assets: [B2] },
+      { account: account(1), sinceEpoch: 7n, assets: [A1, B2] },
+    ];
+    for (const order of [
+      [0, 1, 2],
+      [2, 0, 1],
+      [1, 2, 0],
+      [2, 1, 0],
+    ]) {
+      const rows = order.map((i) => poison[i]!);
+      expect(() => resolveAsOf(rows, 9n), `order ${order.join("")}`).toThrow(
+        /conflicting versions/,
+      );
+    }
+  });
+
   it("accepts a duplicate row that says the same thing", () => {
     const rows = ingest();
     const duplicated = [...rows, { ...rows[0]! }];
