@@ -201,7 +201,7 @@ func str(v *big.Int) string {
 
 // pricerFor returns the chain's pricer, or nil when pricing is not configured.
 func (s *Server) pricerFor(chainID uint64) *price.Pricer {
-	p, ok := s.d.Pricers[chainID]
+	p, ok := s.d.Chains.Pricer(chainID)
 	if !ok || p == nil || !p.Enabled() {
 		return nil
 	}

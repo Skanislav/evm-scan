@@ -15,9 +15,15 @@ func TestAuthorizedGuardsOnlySpendingEndpoints(t *testing.T) {
 		{http.MethodGet, "/v1/candidates"},
 		{http.MethodGet, "/v1/epochs"},
 		{http.MethodGet, "/v1/accounts/0x0/contracts"},
+		{http.MethodGet, "/v1/chains"},
+		{http.MethodGet, "/v1/decisions"},
+		{http.MethodGet, "/v1/accounts"},
+		// Resolving a name costs one eth_call and reports what anybody could read
+		// off mainnet themselves. Gating it would only make the UI worse.
+		{http.MethodGet, "/v1/chains/resolve"},
 		// The gateway is the whole point of the index being public — and since the
-		// guard is now "every POST except this one", this pair of assertions is the
-		// thing keeping it reachable.
+		// guard is now "everything that is not a read, except this one", this pair
+		// of assertions is the thing keeping it reachable.
 		{http.MethodGet, "/ccip/0x0/0x0"},
 		{http.MethodPost, "/ccip"},
 	}
@@ -27,44 +33,55 @@ func TestAuthorizedGuardsOnlySpendingEndpoints(t *testing.T) {
 		}
 	}
 
-	spends := []string{
-		"/v1/epochs", "/v1/assets",
-		"/v1/candidates/0xabc/promote",
-		"/v1/candidates/0xabc/spam",
-		"/v1/candidates/0xabc/unspam",
+	// Adding a chain is a per-block RPC bill from then on, and PATCHing one to
+	// trust: verified puts the publisher's bond behind a node we do not run —
+	// the single highest-value thing this token guards.
+	spends := []struct{ method, path string }{
+		{http.MethodPost, "/v1/epochs"},
+		{http.MethodPost, "/v1/assets"},
+		{http.MethodPost, "/v1/candidates/0xabc/promote"},
+		{http.MethodPost, "/v1/candidates/0xabc/spam"},
+		{http.MethodPost, "/v1/candidates/0xabc/unspam"},
+		{http.MethodPost, "/v1/chains"},
+		{http.MethodPatch, "/v1/chains/8453"},
+		{http.MethodDelete, "/v1/chains/8453"},
 	}
-	for _, p := range spends {
-		if s.authorized(httptest.NewRequest(http.MethodPost, p, nil)) {
-			t.Errorf("POST %s must require a token", p)
+	for _, sp := range spends {
+		if s.authorized(httptest.NewRequest(sp.method, sp.path, nil)) {
+			t.Errorf("%s %s must require a token", sp.method, sp.path)
 		}
-		withTok := httptest.NewRequest(http.MethodPost, p, nil)
+		withTok := httptest.NewRequest(sp.method, sp.path, nil)
 		withTok.Header.Set("Authorization", "Bearer secret")
 		if !s.authorized(withTok) {
-			t.Errorf("POST %s should accept the right token", p)
+			t.Errorf("%s %s should accept the right token", sp.method, sp.path)
 		}
-		wrong := httptest.NewRequest(http.MethodPost, p, nil)
+		wrong := httptest.NewRequest(sp.method, sp.path, nil)
 		wrong.Header.Set("Authorization", "Bearer nope")
 		if s.authorized(wrong) {
-			t.Errorf("POST %s must reject a wrong token", p)
+			t.Errorf("%s %s must reject a wrong token", sp.method, sp.path)
 		}
-		bare := httptest.NewRequest(http.MethodPost, p, nil)
+		bare := httptest.NewRequest(sp.method, sp.path, nil)
 		bare.Header.Set("Authorization", "secret")
 		if s.authorized(bare) {
-			t.Errorf("POST %s must require the Bearer prefix", p)
+			t.Errorf("%s %s must require the Bearer prefix", sp.method, sp.path)
 		}
 	}
 }
 
 func TestNoTokenConfiguredLeavesEverythingOpen(t *testing.T) {
 	s := &Server{d: Deps{}}
-	for _, p := range []string{
-		"/v1/epochs", "/v1/assets",
-		"/v1/candidates/0xabc/promote",
-		"/v1/candidates/0xabc/spam",
-		"/v1/candidates/0xabc/unspam",
+	for _, sp := range []struct{ method, path string }{
+		{http.MethodPost, "/v1/epochs"},
+		{http.MethodPost, "/v1/assets"},
+		{http.MethodPost, "/v1/candidates/0xabc/promote"},
+		{http.MethodPost, "/v1/candidates/0xabc/spam"},
+		{http.MethodPost, "/v1/candidates/0xabc/unspam"},
+		{http.MethodPost, "/v1/chains"},
+		{http.MethodPatch, "/v1/chains/8453"},
+		{http.MethodDelete, "/v1/chains/8453"},
 	} {
-		if !s.authorized(httptest.NewRequest(http.MethodPost, p, nil)) {
-			t.Errorf("POST %s should be open when no token is configured", p)
+		if !s.authorized(httptest.NewRequest(sp.method, sp.path, nil)) {
+			t.Errorf("%s %s should be open when no token is configured", sp.method, sp.path)
 		}
 	}
 }

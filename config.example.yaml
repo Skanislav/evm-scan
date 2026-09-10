@@ -14,6 +14,24 @@ api:
   # Handy locally; the on-chain HintRegistry is the real, auditable way in.
   allow_registration: false
 
+# Resolving chain names through ENS's on.eth registry, so a network can be added by
+# name rather than by chain id: POST /v1/chains {"ens_name":"base", "node":"…"}.
+#
+# The registry lives on Ethereum mainnet and holds identity only — a name, a chain id,
+# a website, an icon. It publishes no RPC endpoints, which is right: an endpoint URL is
+# where an API key lives. You always supply the node.
+ens:
+  # Off means chains can only be added by chain id, which is how most are added
+  # anyway — most networks are not in the registry yet.
+  disabled: false
+  # Only needed when this deployment does not index mainnet itself. A read at head,
+  # once per onboarding, and cross-checked against the node actually being indexed,
+  # so a public endpoint is a reasonable thing to point it at.
+  node: ""
+  # Overrides the on.eth chain resolver. Empty uses the well-known deployment, which
+  # is echoed in every response that used it.
+  resolver: ""
+
 registry:
   # The chain the HintRegistry is deployed on. It must also appear under `chains`.
   chain_id: 1

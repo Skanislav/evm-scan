@@ -22,6 +22,12 @@ type CodeFunc func(ctx context.Context, chainID uint64, addr common.Address) ([]
 // Nudger lets the mirror wake a chain's follower after new registrations.
 type Nudger interface{ Nudge() }
 
+// NudgeFunc finds a chain's follower. It is a lookup rather than a prebuilt map
+// because the set of running chains changes while the mirror is running: a chain
+// added at 11am has to be nudged at 11am, not at the next restart. ok is false for
+// a chain this deployment does not run.
+type NudgeFunc func(chainID uint64) (Nudger, bool)
+
 // Mirror pulls permissionlessly registered hints into the local scan set.
 //
 // Registration is open by design: anyone can point the indexer at any contract. That
@@ -32,14 +38,14 @@ type Mirror struct {
 	st      *store.Store
 	head    HeadFunc
 	code    CodeFunc
-	nudge   map[uint64]Nudger
+	nudge   NudgeFunc
 	log     *slog.Logger
 	regChID uint64
 }
 
 // NewMirror builds a Mirror. regChainID is the chain the registry is deployed on,
 // which need not be a chain we index.
-func NewMirror(c *Client, st *store.Store, regChainID uint64, head HeadFunc, code CodeFunc, nudge map[uint64]Nudger, log *slog.Logger) *Mirror {
+func NewMirror(c *Client, st *store.Store, regChainID uint64, head HeadFunc, code CodeFunc, nudge NudgeFunc, log *slog.Logger) *Mirror {
 	return &Mirror{
 		client:  c,
 		st:      st,
@@ -158,7 +164,10 @@ func (m *Mirror) Sync(ctx context.Context) error {
 	}
 
 	for chainID := range touched {
-		if n, ok := m.nudge[chainID]; ok {
+		if m.nudge == nil {
+			break
+		}
+		if n, ok := m.nudge(chainID); ok {
 			n.Nudge()
 		}
 	}

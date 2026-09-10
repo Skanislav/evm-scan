@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math/big"
 	"net/http"
 	"strconv"
@@ -157,10 +158,12 @@ func (s *Server) registerAsset(w http.ResponseWriter, r *http.Request) {
 	}
 
 	chainID := req.ChainID
-	if chainID == 0 && len(s.chains) == 1 {
-		chainID = s.chains[0]
+	if chainID == 0 && s.d.Chains.Len() == 1 {
+		if e, ok := s.d.Chains.First(); ok {
+			chainID = e.ID
+		}
 	}
-	src, ok := s.d.Sources[chainID]
+	src, ok := s.d.Chains.Source(chainID)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "unknown chain", nil)
 		return
@@ -208,7 +211,7 @@ func (s *Server) registerAsset(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "registration failed", err)
 		return
 	}
-	if wk, ok := s.d.Workers[chainID]; ok {
+	if wk, ok := s.d.Chains.Worker(chainID); ok {
 		wk.Nudge()
 	}
 
@@ -579,10 +582,12 @@ func (s *Server) createEpoch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	chainID := req.ChainID
-	if chainID == 0 && len(s.chains) == 1 {
-		chainID = s.chains[0]
+	if chainID == 0 && s.d.Chains.Len() == 1 {
+		if e, ok := s.d.Chains.First(); ok {
+			chainID = e.ID
+		}
 	}
-	if _, ok := s.d.Sources[chainID]; !ok {
+	if _, ok := s.d.Chains.Source(chainID); !ok {
 		writeErr(w, http.StatusBadRequest, "unknown chain", nil)
 		return
 	}
@@ -599,6 +604,14 @@ func (s *Server) createEpoch(w http.ResponseWriter, r *http.Request) {
 	}
 	if errors.Is(err, hintreg.ErrUnfunded) {
 		writeErr(w, http.StatusPaymentRequired, "coverage is worth less than the publisher's minimum; fund the assets or lower min_expected_reward_wei", err)
+		return
+	}
+	if errors.Is(err, hintreg.ErrUntrusted) {
+		writeErr(w, http.StatusForbidden,
+			fmt.Sprintf("chain %d is not verified, so its data may not back a bonded commitment", chainID),
+			fmt.Errorf("%w — its logs came from a node this deployment does not run; "+
+				`promote it deliberately with PATCH /v1/chains/%d {"trust":"verified"} if you `+
+				"are willing to stake the publisher's bond on that endpoint", err, chainID))
 		return
 	}
 	if err != nil {
@@ -761,7 +774,7 @@ func (s *Server) listCandidates(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var minEvents, minBlocks uint64
-	if wk, ok := s.d.Workers[chainID]; ok {
+	if wk, ok := s.d.Chains.Worker(chainID); ok {
 		minEvents, minBlocks = wk.DiscoveryThresholds()
 	}
 
@@ -795,7 +808,7 @@ func (s *Server) promoteCandidate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad address", err)
 		return
 	}
-	worker, ok := s.d.Workers[chainID]
+	worker, ok := s.d.Chains.Worker(chainID)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "unknown chain", nil)
 		return
@@ -863,7 +876,7 @@ func candidateView(c store.Candidate, minEvents, minBlocks uint64) candidateJSON
 // for the whole page. Best-effort by design: a token that will not answer leaves the
 // fields empty rather than failing the listing.
 func (s *Server) decorateCandidates(ctx context.Context, chainID uint64, out []candidateJSON) {
-	src, ok := s.d.Sources[chainID]
+	src, ok := s.d.Chains.Source(chainID)
 	if !ok || len(out) == 0 {
 		return
 	}
@@ -945,7 +958,7 @@ func (s *Server) candidateVerdict(w http.ResponseWriter, r *http.Request, spam b
 		return
 	}
 	var minEvents, minBlocks uint64
-	if wk, ok := s.d.Workers[chainID]; ok {
+	if wk, ok := s.d.Chains.Worker(chainID); ok {
 		minEvents, minBlocks = wk.DiscoveryThresholds()
 	}
 	out := []candidateJSON{candidateView(c, minEvents, minBlocks)}
@@ -1001,7 +1014,7 @@ func (s *Server) listDecisions(w http.ResponseWriter, r *http.Request) {
 
 	// Only the rows the join left blank — spam contracts, which were never probed —
 	// need the head. Promotions already carry their metadata.
-	if src, ok := s.d.Sources[chainID]; ok {
+	if src, ok := s.d.Chains.Source(chainID); ok {
 		var missing []common.Address
 		for i := range out {
 			if out[i].Symbol == "" && out[i].Name == "" {

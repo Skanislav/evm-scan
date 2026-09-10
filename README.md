@@ -366,6 +366,10 @@ That is the minimum of the economics in [docs/TOKENOMICS.md](docs/TOKENOMICS.md)
 rest (publisher staking, attestations, fraud proofs, a self-funding paymaster) is
 designed there and not built.
 
+Growing past one chain — adding a network at runtime by resolving its name through
+ENS's `on.eth` registry, and recognising the same token across chains — is designed in
+[docs/MULTICHAIN.md](docs/MULTICHAIN.md), also not built.
+
 `HintRegistry.contractsOf(chainId, account)` is the same answer as a contract call: it
 reverts with an ERC-3668 `OffchainLookup`, any gateway returns the leaf and proof, and
 `contractsOfCallback` verifies them against the latest finalized root. A gateway can
