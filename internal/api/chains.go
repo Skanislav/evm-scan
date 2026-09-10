@@ -387,7 +387,15 @@ func (s *Server) addChain(w http.ResponseWriter, r *http.Request) {
 		PollInterval:     p.PollInterval.String(),
 		BackfillInterval: p.BackfillInterval.String(),
 	}
-	t.Discovery.Enabled = true
+	// Discovery is off unless asked for, and that default is worth explaining.
+	// The sweep queries eth_getLogs with no address filter, which is the single
+	// most restricted call on a shared endpoint — free tiers routinely answer it
+	// with "specify an address" or demand an archive plan. A chain added at
+	// runtime is reached over exactly that kind of endpoint, so switching
+	// discovery on by default means a failing tick every few seconds on a network
+	// the operator has only just pointed at. They can turn it on once they know
+	// what their provider allows.
+	t.Discovery.Enabled = false
 	t.Discovery.Lookback = p.TailWindow * 10
 	t.Discovery.Interval = (p.PollInterval * 3).String()
 	if req.Confirmations != nil {
