@@ -66,11 +66,10 @@ func main() {
 	)
 	flag.Parse()
 
-	if *nodeURL == "" || *registry == "" || *account == "" {
-		flag.Usage()
-		os.Exit(2)
-	}
-
+	// -snapshot checks a published table against the chain and proves nothing about
+	// one account, so it wants neither -account nor, strictly, a node: without one it
+	// still reports what the file builds. Its checks live in runSnapshot, so it has to
+	// be dispatched before the flags the other two modes require.
 	if *snap != "" {
 		// -epoch defaults to 0, which is a real epoch id, so "not given" has to be
 		// distinguishable: a snapshot names its own epoch and that is the usual path.
@@ -83,6 +82,11 @@ func main() {
 		}
 		return
 	}
+	if *nodeURL == "" || *registry == "" || *account == "" {
+		flag.Usage()
+		os.Exit(2)
+	}
+
 	if *ccipMode {
 		if err := runCCIP(*nodeURL, *registry, *account, *gateway, *chainID); err != nil {
 			log.Fatal(err)
