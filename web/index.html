@@ -270,6 +270,7 @@ async function loadStatus() {
     if (!c) return;
     REG = s.registry || null;
     HEAD = c.head_block || 0;
+    INDEXED_CHAIN = c.chain_id;
     renderRequestSection();
     $('stats').innerHTML = [
       ['chain', c.chain_id], ['head block', c.head_block],
@@ -372,9 +373,17 @@ function renderValuation(v, rows) {
 // this daemon. The daemon only tells us where the registry is and what it costs.
 // --------------------------------------------------------------------------
 
-let REG = null;       // { chain_id, address, min_funding_wei, asset_bond_wei, ... }
-let HEAD = 0;         // head block, for a fromBlock the node can actually serve
-let WALLET = null;    // the connected account
+let REG = null;          // { chain_id, address, min_funding_wei, asset_bond_wei, ... }
+let HEAD = 0;            // head block of the INDEXED chain
+// The chain being indexed, which is not necessarily the chain the registry is on:
+// a registry can live on an L2 while the index it commits is mainnet's. Every
+// argument to requestIndexing describes the indexed chain — the asset key is
+// (chainId, token), and the block numbers are that chain's — while only the
+// transaction's destination is the registry's chain. Confusing the two registers a
+// token under a chain it does not exist on, and the deposit that comes with it
+// funds an asset key nothing can ever cover.
+let INDEXED_CHAIN = 0;
+let WALLET = null;       // the connected account
 
 // requestIndexing(uint64,address,uint8,uint64)
 const REQUEST_SELECTOR = '0x83b37d78';
@@ -416,7 +425,11 @@ function renderRequestSection() {
   const rpb = REG.reward_per_block_wei ? BigInt(REG.reward_per_block_wei) : 0n;
   const blocks = rpb > 0n ? (BigInt(REG.min_funding_wei || 0) / rpb) : 0n;
   $('req-terms').innerHTML = [
-    `Registry <code>${REG.address}</code> on chain ${REG.chain_id}. `,
+    `Indexing <strong>chain ${INDEXED_CHAIN}</strong>` +
+      (REG.chain_id !== INDEXED_CHAIN
+        ? `, paid to the registry on chain ${REG.chain_id}. The token and block below are chain ${INDEXED_CHAIN}'s. `
+        : `. `),
+    `Registry <code>${REG.address}</code>. `,
     `A new asset needs at least <strong>${weiToEth(min)} ETH</strong>`,
     REG.asset_bond_wei && BigInt(REG.asset_bond_wei) > 0n
       ? ` (${weiToEth(REG.asset_bond_wei)} refundable bond + ${weiToEth(REG.min_funding_wei || 0)} funding);`
@@ -473,7 +486,23 @@ async function sendRequest() {
     if (HEAD && Number(from) < HEAD - 8191) {
       throw new Error(`from block ${from} is older than this node can serve (head ${HEAD}, window 8191)`);
     }
-    const data = encodeRequest(REG.chain_id, token, kind, from);
+    // An asset key is (chainId, token), and a deposit against a key nothing can
+    // cover is not refundable: revokeAsset returns the bond, never the funding. So
+    // check the token is actually a contract on the chain being registered before
+    // spending anything on it.
+    let live;
+    try {
+      live = await api(`/v1/accounts/${token}/portfolio?chain_id=${INDEXED_CHAIN}&code=true`);
+    } catch {
+      live = null; // a node that will not answer is not proof of absence
+    }
+    if (live && live.account_state && live.account_state.is_contract === false) {
+      throw new Error(
+        `${short(token)} has no contract code on chain ${INDEXED_CHAIN}. Registering it would fund an ` +
+        `asset key nothing can index, and the deposit is not refundable.`);
+    }
+
+    const data = encodeRequest(INDEXED_CHAIN, token, kind, from);
     const tx = await window.ethereum.request({
       method: 'eth_sendTransaction',
       params: [{ from: WALLET, to: REG.address, data, value: '0x' + value.toString(16) }],
