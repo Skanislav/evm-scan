@@ -180,11 +180,19 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 			return h, true, err
 		}
 
+		code := func(ctx context.Context, chainID uint64, addr common.Address) ([]byte, error) {
+			src, ok := sources[chainID]
+			if !ok {
+				return nil, fmt.Errorf("no source for chain %d", chainID)
+			}
+			return src.CodeAt(ctx, addr)
+		}
+
 		nudgeMap := map[uint64]hintreg.Nudger{}
 		for id, svc := range services {
 			nudgeMap[id] = svc
 		}
-		mirror = hintreg.NewMirror(regClient, st, cfg.Registry.ChainID, head, nudgeMap, log)
+		mirror = hintreg.NewMirror(regClient, st, cfg.Registry.ChainID, head, code, nudgeMap, log)
 
 		// How this registry settles disputes is fixed at its deployment and is not
 		// something an operator can change, so it belongs in the startup log where it

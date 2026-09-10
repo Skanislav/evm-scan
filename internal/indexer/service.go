@@ -68,6 +68,9 @@ type Service struct {
 	// here rather than at genesis, so the deployment never depends on a node that
 	// kept all history.
 	historyFloor atomic.Uint64
+	// floorProbed records that the horizon has been established at least once, so
+	// the lazy path does not re-probe on every backfill tick.
+	floorProbed atomic.Bool
 
 	// Liveness, for the health endpoint. runErr is set when Run gives up;
 	// failStreak counts consecutive failed follow ticks.
@@ -131,8 +134,25 @@ func (s *Service) run(ctx context.Context) error {
 	if err := s.st.UpsertChain(ctx, s.chainID, s.opt.ChainName); err != nil {
 		return err
 	}
-	if err := s.resolveHistoryFloor(ctx); err != nil {
-		return err
+	// Probing the history horizon means binary-searching the chain with archive
+	// eth_getLogs, which is the most expensive thing this daemon does against a
+	// metered RPC. It exists to bound backfills — so on a chain with nothing to
+	// backfill and no discovery, it is pure spend, and on a rate-limited endpoint it
+	// is enough spend to fail. runBackfill probes lazily when an asset actually
+	// needs a floor.
+	//
+	// A failure here is also not fatal any more. It used to return, which stopped
+	// this chain's indexer, which cancelled the context every other chain's indexer
+	// and the publisher share: a throttled RPC on a chain carrying no index could
+	// take the whole deployment down, and did.
+	if s.shouldProbeFloor(ctx) {
+		if err := s.resolveHistoryFloor(ctx); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			s.log.Error("history floor probe failed; backfills will re-probe before they walk",
+				"chain_id", s.chainID, "err", err)
+		}
 	}
 
 	go s.subscribe(ctx)
@@ -395,6 +415,8 @@ func (s *Service) backfillTick(ctx context.Context) error {
 		if c.BackfillDone || ctx.Err() != nil {
 			continue
 		}
+		// The floor bounds this walk, so buy it here if start-up skipped it.
+		s.ensureHistoryFloor(ctx)
 		if err := s.backfillAsset(ctx, c); err != nil {
 			s.log.Error("backfill asset failed", "asset", c.Address.Hex(), "err", err)
 		}
@@ -516,6 +538,41 @@ func resolveBackfillFloor(requested, historyFloor uint64) uint64 {
 	return requested
 }
 
+// shouldProbeFloor reports whether this chain has anything the floor would bound.
+// Discovery finds new contracts to backfill, so it always needs one; otherwise the
+// answer is only worth buying when some asset still has history to walk.
+func (s *Service) shouldProbeFloor(ctx context.Context) bool {
+	if s.opt.Discovery.Enabled {
+		return true
+	}
+	cursors, err := s.st.ListCursors(ctx, s.chainID)
+	if err != nil {
+		// Unknown, so probe: this is the conservative direction, and the failure is
+		// a database one that will surface elsewhere anyway.
+		return true
+	}
+	for _, c := range cursors {
+		if !c.BackfillDone {
+			return true
+		}
+	}
+	if len(cursors) > 0 {
+		s.log.Info("no backfill outstanding; skipping the history floor probe",
+			"chain_id", s.chainID, "assets", len(cursors))
+	}
+	return false
+}
+
+// ensureHistoryFloor probes on demand, for a backfill that arrived after start.
+func (s *Service) ensureHistoryFloor(ctx context.Context) {
+	if s.floorProbed.Load() {
+		return
+	}
+	if err := s.resolveHistoryFloor(ctx); err != nil && ctx.Err() == nil {
+		s.log.Error("history floor probe failed", "chain_id", s.chainID, "err", err)
+	}
+}
+
 // HistoryFloor is the oldest block this chain's node can serve logs for.
 func (s *Service) HistoryFloor() uint64 { return s.historyFloor.Load() }
 
@@ -536,6 +593,7 @@ func (s *Service) resolveHistoryFloor(ctx context.Context) error {
 	}
 
 	s.historyFloor.Store(floor)
+	s.floorProbed.Store(true)
 	if err := s.st.SetHistoryFloor(ctx, s.chainID, floor); err != nil {
 		return err
 	}

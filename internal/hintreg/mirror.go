@@ -15,6 +15,10 @@ import (
 // deployment does not index, whose hints are then ignored.
 type HeadFunc func(ctx context.Context, chainID uint64) (head uint64, ok bool, err error)
 
+// CodeFunc reports the bytecode at an address on a chain we index. The mirror uses
+// it to tell a real registration from one aimed at the wrong chain.
+type CodeFunc func(ctx context.Context, chainID uint64, addr common.Address) ([]byte, error)
+
 // Nudger lets the mirror wake a chain's follower after new registrations.
 type Nudger interface{ Nudge() }
 
@@ -27,6 +31,7 @@ type Mirror struct {
 	client  *Client
 	st      *store.Store
 	head    HeadFunc
+	code    CodeFunc
 	nudge   map[uint64]Nudger
 	log     *slog.Logger
 	regChID uint64
@@ -34,11 +39,12 @@ type Mirror struct {
 
 // NewMirror builds a Mirror. regChainID is the chain the registry is deployed on,
 // which need not be a chain we index.
-func NewMirror(c *Client, st *store.Store, regChainID uint64, head HeadFunc, nudge map[uint64]Nudger, log *slog.Logger) *Mirror {
+func NewMirror(c *Client, st *store.Store, regChainID uint64, head HeadFunc, code CodeFunc, nudge map[uint64]Nudger, log *slog.Logger) *Mirror {
 	return &Mirror{
 		client:  c,
 		st:      st,
 		head:    head,
+		code:    code,
 		nudge:   nudge,
 		log:     log.With("registry", c.Address().Hex()),
 		regChID: regChainID,
@@ -88,6 +94,38 @@ func (m *Mirror) Sync(ctx context.Context) error {
 			if err := m.st.SetAssetStatus(ctx, a.ChainID, a.Token, store.StatusRevoked); err != nil {
 				return err
 			}
+			continue
+		}
+
+		// A registration names the chain it is about, and getting that wrong is the
+		// standing mistake around here — requestIndexing takes a chainId so an index
+		// of one chain can be committed on another, and a caller who passes the
+		// registry's chain instead funds a key nothing will ever cover.
+		//
+		// The cost of believing it is not theoretical. An asset registered for a chain
+		// whose token has no code there is unindexable by construction: no code, no
+		// events, ever. But the indexer does not know that, so it probes the history
+		// floor, which binary-searches the whole chain in archive reads, exhausts the
+		// RPC quota, dies, and cancels the context the other chains' indexers and the
+		// publisher share. One mistyped chainId took the whole daemon down.
+		//
+		// So check for code before adopting the hint. This is cheap (one eth_call at
+		// head), total (a token with no code cannot emit), and it refuses only what
+		// could never have worked.
+		if indexable, err := m.hasCode(ctx, a.ChainID, a.Token); err != nil {
+			m.log.Warn("could not check registered token for code; skipping this round",
+				"chain_id", a.ChainID, "token", a.Token.Hex(), "err", err)
+			continue
+		} else if !indexable {
+			// Mark it so the local scan set does not keep it alive from an earlier
+			// import, and so this logs once rather than every sync.
+			if err := m.st.SetAssetStatus(ctx, a.ChainID, a.Token, store.StatusRevoked); err != nil {
+				return err
+			}
+			m.log.Warn("ignoring registration for a token with no code on that chain",
+				"chain_id", a.ChainID, "token", a.Token.Hex(),
+				"registrant", a.Registrant.Hex(),
+				"note", "almost certainly the indexed chain was confused with the registry's")
 			continue
 		}
 
@@ -144,4 +182,18 @@ func registryKey(chainID uint64, token common.Address) []byte {
 	}
 	buf = append(buf, token.Bytes()...)
 	return crypto.Keccak256(buf)
+}
+
+// hasCode reports whether the token has bytecode on the chain it was registered
+// for. A nil CodeFunc means the check is unavailable, and an unavailable check
+// admits the asset: refusing on ignorance would drop good hints.
+func (m *Mirror) hasCode(ctx context.Context, chainID uint64, token common.Address) (bool, error) {
+	if m.code == nil {
+		return true, nil
+	}
+	code, err := m.code(ctx, chainID, token)
+	if err != nil {
+		return false, err
+	}
+	return len(code) > 0, nil
 }
