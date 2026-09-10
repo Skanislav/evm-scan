@@ -18,10 +18,12 @@
  * the reader could not tell that from a mid-sync gap.
  */
 
+import type { Hex } from "./merkle.js";
+import { readCommitment, readSnapshotUri, type EthCall } from "./registry.js";
 import { parseSnapshot, type Snapshot } from "./snapshot.js";
 import { diff, resolveAsOf, type VersionRow } from "./state.js";
 import type { MirrorStore } from "./store.js";
-import type { Commitment } from "./verify.js";
+import { verifyAsOf, type Commitment } from "./verify.js";
 
 export interface IngestResult {
   epochId: bigint;
@@ -71,6 +73,29 @@ export async function ingestSnapshot(
 
   await store.putRows(written);
   await store.putCoverage(commitment.epochId, snapshot.coverage);
+
+  // Read the rows back and verify them the way a wallet will, before declaring the
+  // epoch done.
+  //
+  // The check above passed on the *document*, whose leaves are hashed in the order
+  // they were written; this one passes on the *store*, whose leaves are hashed in
+  // sorted account order. Those two orders agree today — leaves reach merkle.Build
+  // in SnapshotIndex order (hintreg/publisher.go, `Index: i` over rows selected
+  // `ORDER BY account`) and the snapshot endpoint streams them back `ORDER BY idx`.
+  // But a merkle root is built from a sequence, so if they ever diverged, ingest
+  // would accept the epoch and every wallet would fail it forever, blaming an
+  // unfinished sync or a dishonest relay. Checking here costs the publisher one
+  // root build per epoch and turns that into a loud failure on the machine that
+  // can actually fix it.
+  const check = verifyAsOf(await store.rows(), snapshot.coverage, commitment);
+  if (!check.ok) {
+    throw new Error(
+      `stored rows do not rebuild epoch ${commitment.epochId} (${check.mismatches.join(", ")}): ` +
+        `the document verified but the rows written from it did not, so the leaf ` +
+        `order the publisher committed is not ascending by account`,
+    );
+  }
+
   // Last, so an ingest killed halfway is retried rather than assumed done. Retrying
   // is safe because putRows is keyed by (account, sinceEpoch).
   await store.markIngested(commitment.epochId);
@@ -123,6 +148,65 @@ function assertMatches(snapshot: Snapshot, commitment: Commitment): void {
         `${snapshot.coverageRoot}, registry holds ${commitment.coverageRoot}`,
     );
   }
+}
+
+export interface SyncOptions {
+  /** Where the registry lives. Note: `call` must reach *that* chain — see below. */
+  registry: Hex;
+  /** The chain the index is *about*, which is what the leaves commit to. */
+  chainId: bigint;
+  /**
+   * An `eth_call` against the chain the **registry** is deployed on.
+   *
+   * That is not necessarily `chainId`. The live deployment indexes mainnet and keeps
+   * its registry on Base, so a caller that pointed this at the indexed chain would
+   * be calling an address with no code and reading an empty answer as "no epoch
+   * yet". Confusing the two is the standing bug in this codebase.
+   */
+  call: EthCall;
+  /** Overridable so tests need no network; defaults to `fetchSnapshot`. */
+  fetch?: (uri: string) => Promise<string>;
+  /**
+   * Where to get the table, when the epoch was published before `uri` existed.
+   * Those epochs carry `uri = ""` permanently, so the chain cannot say where to
+   * look — but their roots are on chain, so a document from anywhere still checks.
+   */
+  snapshotUri?: string;
+}
+
+/**
+ * The whole publisher-side flow: ask the chain what is finalized, fetch that
+ * epoch's table, check it, and append the delta.
+ *
+ * This is the function to run on a timer. It returns what happened, including the
+ * uninteresting case — an epoch already ingested does nothing and says so, so
+ * calling this more often than epochs are published is free.
+ */
+export async function syncLatest(
+  store: MirrorStore,
+  options: SyncOptions,
+): Promise<IngestResult & { commitment: Commitment }> {
+  const commitment = await readCommitment(options.call, options.registry, options.chainId);
+
+  const already = await store.ingestedEpochs();
+  if (already.includes(commitment.epochId)) {
+    return {
+      commitment,
+      epochId: commitment.epochId,
+      wrote: false,
+      rows: [],
+      leaves: 0,
+      changed: 0,
+      tombstoned: 0,
+    };
+  }
+
+  const uri =
+    options.snapshotUri ??
+    (await readSnapshotUri(options.call, options.registry, commitment.epochId));
+  const document = await (options.fetch ?? fetchSnapshot)(uri);
+
+  return { commitment, ...(await ingestSnapshot(store, document, commitment)) };
 }
 
 /** Fetches a snapshot from an http(s) uri. `ipfs://` needs a gateway url instead. */

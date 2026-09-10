@@ -78,7 +78,9 @@ export {
   fetchSnapshot,
   ingestSnapshot,
   previousEpoch,
+  syncLatest,
   type IngestResult,
+  type SyncOptions,
 } from "./ingest.js";
 
 export { keysOf, MemoryStore, type MirrorStore } from "./store.js";

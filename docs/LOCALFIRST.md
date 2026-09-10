@@ -115,11 +115,25 @@ A root is built from a *sequence*. Sorted-pair hashing means a proof carries no
 direction bits, but it does not make the tree order-independent: the same leaves in a
 different order give a different root, with nothing to say which was meant.
 
-The publisher's order is ascending by account, compared as bytes — `SnapshotIndex`
-selects `ORDER BY account` over a `BYTEA` column and Postgres orders those bytewise.
-`sortLeaves` reproduces exactly that from an unordered set, which is what lets a
-mirror rebuild the root from rows that came out of SQLite in any order. **No change
-to the Go side was required**; the ordering was already deterministic.
+The publisher's order is ascending by account, compared as bytes. The whole path:
+
+| Step | Where | Order |
+| --- | --- | --- |
+| rows selected | `store.SnapshotIndex` (`internal/store/index.go:281`) | `ORDER BY account` over `BYTEA`, which Postgres compares bytewise |
+| tree built | `hintreg.Publisher.Build` (`internal/hintreg/publisher.go:136-141`) | `Index: i`, the slice position — so `epoch_leaves.idx` *is* that order |
+| document written | `store.EachEpochLeaf` (`internal/store/epochs.go:373`) | `ORDER BY idx` |
+
+`sortLeaves` reproduces that from an unordered set, which is what lets a mirror
+rebuild the root from rows SQLite handed back in any order. **No change to the Go
+side was required**; the ordering was already deterministic end to end.
+
+It is checked rather than trusted, because the failure is silent. `ingestSnapshot`
+verifies the *document* (leaves hashed in the order written) and then re-reads the
+*stored rows* and verifies those too (leaves hashed in sorted order) before marking
+the epoch done. If those orders ever diverged, the first check would pass and every
+wallet would fail forever with the ambiguous "still syncing, or the relay is lying"
+message — pointing at the wrong culprit. One extra root build per epoch, on the one
+machine that can fix it.
 
 ## What a match proves, and what it does not
 
@@ -167,6 +181,7 @@ run under plain `go test ./...`, so the guard needs no Node toolchain.
 | verification + its wording | `mirror/src/verify.ts` | **yes** |
 | registry ABI both ways | `mirror/src/registry.ts` | **yes** — blobs packed by go-ethereum |
 | ingest, idempotence, ordering | `mirror/src/ingest.ts` | **yes** — against `MemoryStore` |
+| the whole flow (`syncLatest`) | `mirror/src/ingest.ts` | **yes** — fixture `eth_call`, injected fetch |
 | Evolu adapter logic | `mirror/src/evolu.ts` | **partly** — against a fake Evolu |
 | Evolu itself: relay, RBSR, keys | — | **no** — never run here |
 
@@ -177,6 +192,13 @@ exercised against a stand-in that implements the documented `upsert` / `createQu
 row id that is not deterministic, a missing scope, a `bigint` pushed through a JS
 number — and covers nothing about Evolu's own behaviour.
 
+**The first thing a real run will hit** is the initial ingest: with no previous
+state, `diff` emits one row per account, so bootstrapping the live Base index means
+about 540,000 `upsert` calls through a mutation path built for interactive apps.
+Whether that wants batching, chunking across ticks, or `ShardOwner` partitions is
+unknown here — it was not measured, and no bulk-insert limit was checked. Steady
+state is not the problem: an epoch that changed 400 accounts writes 400 rows.
+
 This is deliberate, not a shortcut: **Evolu is not a dependency of correctness.**
 The `MirrorStore` interface is the seam, and verification is a hash of rows, not a
 property of where they were kept. If the binding is wrong it will be wrong in ways a
@@ -186,9 +208,9 @@ report a false pass.
 ## Wiring it to a real Evolu
 
 ```ts
-import { createEvolu, createIdFromString, id, maxLength, NonEmptyString, SimpleName } from "@evolu/common";
+import { createEvolu, createIdFromString, SimpleName } from "@evolu/common";
 import { evoluWebDeps } from "@evolu/web";
-import { createMirrorStore, readCommitment, verifyAsOf } from "@evm-scan/mirror";
+import { createMirrorStore, readCommitment, syncLatest, verifyAsOf } from "@evm-scan/mirror";
 
 const Schema = { /* see MIRROR_TABLES in mirror/src/evolu.ts */ };
 const evolu = createEvolu(evoluWebDeps)(Schema, {
@@ -196,12 +218,20 @@ const evolu = createEvolu(evoluWebDeps)(Schema, {
   transports: [{ type: "WebSocket", url: "wss://your-relay" }],
 });
 
-const store = createMirrorStore({
-  evolu, createIdFromString,
-  registry: "0x…", chainId: 8453n,
-});
+const REGISTRY = "0x…";     // where HintRegistry is deployed
+const INDEXED_CHAIN = 1n;   // the chain the index is *about*
 
-const commitment = await readCommitment(ethCall, "0x…", 8453n);
+const store = createMirrorStore({ evolu, createIdFromString, registry: REGISTRY, chainId: INDEXED_CHAIN });
+
+// Publisher, on a timer: chain → uri → table → delta. `call` is an eth_call
+// against the chain the REGISTRY is on, which is not necessarily INDEXED_CHAIN —
+// the live deployment indexes mainnet with its registry on Base, so pointing this
+// at the indexed chain calls an address with no code and reads the empty answer as
+// "no epoch yet".
+const synced = await syncLatest(store, { registry: REGISTRY, chainId: INDEXED_CHAIN, call });
+
+// Wallet: rebuild the root from local rows and compare with the chain.
+const commitment = await readCommitment(call, REGISTRY, INDEXED_CHAIN);
 const result = verifyAsOf(await store.rows(), await store.coverage(commitment.epochId), commitment);
 console.log(result.reason);
 ```

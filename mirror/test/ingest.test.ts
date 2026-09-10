@@ -79,11 +79,12 @@ const epoch4 = document(CHAIN, COVERAGE, [
   { account: account(1), assets: [asset(0xa1)] },
   { account: account(2), assets: [asset(0xa1)] },
 ]);
-const epoch7 = document(CHAIN, COVERAGE, [
+const LEAVES_7: Leaf[] = [
   { account: account(1), assets: [asset(0xa1)] },
   { account: account(2), assets: [asset(0xa1), asset(0xb2)] },
   { account: account(3), assets: [asset(0xb2)] },
-]);
+];
+const epoch7 = document(CHAIN, COVERAGE, LEAVES_7);
 
 describe("ingesting an epoch", () => {
   it("writes rows and leaves the mirror verifiable", async () => {
@@ -173,6 +174,38 @@ describe("ingesting an epoch", () => {
       ingestSnapshot(store, epoch4, { ...commitment, coverageRoot: `0x${"11".repeat(32)}` }),
     ).rejects.toThrow(/rebuilt coverage root/);
     expect(await store.rows()).toHaveLength(0);
+  });
+});
+
+describe("leaf order", () => {
+  // The publisher's tree is built in SnapshotIndex order, which is ascending by
+  // account: hintreg/publisher.go assigns `Index: i` over rows selected `ORDER BY
+  // account`, and the snapshot endpoint streams them back `ORDER BY idx`. A mirror
+  // resolves rows in sorted order, so a document arriving in any other order would
+  // verify against its own header and then fail against what the mirror rebuilds —
+  // silently, and in every wallet rather than on the publisher.
+  it("refuses a document whose leaves are not ascending by account", async () => {
+    const backwards = LEAVES_7.slice().reverse();
+    const doc = document(CHAIN, COVERAGE, backwards);
+
+    // The document is self-consistent: its header root is built in its own order.
+    expect(parseSnapshot(doc).root).toBe(parseSnapshot(doc).header.root);
+    // And it is not the root a mirror would rebuild from the same leaves.
+    expect(parseSnapshot(doc).root).not.toBe(parseSnapshot(epoch7).root);
+
+    const store = new MemoryStore();
+    await expect(ingestSnapshot(store, doc, commitmentFor(doc, 7n))).rejects.toThrow(
+      /stored rows do not rebuild epoch 7/,
+    );
+    expect(await store.ingestedEpochs()).toEqual([]);
+  });
+
+  it("accepts the same leaves in the order the publisher actually writes them", async () => {
+    const store = new MemoryStore();
+    await expect(ingestSnapshot(store, epoch7, commitmentFor(epoch7, 7n))).resolves.toMatchObject({
+      wrote: true,
+    });
+    expect(await store.ingestedEpochs()).toEqual([7n]);
   });
 });
 
