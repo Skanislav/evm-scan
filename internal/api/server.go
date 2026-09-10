@@ -113,6 +113,7 @@ func New(d Deps) *Server {
 	s.mux.HandleFunc("GET /v1/accounts/{address}", s.accountAssets)
 	s.mux.HandleFunc("GET /v1/accounts/{address}/contracts", s.accountContracts)
 	s.mux.HandleFunc("GET /v1/accounts/{address}/portfolio", s.accountPortfolio)
+	s.mux.HandleFunc("GET /v1/graph", s.graph)
 	s.mux.HandleFunc("GET /v1/prices", s.listPrices)
 	s.mux.HandleFunc("GET /v1/lens", s.listLenses)
 	s.mux.HandleFunc("GET /v1/candidates", s.listCandidates)

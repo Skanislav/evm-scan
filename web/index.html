@@ -87,6 +87,7 @@
     the head, or registered on-chain as <em>hints</em>. Only promoted ones get a full
     history walk — down to whatever history the node kept, never assuming genesis.
     The result is a per-account discovery index, committed back on-chain as a merkle root.
+    See it drawn as a <a href="graph.html">graph of accounts and the contracts they share</a>.
   </p>
 </header>
 
@@ -1004,6 +1005,14 @@ $('req-send').addEventListener('click', sendRequest);
 $('req-token').addEventListener('keydown', e => { if (e.key === 'Enter' && !$('req-send').disabled) sendRequest(); });
 $('build').addEventListener('click', buildEpoch);
 $('refresh-epochs').addEventListener('click', loadEpochs);
+
+// ?account=0x… lets another page hand this one a subject — the graph view links
+// here that way. Anything else in the query string is left alone.
+const deepLinked = new URLSearchParams(location.search).get('account');
+if (deepLinked) {
+  $('account').value = deepLinked;
+  lookup();
+}
 
 loadStatus(); loadAssets(); loadEpochs(); loadCandidates();
 setInterval(() => { loadStatus(); loadAssets(); loadCandidates(); }, 5000);

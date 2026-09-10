@@ -335,3 +335,98 @@ func (s *Store) CoverageRange(ctx context.Context, chainID uint64) (from, to uin
 	}
 	return uint64(*lo), uint64(*hi), nil
 }
+
+// AssetMembers is one contract and the accounts that touched it most, for the graph
+// view. Holders is truncated to the requested width; HolderTotal says by how much.
+type AssetMembers struct {
+	Asset       common.Address
+	Standard    uint8
+	Symbol      string
+	Name        string
+	HolderTotal uint64
+	Holders     []Interaction
+}
+
+// GraphMemberships returns a page of the busiest assets with their busiest accounts.
+//
+// This is the membership list behind the graph page, and it is deliberately a
+// membership list rather than an edge list: an asset with k accounts implies
+// k*(k-1)/2 pairs, so sending the pairs would send a square of what the caller
+// needs to draw them.
+//
+// It is paged rather than capped so that a caller can keep going. The order —
+// busiest asset first — is total and stable, so page n+1 is the next n assets and
+// never a reshuffle of the ones already drawn. total is the number of assets that
+// have any account at all, which is what says whether another page exists; it is
+// carried on the rows, so a page past the end reports zero of both.
+func (s *Store) GraphMemberships(ctx context.Context, chainID uint64, limit, offset, perAsset int) (rowsOut []AssetMembers, total uint64, err error) {
+	rows, err := s.pool.Query(ctx, `
+		WITH sized AS (
+			SELECT a.address, a.standard, a.symbol, a.name,
+			       (SELECT COUNT(*) FROM interactions i
+			         WHERE i.chain_id = a.chain_id AND i.asset = a.address) AS holders
+			FROM assets a
+			WHERE a.chain_id = $1 AND a.status <> 'revoked'
+		),
+		top AS (
+			-- The window runs before LIMIT, so this counts every asset with an
+			-- account, not just the ones on this page.
+			SELECT *, COUNT(*) OVER () AS total FROM sized WHERE holders > 0
+			ORDER BY holders DESC, address
+			LIMIT $2 OFFSET $3
+		)
+		SELECT t.address, t.standard, t.symbol, t.name, t.holders, t.total,
+		       m.account, m.first_block, m.last_block, m.event_count, m.roles
+		FROM top t
+		JOIN LATERAL (
+			SELECT account, first_block, last_block, event_count, roles
+			FROM interactions i
+			WHERE i.chain_id = $1 AND i.asset = t.address
+			ORDER BY event_count DESC, account
+			LIMIT $4
+		) m ON TRUE
+		ORDER BY t.holders DESC, t.address, m.event_count DESC, m.account`,
+		int64(chainID), limit, offset, perAsset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var out []AssetMembers
+	for rows.Next() {
+		var (
+			addr, acc    []byte
+			standard     int16
+			symbol, name *string
+			holders, tot int64
+			fb, lb, ec   int64
+			roles        int32
+		)
+		if err := rows.Scan(&addr, &standard, &symbol, &name, &holders, &tot,
+			&acc, &fb, &lb, &ec, &roles); err != nil {
+			return nil, 0, err
+		}
+		total = uint64(tot)
+		asset := common.BytesToAddress(addr)
+		if len(out) == 0 || out[len(out)-1].Asset != asset {
+			m := AssetMembers{Asset: asset, Standard: uint8(standard), HolderTotal: uint64(holders)}
+			if symbol != nil {
+				m.Symbol = *symbol
+			}
+			if name != nil {
+				m.Name = *name
+			}
+			out = append(out, m)
+		}
+		cur := &out[len(out)-1]
+		cur.Holders = append(cur.Holders, Interaction{
+			Account:    common.BytesToAddress(acc),
+			Asset:      asset,
+			FirstBlock: uint64(fb),
+			LastBlock:  uint64(lb),
+			EventCount: uint64(ec),
+			Roles:      uint32(roles),
+		})
+	}
+	return out, total, rows.Err()
+}
