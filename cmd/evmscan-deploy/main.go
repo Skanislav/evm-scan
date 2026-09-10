@@ -97,8 +97,15 @@ func main() {
 	flag.Var(&gateways, "gateway", "ERC-3668 gateway URL template for contractsOf, e.g. https://host/ccip/{sender}/{data}.json (repeatable; set at deployment, or replaces the list on an existing local-arbiter registry)")
 	flag.Parse()
 
-	if o.node == "" || o.key == "" {
-		log.Fatal("-node and -key (or EVMSCAN_DEPLOYER_KEY) are required")
+	if o.node == "" {
+		log.Fatal("-node is required")
+	}
+	// Inspecting an existing registry only reads, so it does not need a key. Anything
+	// that sends a transaction does.
+	sends := o.registry == "" || len(requests) > 0 || len(funds) > 0 || len(gateways) > 0
+	if sends && o.key == "" {
+		log.Fatal("-key (or EVMSCAN_DEPLOYER_KEY) is required to deploy or send; " +
+			"pass only -node and -registry to inspect one")
 	}
 	if window == 0 {
 		log.Fatal("-challenge-window must be greater than zero")
@@ -121,11 +128,6 @@ func main() {
 }
 
 func run(ctx context.Context, o opts) error {
-	key, err := crypto.HexToECDSA(strings.TrimPrefix(o.key, "0x"))
-	if err != nil {
-		return fmt.Errorf("parse key: %w", err)
-	}
-
 	node, err := chain.Dial(ctx, o.node, o.requireLocal)
 	if err != nil {
 		return err
@@ -136,9 +138,17 @@ func run(ctx context.Context, o opts) error {
 	if err != nil {
 		return err
 	}
-	sub := hintreg.NewEOASubmitter(node, key, chainID, o.timeout)
 	fmt.Printf("chain id   %d\n", chainID)
-	fmt.Printf("deployer   %s\n", sub.Sender().Hex())
+
+	var sub *hintreg.EOASubmitter
+	if o.key != "" {
+		key, err := crypto.HexToECDSA(strings.TrimPrefix(o.key, "0x"))
+		if err != nil {
+			return fmt.Errorf("parse key: %w", err)
+		}
+		sub = hintreg.NewEOASubmitter(node, key, chainID, o.timeout)
+		fmt.Printf("deployer   %s\n", sub.Sender().Hex())
+	}
 
 	art, err := contracts.Load("HintRegistry")
 	if err != nil {
@@ -174,6 +184,14 @@ func run(ctx context.Context, o opts) error {
 		registry = r.ContractAddress
 		fmt.Printf("registry   %s\n\n", registry.Hex())
 
+		// A receipt says the chain accepted the deployment; it does not say this
+		// endpoint can see it yet. Behind a load balancer the next eth_call may land
+		// on a node that has not imported the block, which answers a getter with
+		// empty data and makes a perfectly good registry look broken.
+		if err := awaitCode(ctx, node, registry); err != nil {
+			fmt.Printf("\nnote: %v\n", err)
+		}
+
 		// Read the mode back off the chain rather than echoing the flags: what matters
 		// is what the deployed bytecode says, not what we asked for.
 		client, err := hintreg.NewClient(node, registry)
@@ -182,7 +200,15 @@ func run(ctx context.Context, o opts) error {
 		}
 		mode, err := client.Mode(ctx)
 		if err != nil {
-			return err
+			// The registry exists — the receipt was successful and its address is
+			// printed above. Failing here would tell an operator to deploy again,
+			// which spends gas to produce a second registry that nothing points at.
+			// Report it as what it is: a read that did not work yet.
+			fmt.Printf("\nDEPLOYED. Could not read the registry back yet: %v\n", err)
+			fmt.Printf("This is the endpoint lagging, not a failed deployment.\n")
+			fmt.Printf("Do NOT deploy again. Use the address above and check it with:\n")
+			fmt.Printf("  ./bin/evmscan-deploy -node <rpc> -registry %s\n", registry.Hex())
+			return nil
 		}
 		printMode(mode)
 		fmt.Printf("min funding      %s wei\n", o.econ.MinFunding)
@@ -368,4 +394,28 @@ func mustWei(s string) *big.Int {
 		log.Fatalf("bad wei amount %q", s)
 	}
 	return v
+}
+
+// awaitCode waits until the endpoint can actually see the deployed bytecode. A
+// receipt only proves the chain accepted the transaction; a load-balanced RPC can
+// still route the next call to a node a block or two behind, and eth_call against a
+// block where the contract does not exist returns empty data rather than an error.
+func awaitCode(ctx context.Context, src chain.Source, addr common.Address) error {
+	const (
+		attempts = 20
+		wait     = 1500 * time.Millisecond
+	)
+	for i := 0; i < attempts; i++ {
+		code, err := src.CodeAt(ctx, addr)
+		if err == nil && len(code) > 0 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(wait):
+		}
+	}
+	return fmt.Errorf("%s still has no code after %s; the endpoint is behind the chain",
+		addr.Hex(), time.Duration(attempts)*wait)
 }
