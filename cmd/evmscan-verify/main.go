@@ -61,6 +61,7 @@ func main() {
 		account  = flag.String("account", "", "account to prove membership for")
 		ccipMode = flag.Bool("ccip", false, "resolve HintRegistry.contractsOf through ERC-3668 instead of checking one epoch")
 		gateway  = flag.String("gateway", "", "gateway URL template to use with -ccip (default: the registry's own list)")
+		chainID  = flag.Uint64("chain", 0, "chain the index is about, for -ccip (default: the node's own chain)")
 	)
 	flag.Parse()
 
@@ -70,7 +71,7 @@ func main() {
 	}
 
 	if *ccipMode {
-		if err := runCCIP(*nodeURL, *registry, *account, *gateway); err != nil {
+		if err := runCCIP(*nodeURL, *registry, *account, *gateway, *chainID); err != nil {
 			log.Fatal(err)
 		}
 		return
@@ -84,7 +85,7 @@ func main() {
 // OffchainLookup, a gateway supplies the leaf and proof, and the contract's
 // callback verifies them against the latest finalized root before answering.
 // Nothing here trusts the API: a gateway that lies gets a revert, not a listing.
-func runCCIP(nodeURL, registryAddr, accountHex, gatewayURL string) error {
+func runCCIP(nodeURL, registryAddr, accountHex, gatewayURL string, chainID uint64) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
@@ -102,9 +103,16 @@ func runCCIP(nodeURL, registryAddr, accountHex, gatewayURL string) error {
 		return err
 	}
 	defer node.Close()
-	chainID, err := node.ChainID(ctx)
-	if err != nil {
-		return err
+	// The chain a commitment is *about* is not the chain the registry sits on:
+	// publishIndex, assetKey and contractsOf all take a chainId precisely so an index
+	// of one chain can be committed on another where the gas is cheaper. Defaulting to
+	// the node's own chain is right for a single-chain deployment and wrong for a split
+	// one, where it asks the only question that has no data, so let it be named.
+	if chainID == 0 {
+		var err error
+		if chainID, err = node.ChainID(ctx); err != nil {
+			return err
+		}
 	}
 	regABI, err := contracts.HintRegistryABI()
 	if err != nil {
