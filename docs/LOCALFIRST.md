@@ -1,0 +1,228 @@
+# Mirroring an index without trusting the mirror
+
+## The problem this solves
+
+`docs/RECOVERY.md` fixed the part where an index died with the publisher's Postgres:
+an epoch now points at a snapshot, and `snapshot.Verify` checks that document against
+the roots on chain. That made the table recoverable. It did not make it *usable by a
+client*.
+
+A wallet that wants the index has two options today, and both are bad:
+
+1. **Ask the API.** `GET /v1/accounts/{addr}/contracts` is one round trip and it is
+   trust-me. There is an inclusion proof next to it, but the wallet is still asking
+   one service what the answer is.
+2. **Download the snapshot.** Self-authenticating, and tens of megabytes — *per
+   epoch*, because a merkle root is a fingerprint and there is no way to check that
+   the 400 rows which changed are the only ones that changed.
+
+So the honest, verifiable path costs a full re-download every epoch, and nobody will
+pay it. The result is that the commitment is checkable in principle and unchecked in
+practice, which is close to the opposite of the point.
+
+## The shape of the answer
+
+Keep the table in the client, and sync only what changed.
+
+- Rows live in the client's own SQLite, synced by [Evolu](https://evolu.dev) over
+  **range-based set reconciliation** — fingerprints compared by range, so a client
+  pulls only the rows it is missing, in a number of round trips that grows
+  logarithmically with the table.
+- The client rebuilds the keccak root from its own rows and compares it with
+  `latestFinalizedEpoch` on the registry.
+
+That second bullet is the whole security argument, and it is unchanged from
+RECOVERY.md: **availability is the only thing a host is trusted for.** An Evolu relay
+is blind by construction — it moves encrypted rows and fingerprints and cannot read
+them — and it is interchangeable, because nothing about the verification depends on
+which relay served a row.
+
+### What is Aztec-shaped about this, and what is not
+
+The resemblance is real but narrow, and it is worth being exact about, because the
+analogy leads somewhere wrong if it is taken too far.
+
+**Holds.** State lives off chain in the client; a commitment lives on chain; the
+client can prove its state against the commitment. Append-only version rows are the
+same device Aztec's note-hash tree uses — history that is never edited is what keeps
+a commitment to a *past* state checkable later.
+
+**Does not hold.** Aztec's root is enforced by the protocol at insertion, with a
+nullifier tree preventing double-use, and its leaves are private. Here the root is
+posted by the publisher about itself and guarded only by a challenge window, and the
+leaves are public token logs. Nobody enforces the transition from epoch N to N+1, and
+there is nothing to keep secret. So this is not private state with a root binding; it
+is a public table with a commitment, distributed peer-to-peer. Evolu's owner-scoped
+encryption comes along for free and protects nothing, because the data was already
+public.
+
+## How it fits together
+
+```
+  publisher                          relay                        wallet
+  ─────────                          ─────                        ──────
+  evmscand                        (blind, replaceable)         local SQLite
+     │                                   │                          │
+     │ GET /v1/epochs/{id}/snapshot      │                          │
+     ▼                                   │                          │
+  ingestSnapshot ──── version rows ──────┼──── RBSR delta ─────────▶│
+     │  (checks the doc against          │      (only what          │
+     │   the chain first)                │       changed)           ▼
+     │                                   │                    verifyAsOf
+     │                                   │                          │
+     └───────────── HintRegistry ────────┴──────────────────────────┘
+                  latestFinalizedEpoch → root, coverageRoot
+```
+
+Note which side pays for what. The publisher downloads its own whole table every
+epoch, which is free — it is the machine that produced it. Wallets get the delta.
+That asymmetry is why **no change to the daemon was needed for any of this**:
+`/v1/epochs` already exposes `onchain_epoch_id` and `status`, and
+`/v1/epochs/{id}/snapshot` already streams the table.
+
+## What a mirror stores
+
+Immutable versions, never edited:
+
+| account | sinceEpoch | assets |
+| --- | --- | --- |
+| `0x…01` | 4 | `[A1]` |
+| `0x…02` | 4 | `[A1]` |
+| `0x…02` | 7 | `[A1, B2]` |
+| `0x…03` | 9 | `[]` ← tombstone |
+
+`resolveAsOf(rows, n)` takes the newest version of each account at or below `n`. Two
+things follow, and both are load-bearing:
+
+- **A client mid-sync can still verify an older epoch.** It resolves the cut at epoch
+  7 while rows from epoch 9 are already arriving. One mutable row per account would
+  leave it holding a mixture of two epochs and able to rebuild neither.
+- **Reconciliation converges.** A row that is never edited has a fingerprint that
+  never changes, so RBSR stops re-sending it. A table of mutable rows would churn.
+
+`sinceEpoch` is the **on-chain** epoch id, never the publisher's local one — a wallet
+gets its number from `latestFinalizedEpoch`, and keying by anything else would mean a
+client could not look up what it had just synced. (Confusing those two ids is the
+standing bug in this codebase; see the note in `snapshot.URI`.)
+
+Rows are scoped by `(registry, chainId)`. `leafHash` commits to the chain id, so rows
+about two chains belong to two different trees, and two registry deployments on one
+chain are two different sets of commitments.
+
+## Leaf order, and why it is already correct
+
+A root is built from a *sequence*. Sorted-pair hashing means a proof carries no
+direction bits, but it does not make the tree order-independent: the same leaves in a
+different order give a different root, with nothing to say which was meant.
+
+The publisher's order is ascending by account, compared as bytes — `SnapshotIndex`
+selects `ORDER BY account` over a `BYTEA` column and Postgres orders those bytewise.
+`sortLeaves` reproduces exactly that from an unordered set, which is what lets a
+mirror rebuild the root from rows that came out of SQLite in any order. **No change
+to the Go side was required**; the ordering was already deterministic.
+
+## What a match proves, and what it does not
+
+A match says: *these rows are exactly what that epoch committed.* It does not say the
+epoch's contents are true. The index is a hint — a wallet uses it to learn which
+contracts are worth pulling history for, then reads that history from a source it
+trusts. A finalized epoch is one nobody challenged, not one anybody verified.
+
+A **mismatch is ambiguous**, and the code says so rather than guessing:
+
+> unverified at epoch 9: the index root does not match. Either this mirror has not
+> finished syncing, or it is serving rows the publisher did not commit — the chain
+> does not say which, so re-check once sync is idle before treating it as dishonest.
+
+Nothing on chain distinguishes those two. `IndexPublished` carries no leaf count, so
+there is no number to compare against, and inventing a completeness signal would be
+worse than admitting there is not one. Re-verify when sync settles.
+
+## Running it
+
+```bash
+make test-mirror        # the TypeScript suite (needs node + npm)
+go test ./internal/...  # includes the fixture-staleness checks
+```
+
+The parity fixtures are generated by Go, which is the side `cmd/evmscan-verify`
+already checks against the real Solidity verifier:
+
+```bash
+go test ./internal/snapshot/ -run Fixtures -update-fixtures   # leaf/root vectors
+go test ./internal/hintreg/  -run MirrorFixtures -update-fixtures  # ABI blobs
+```
+
+Without the flags those tests **assert** the committed files still match, so changing
+a hash or an ABI on the Go side fails in CI rather than in somebody's wallet. Both
+run under plain `go test ./...`, so the guard needs no Node toolchain.
+
+## State of the code
+
+| Layer | File | Verified |
+| --- | --- | --- |
+| commitment encoding | `mirror/src/merkle.ts` | **yes** — vectors from Go |
+| snapshot parse + rebuild | `mirror/src/snapshot.ts` | **yes** — whole documents from Go |
+| version rows, resolve, diff | `mirror/src/state.ts` | **yes** |
+| verification + its wording | `mirror/src/verify.ts` | **yes** |
+| registry ABI both ways | `mirror/src/registry.ts` | **yes** — blobs packed by go-ethereum |
+| ingest, idempotence, ordering | `mirror/src/ingest.ts` | **yes** — against `MemoryStore` |
+| Evolu adapter logic | `mirror/src/evolu.ts` | **partly** — against a fake Evolu |
+| Evolu itself: relay, RBSR, keys | — | **no** — never run here |
+
+The last two rows are the honest boundary. `@evolu/common` requires Node ≥ 24.20.0
+and this toolchain is older, so the adapter is written against the published API and
+exercised against a stand-in that implements the documented `upsert` / `createQuery`
+/ `loadQuery` surface. That covers the bugs which live on this side of the seam — a
+row id that is not deterministic, a missing scope, a `bigint` pushed through a JS
+number — and covers nothing about Evolu's own behaviour.
+
+This is deliberate, not a shortcut: **Evolu is not a dependency of correctness.**
+The `MirrorStore` interface is the seam, and verification is a hash of rows, not a
+property of where they were kept. If the binding is wrong it will be wrong in ways a
+first run against a relay shows immediately, and it cannot make an unverified mirror
+report a false pass.
+
+## Wiring it to a real Evolu
+
+```ts
+import { createEvolu, createIdFromString, id, maxLength, NonEmptyString, SimpleName } from "@evolu/common";
+import { evoluWebDeps } from "@evolu/web";
+import { createMirrorStore, readCommitment, verifyAsOf } from "@evm-scan/mirror";
+
+const Schema = { /* see MIRROR_TABLES in mirror/src/evolu.ts */ };
+const evolu = createEvolu(evoluWebDeps)(Schema, {
+  name: SimpleName.orThrow("evmscan-mirror"),
+  transports: [{ type: "WebSocket", url: "wss://your-relay" }],
+});
+
+const store = createMirrorStore({
+  evolu, createIdFromString,
+  registry: "0x…", chainId: 8453n,
+});
+
+const commitment = await readCommitment(ethCall, "0x…", 8453n);
+const result = verifyAsOf(await store.rows(), await store.coverage(commitment.epochId), commitment);
+console.log(result.reason);
+```
+
+The publisher holds a `SharedOwner` (it has the write key); wallets get the
+`SharedReadonlyOwner` derived from it with `createSharedReadonlyOwner`, which carries
+the id and decryption key and no ability to write. Publishing that to the world is
+the intended use — the data is public.
+
+## What is deliberately not built
+
+- **A delta endpoint on the daemon.** The ingest sidecar is the publisher and already
+  has the previous state locally, so it diffs against itself. A
+  `GET /v1/epochs/{id}/delta` would help non-Evolu HTTP clients and is the obvious
+  next step, but nothing here needs it.
+- **Incremental verification.** Sorted-pair hashing gives no non-membership proofs,
+  so a client checks the whole set or one leaf, never "these 400 rows are the only
+  change". RBSR saves bandwidth, not verification work. Fixing that means a
+  sorted-key tree with range proofs — a `HintRegistry` change, and `evmscan-verify`
+  re-run against the new verifier.
+- **Per-user private state.** The Aztec-shaped version of this — a wallet's own
+  watchlist or labels, encrypted, committed per user — is a different project. Evolu
+  would be native to it; the on-chain half would not be, since per-user roots cost
+  gas, leak activity timing, and without nullifiers amount to a notarised backup.
