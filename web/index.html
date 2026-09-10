@@ -99,11 +99,20 @@
 <section>
   <h2>Look up an account</h2>
   <div class="row">
-    <input type="text" id="account" placeholder="0x… account address" spellcheck="false" autocomplete="off">
+    <input type="text" id="account" placeholder="0x… address, or a name like vitalik.eth" spellcheck="false" autocomplete="off">
     <button id="lookup">Look up</button>
   </div>
+  <div class="hint" id="name-note" hidden></div>
+  <div class="row" id="name-rpc-row" hidden style="margin-top:8px">
+    <input type="text" id="name-rpc" placeholder="https://… mainnet RPC for name resolution" spellcheck="false" autocomplete="off">
+    <button id="name-rpc-save" class="ghost">Save</button>
+    <button id="name-rpc-reset" class="ghost">Default</button>
+  </div>
   <div class="hint">Balances are read live from the node with <code>eth_call</code> at head — never derived from indexed events.
-    Prices come from the chain too: Chainlink feeds and Uniswap pools found through a second deployless call, never a quote API.</div>
+    Prices come from the chain too: Chainlink feeds and Uniswap pools found through a second deployless call, never a quote API.
+    <br>Names (<code>.eth</code>, <code>.gwei</code>, <code>.wei</code>) are the one exception to reading only your own node: they
+    resolve against a public <strong>mainnet</strong> RPC in your browser, because the registries live on mainnet whichever chain
+    this deployment indexes. Only the name is sent, and only when you type one.</div>
   <div class="err" id="account-err" hidden></div>
   <div class="value-summary" id="value-summary" hidden></div>
   <div class="scroll"><table id="account-table" hidden>
@@ -559,12 +568,109 @@ async function heldBalances(addr) {
     .sort((a, b) => (a.symbol || '').localeCompare(b.symbol || ''));
 }
 
+// Name resolution, via @1001-digital/ethereum-names over viem. ENS, GNS (.gwei) and
+// WNS (.wei) all live on Ethereum mainnet, so this asks a mainnet RPC regardless of
+// which chain the deployment indexes — the one query in this page that leaves the
+// daemon's own node, which is why it is disclosed next to the result.
+//
+// Loaded lazily and pinned: nothing is fetched until someone actually types a name,
+// and an unpinned CDN import would be a moving dependency in the page.
+const NAMES_MODULE = 'https://esm.sh/@1001-digital/ethereum-names@0.6.0';
+const VIEM_MODULE = 'https://esm.sh/viem@2.56.3';
+const NAME_RPC_KEY = 'evmscan.name-rpc';
+const DEFAULT_NAME_RPC = 'https://ethereum-rpc.publicnode.com';
+const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
+
+function nameRpc() {
+  try { return localStorage.getItem(NAME_RPC_KEY) || DEFAULT_NAME_RPC; } catch { return DEFAULT_NAME_RPC; }
+}
+function setNameRpc(v) {
+  try { v ? localStorage.setItem(NAME_RPC_KEY, v) : localStorage.removeItem(NAME_RPC_KEY); } catch { /* private window */ }
+  names = null;
+}
+
+let names = null;      // resolver for the current RPC, built once
+const nameCache = new Map();
+
+async function resolver() {
+  if (!names) {
+    names = (async () => {
+      const [lib, viem, chains] = await Promise.all([
+        import(NAMES_MODULE),
+        import(VIEM_MODULE),
+        import(VIEM_MODULE + '/chains'),
+      ]);
+      const client = viem.createPublicClient({ chain: chains.mainnet, transport: viem.http(nameRpc()) });
+      return lib.createEthereumNames({ client });
+    })().catch(e => { names = null; throw e; });
+  }
+  return names;
+}
+
+// Returns the address for whatever was typed, or throws with something a person can act
+// on. `resolve()` would be the shorter call, but it answers null both for a name that
+// does not exist and for an RPC that cannot serve the universal resolver — reporting a
+// broken endpoint as "no such name" is a wrong answer, not a slow one. `lookup()` keeps
+// the two apart, so this uses that.
+async function resolveAccount(input) {
+  if (ADDRESS_RE.test(input)) return { address: input };
+  if (!/\./.test(input)) throw new Error(`"${input}" is neither an address nor a name`);
+
+  const rpc = nameRpc();
+  const key = `${rpc}|${input.toLowerCase()}`;
+  if (nameCache.has(key)) return nameCache.get(key);
+
+  let r;
+  try {
+    r = await (await resolver()).lookup(input);
+  } catch (e) {
+    openNameRpc();
+    throw new Error(`could not reach the name RPC (${new URL(rpc).host}): ${e.message || e}`);
+  }
+  if (r.status === 'not-found' || (r.status === 'resolved' && !r.address)) {
+    throw new Error(`${input} does not resolve to an address`);
+  }
+  if (r.status !== 'resolved' || !r.address) {
+    // Not the same as not-found: this endpoint could not answer. Offer the way out
+    // rather than only naming the problem.
+    const why = r.matches?.find(m => m.error)?.error?.shortMessage || r.status;
+    openNameRpc();
+    throw new Error(`could not resolve ${input} through ${new URL(rpc).host}: ${why}. Try another mainnet RPC below.`);
+  }
+  const out = { address: r.address, name: r.name || input, system: r.system, verified: r.verified, rpc };
+  nameCache.set(key, out);
+  // A resolution that worked answers the question the RPC field was opened to ask,
+  // whichever order two in-flight lookups happen to finish in.
+  $('name-rpc-row').hidden = true;
+  return out;
+}
+
+function showResolved(r) {
+  const note = $('name-note');
+  if (!r || !r.name) { note.hidden = true; note.textContent = ''; return; }
+  note.innerHTML = `<strong>${r.name}</strong> → <span class="mono addr">${r.address}</span> · `
+    + `${(r.system || 'ens').toUpperCase()} on mainnet via <code>${new URL(r.rpc).host}</code>`
+    + `${r.verified ? '' : ' <span class="empty">(unverified: the name does not point back at this address)</span>'}`
+    + ` <button id="name-rpc-edit" class="ghost" style="padding:2px 8px;font-size:11px">change RPC</button>`;
+  note.hidden = false;
+  $('name-rpc-edit').addEventListener('click', openNameRpc);
+}
+
+function openNameRpc() {
+  $('name-rpc').value = nameRpc();
+  $('name-rpc-row').hidden = false;
+  $('name-rpc').focus();
+}
+
 async function lookup() {
-  const addr = $('account').value.trim();
-  if (!addr) return;
+  const typed = $('account').value.trim();
+  if (!typed) return;
   showErr('account-err', null);
   $('lookup').disabled = true;
   try {
+    const resolved = await resolveAccount(typed);
+    const addr = resolved.address;
+    showResolved(resolved.name ? resolved : null);
     const r = await api(`/v1/accounts/${addr}`);
     let rows = r.assets || [];
     let heldOnly = false;
@@ -598,6 +704,9 @@ async function lookup() {
     $('account-empty').hidden = true;
     $('value-summary').hidden = true;
     showErr('account-err', e);
+    // A name that failed to resolve should not leave a stale "x.eth → 0x…" above the
+    // error saying it did.
+    if (!ADDRESS_RE.test($('account').value.trim())) showResolved(null);
   } finally { $('lookup').disabled = false; }
 }
 
@@ -719,6 +828,18 @@ async function promote(address, btn) {
 
 $('refresh-cands').addEventListener('click', loadCandidates);
 $('lookup').addEventListener('click', lookup);
+$('name-rpc-save').addEventListener('click', () => {
+  setNameRpc($('name-rpc').value.trim());
+  nameCache.clear();
+  $('name-rpc-row').hidden = true;
+  if ($('account').value.trim()) lookup();
+});
+$('name-rpc-reset').addEventListener('click', () => {
+  setNameRpc('');
+  nameCache.clear();
+  $('name-rpc-row').hidden = true;
+  if ($('account').value.trim()) lookup();
+});
 $('account').addEventListener('keydown', e => { if (e.key === 'Enter') lookup(); });
 $('register').addEventListener('click', register);
 $('new-asset').addEventListener('keydown', e => { if (e.key === 'Enter') register(); });
