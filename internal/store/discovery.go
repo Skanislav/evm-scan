@@ -22,6 +22,18 @@ type Candidate struct {
 	BlocksSeen      uint64
 	PromotedAt      *time.Time
 	PromotionReason string
+	// SpamAt is set when an operator has ruled the contract not worth indexing. A
+	// candidate carries at most one live verdict: promoting clears this.
+	SpamAt     *time.Time
+	SpamReason string
+}
+
+// CandidateFilter narrows a candidate listing. The zero value is the working view —
+// contracts nobody has judged yet, which is exactly what the promotion queue is.
+type CandidateFilter struct {
+	IncludePromoted bool
+	IncludeSpam     bool
+	Limit           int
 }
 
 // SetHistoryFloor records the oldest block this chain's node can serve logs for.
@@ -108,14 +120,20 @@ func (s *Store) UpsertCandidates(ctx context.Context, chainID uint64, rows []Can
 }
 
 // ListCandidates returns observed contracts ranked by activity.
-func (s *Store) ListCandidates(ctx context.Context, chainID uint64, includePromoted bool, limit int) ([]Candidate, error) {
+func (s *Store) ListCandidates(ctx context.Context, chainID uint64, f CandidateFilter) ([]Candidate, error) {
+	// Spam sorts last rather than being interleaved: (spam_at IS NOT NULL) is false for
+	// every unjudged row, so with nothing marked the order is byte-identical to what it
+	// was before verdicts existed.
 	rows, err := s.pool.Query(ctx, `
 		SELECT chain_id, address, standard, first_seen_block, last_seen_block,
-		       event_count, blocks_seen, promoted_at, COALESCE(promotion_reason, '')
+		       event_count, blocks_seen, promoted_at, COALESCE(promotion_reason, ''),
+		       spam_at, COALESCE(spam_reason, '')
 		FROM candidates
-		WHERE chain_id = $1 AND ($2 OR promoted_at IS NULL)
-		ORDER BY promoted_at NULLS FIRST, event_count DESC, blocks_seen DESC
-		LIMIT $3`, int64(chainID), includePromoted, limit)
+		WHERE chain_id = $1
+		  AND ($2 OR promoted_at IS NULL)
+		  AND ($3 OR spam_at IS NULL)
+		ORDER BY (spam_at IS NOT NULL), promoted_at NULLS FIRST, event_count DESC, blocks_seen DESC
+		LIMIT $4`, int64(chainID), f.IncludePromoted, f.IncludeSpam, f.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -128,9 +146,10 @@ func (s *Store) ListCandidates(ctx context.Context, chainID uint64, includePromo
 func (s *Store) PromotableCandidates(ctx context.Context, chainID, minEvents, minBlocks uint64, limit int) ([]Candidate, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT chain_id, address, standard, first_seen_block, last_seen_block,
-		       event_count, blocks_seen, promoted_at, COALESCE(promotion_reason, '')
+		       event_count, blocks_seen, promoted_at, COALESCE(promotion_reason, ''),
+		       spam_at, COALESCE(spam_reason, '')
 		FROM candidates
-		WHERE chain_id = $1 AND promoted_at IS NULL
+		WHERE chain_id = $1 AND promoted_at IS NULL AND spam_at IS NULL
 		  AND event_count >= $2 AND blocks_seen >= $3
 		ORDER BY event_count DESC, blocks_seen DESC
 		LIMIT $4`, int64(chainID), int64(minEvents), int64(minBlocks), limit)
@@ -145,7 +164,8 @@ func (s *Store) PromotableCandidates(ctx context.Context, chainID, minEvents, mi
 func (s *Store) GetCandidate(ctx context.Context, chainID uint64, addr common.Address) (Candidate, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT chain_id, address, standard, first_seen_block, last_seen_block,
-		       event_count, blocks_seen, promoted_at, COALESCE(promotion_reason, '')
+		       event_count, blocks_seen, promoted_at, COALESCE(promotion_reason, ''),
+		       spam_at, COALESCE(spam_reason, '')
 		FROM candidates WHERE chain_id = $1 AND address = $2`,
 		int64(chainID), addr.Bytes())
 	if err != nil {
@@ -174,7 +194,7 @@ func scanCandidates(rows pgx.Rows) ([]Candidate, error) {
 			first, last, ev, blks int64
 		)
 		if err := rows.Scan(&cid, &addr, &std, &first, &last, &ev, &blks,
-			&c.PromotedAt, &c.PromotionReason); err != nil {
+			&c.PromotedAt, &c.PromotionReason, &c.SpamAt, &c.SpamReason); err != nil {
 			return nil, err
 		}
 		c.ChainID = uint64(cid)
@@ -188,12 +208,57 @@ func scanCandidates(rows pgx.Rows) ([]Candidate, error) {
 }
 
 // MarkCandidatePromoted records that a candidate is now an indexed asset.
+//
+// Promoting clears any spam mark. Promotion is the strictly stronger and more expensive
+// verdict, and auto-promote cannot reach a spam row at all, so the only way here is an
+// operator deliberately overriding themselves. Leaving both timestamps set would make a
+// row simultaneously spam and indexed, which is not a state the ledger can render.
 func (s *Store) MarkCandidatePromoted(ctx context.Context, chainID uint64, addr common.Address, reason string) error {
 	_, err := s.pool.Exec(ctx, `
-		UPDATE candidates SET promoted_at = now(), promotion_reason = $3, updated_at = now()
+		UPDATE candidates
+		SET promoted_at = now(), promotion_reason = $3,
+		    spam_at = NULL, spam_reason = NULL, updated_at = now()
 		WHERE chain_id = $1 AND address = $2 AND promoted_at IS NULL`,
 		int64(chainID), addr.Bytes(), reason)
 	return err
+}
+
+// MarkCandidateSpam records a verdict that a contract is not worth indexing.
+//
+// Only an unpromoted candidate can be marked: once a contract is an indexed asset the
+// way back is revoking the asset, not editing the note discovery left behind.
+func (s *Store) MarkCandidateSpam(ctx context.Context, chainID uint64, addr common.Address, reason string) error {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE candidates SET spam_at = now(), spam_reason = $3, updated_at = now()
+		WHERE chain_id = $1 AND address = $2 AND promoted_at IS NULL`,
+		int64(chainID), addr.Bytes(), reason)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		// Two ways to affect nothing, and they are different answers to the caller.
+		if _, err := s.GetCandidate(ctx, chainID, addr); err != nil {
+			return err
+		}
+		return ErrAlreadyPromoted
+	}
+	return nil
+}
+
+// ClearCandidateSpam puts a candidate back in the ranking. Idempotent: clearing a mark
+// that is not there is not an error, only clearing one on a contract nobody has seen.
+func (s *Store) ClearCandidateSpam(ctx context.Context, chainID uint64, addr common.Address) error {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE candidates SET spam_at = NULL, spam_reason = NULL, updated_at = now()
+		WHERE chain_id = $1 AND address = $2`,
+		int64(chainID), addr.Bytes())
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // SetBackfillFloor records the block a backfill will stop at, so the API can report
@@ -210,6 +275,7 @@ type CandidateStats struct {
 	Observed   int64
 	Promoted   int64
 	Promotable int64
+	Spam       int64
 }
 
 func (s *Store) CandidateStats(ctx context.Context, chainID, minEvents, minBlocks uint64) (CandidateStats, error) {
@@ -219,9 +285,10 @@ func (s *Store) CandidateStats(ctx context.Context, chainID, minEvents, minBlock
 			(SELECT COUNT(*) FROM candidates WHERE chain_id = $1),
 			(SELECT COUNT(*) FROM candidates WHERE chain_id = $1 AND promoted_at IS NOT NULL),
 			(SELECT COUNT(*) FROM candidates WHERE chain_id = $1 AND promoted_at IS NULL
-			   AND event_count >= $2 AND blocks_seen >= $3)`,
+			   AND spam_at IS NULL AND event_count >= $2 AND blocks_seen >= $3),
+			(SELECT COUNT(*) FROM candidates WHERE chain_id = $1 AND spam_at IS NOT NULL)`,
 		int64(chainID), int64(minEvents), int64(minBlocks)).
-		Scan(&st.Observed, &st.Promoted, &st.Promotable)
+		Scan(&st.Observed, &st.Promoted, &st.Promotable, &st.Spam)
 	return st, err
 }
 
@@ -242,4 +309,60 @@ func (s *Store) OldestCandidateBlock(ctx context.Context, chainID uint64) (block
 		return 0, false, nil
 	}
 	return uint64(*b), true, nil
+}
+
+// Decision is a recorded verdict on a discovered contract. There is one per candidate,
+// not one per event: promoting supersedes a spam mark rather than sitting beside it, so
+// the ledger reports the call that stands rather than the history of calls made.
+type Decision struct {
+	ChainID  uint64
+	Address  common.Address
+	Standard uint8
+	Verdict  string // "approved" | "spam"
+	At       time.Time
+	Reason   string
+	Symbol   string
+	Name     string
+}
+
+// RecentDecisions lists verdicts newest first.
+//
+// One ordered scan rather than a union of a promoted branch and a spam branch: at most
+// one mark is live per row, so the union would emit the same rows through two scans.
+// The ORDER BY is exactly candidates_verdict_idx.
+//
+// The join is the metadata shortcut. A promoted candidate was probed on its way into
+// assets, so its symbol and name are already stored and the common half of the ledger
+// costs no node call at all; only spam rows, which are never probed, come back blank
+// for the caller to fill in.
+func (s *Store) RecentDecisions(ctx context.Context, chainID uint64, limit int) ([]Decision, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT c.address, c.standard,
+		       CASE WHEN c.promoted_at IS NOT NULL THEN 'approved' ELSE 'spam' END,
+		       COALESCE(c.promoted_at, c.spam_at),
+		       COALESCE(NULLIF(c.promotion_reason, ''), NULLIF(c.spam_reason, ''), ''),
+		       COALESCE(a.symbol, ''), COALESCE(a.name, '')
+		FROM candidates c
+		LEFT JOIN assets a ON a.chain_id = c.chain_id AND a.address = c.address
+		WHERE c.chain_id = $1 AND (c.promoted_at IS NOT NULL OR c.spam_at IS NOT NULL)
+		ORDER BY COALESCE(c.promoted_at, c.spam_at) DESC
+		LIMIT $2`, int64(chainID), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []Decision
+	for rows.Next() {
+		d := Decision{ChainID: chainID}
+		var addr []byte
+		var std int16
+		if err := rows.Scan(&addr, &std, &d.Verdict, &d.At, &d.Reason, &d.Symbol, &d.Name); err != nil {
+			return nil, err
+		}
+		d.Address = common.BytesToAddress(addr)
+		d.Standard = uint8(std)
+		out = append(out, d)
+	}
+	return out, rows.Err()
 }

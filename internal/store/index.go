@@ -335,3 +335,56 @@ func (s *Store) CoverageRange(ctx context.Context, chainID uint64) (from, to uin
 	}
 	return uint64(*lo), uint64(*hi), nil
 }
+
+// AccountRank is one account's whole footprint in the index.
+type AccountRank struct {
+	Account    common.Address
+	AssetCount int64
+	EventCount uint64
+	FirstBlock uint64
+	LastBlock  uint64
+}
+
+// RankAccounts lists the accounts in the index, busiest first. lo and hi bound the
+// address range when the caller is filtering by prefix; nil means every account.
+//
+// This is a full aggregate over one chain's rollup, which sounds alarming and is not:
+// interactions only ever holds rows for *promoted* assets, so the table is bounded by
+// the curated asset set by construction. It is the same cost class as SnapshotIndex and
+// Stats. Do not answer it from a maintained summary table — that would put a write on
+// the fold path, where the cost would be paid on every block instead of on every visit
+// to a page nobody keeps open.
+func (s *Store) RankAccounts(ctx context.Context, chainID uint64, lo, hi []byte, limit, offset int) ([]AccountRank, error) {
+	// SUM(event_count) is spelled out in the ORDER BY rather than aliased: an
+	// unqualified event_count there would resolve to the input column, silently
+	// ordering by one row's count instead of the account's total.
+	rows, err := s.pool.Query(ctx, `
+		SELECT account, COUNT(*), SUM(event_count), MIN(first_block), MAX(last_block)
+		FROM interactions
+		WHERE chain_id = $1
+		  AND ($2::bytea IS NULL OR (account >= $2::bytea AND account <= $3::bytea))
+		GROUP BY account
+		ORDER BY SUM(event_count) DESC, account
+		LIMIT $4 OFFSET $5`,
+		int64(chainID), lo, hi, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []AccountRank
+	for rows.Next() {
+		var a AccountRank
+		var acct []byte
+		var assets, ev, first, last int64
+		if err := rows.Scan(&acct, &assets, &ev, &first, &last); err != nil {
+			return nil, err
+		}
+		a.Account = common.BytesToAddress(acct)
+		a.AssetCount = assets
+		a.EventCount = uint64(ev)
+		a.FirstBlock, a.LastBlock = uint64(first), uint64(last)
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}

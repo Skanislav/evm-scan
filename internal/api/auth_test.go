@@ -15,8 +15,11 @@ func TestAuthorizedGuardsOnlySpendingEndpoints(t *testing.T) {
 		{http.MethodGet, "/v1/candidates"},
 		{http.MethodGet, "/v1/epochs"},
 		{http.MethodGet, "/v1/accounts/0x0/contracts"},
-		// The gateway is the whole point of the index being public.
+		// The gateway is the whole point of the index being public — and since the
+		// guard is now "every POST except this one", this pair of assertions is the
+		// thing keeping it reachable.
 		{http.MethodGet, "/ccip/0x0/0x0"},
+		{http.MethodPost, "/ccip"},
 	}
 	for _, r := range reads {
 		if !s.authorized(httptest.NewRequest(r.method, r.path, nil)) {
@@ -24,7 +27,12 @@ func TestAuthorizedGuardsOnlySpendingEndpoints(t *testing.T) {
 		}
 	}
 
-	spends := []string{"/v1/epochs", "/v1/assets", "/v1/candidates/0xabc/promote"}
+	spends := []string{
+		"/v1/epochs", "/v1/assets",
+		"/v1/candidates/0xabc/promote",
+		"/v1/candidates/0xabc/spam",
+		"/v1/candidates/0xabc/unspam",
+	}
 	for _, p := range spends {
 		if s.authorized(httptest.NewRequest(http.MethodPost, p, nil)) {
 			t.Errorf("POST %s must require a token", p)
@@ -49,7 +57,12 @@ func TestAuthorizedGuardsOnlySpendingEndpoints(t *testing.T) {
 
 func TestNoTokenConfiguredLeavesEverythingOpen(t *testing.T) {
 	s := &Server{d: Deps{}}
-	for _, p := range []string{"/v1/epochs", "/v1/assets", "/v1/candidates/0xabc/promote"} {
+	for _, p := range []string{
+		"/v1/epochs", "/v1/assets",
+		"/v1/candidates/0xabc/promote",
+		"/v1/candidates/0xabc/spam",
+		"/v1/candidates/0xabc/unspam",
+	} {
 		if !s.authorized(httptest.NewRequest(http.MethodPost, p, nil)) {
 			t.Errorf("POST %s should be open when no token is configured", p)
 		}
