@@ -24,7 +24,7 @@ registry:
   # Post a commitment on a timer. Identical roots are skipped, so this is an upper
   # bound on how often gas is spent, not a guarantee that it is.
   auto_publish_interval: 30m
-  commitment_uri: ""
+  commitment_uri: "https://evm-scan-sepolia.up.railway.app/v1/epochs/{id}/snapshot"
   publisher:
     mode: eoa
     submit_timeout: 3m
@@ -34,7 +34,7 @@ registry:
     fallback_gas: 400000
     # Roughly what those three transactions cost on Sepolia at a few gwei. An epoch
     # whose funded coverage is worth less than this is not posted.
-    min_expected_reward_wei: "2000000000000000"
+    min_expected_reward_wei: "10000000000000"
 
 chains:
   - chain_id: 11155111
