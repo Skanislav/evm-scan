@@ -184,6 +184,14 @@ func (s *Store) MarkPublished(ctx context.Context, id int64, onchainID int64, tx
 	return err
 }
 
+// SetEpochURI records where a commitment's full index table is published. The
+// pointer usually names the epoch, and an epoch has no id until it is stored, so
+// this closes that loop between building and publishing.
+func (s *Store) SetEpochURI(ctx context.Context, id int64, uri string) error {
+	_, err := s.pool.Exec(ctx, `UPDATE epochs SET uri = $2 WHERE id = $1`, id, uri)
+	return err
+}
+
 // SetEpochStatus updates a commitment's lifecycle state.
 func (s *Store) SetEpochStatus(ctx context.Context, id int64, status string) error {
 	_, err := s.pool.Exec(ctx, `UPDATE epochs SET status = $2 WHERE id = $1`, id, status)
@@ -352,6 +360,41 @@ func (s *Store) EpochLeaves(ctx context.Context, epochID int64) ([]EpochLeaf, er
 		out = append(out, l)
 	}
 	return out, rows.Err()
+}
+
+// EachEpochLeaf streams a commitment's leaves in tree order, assets included.
+//
+// EpochLeaves loads the whole table and leaves the assets column behind, which is
+// what a proof needs. A snapshot needs the assets and there may be half a million
+// rows, so this hands them over one at a time rather than building a slice the
+// caller only walks once.
+func (s *Store) EachEpochLeaf(ctx context.Context, epochID int64, fn func(EpochLeaf) error) error {
+	rows, err := s.pool.Query(ctx,
+		`SELECT idx, account, assets_hash, leaf, assets FROM epoch_leaves WHERE epoch_id = $1 ORDER BY idx`,
+		epochID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			l                   EpochLeaf
+			acc, ahash, leafRaw []byte
+			assets              [][]byte
+		)
+		if err := rows.Scan(&l.Index, &acc, &ahash, &leafRaw, &assets); err != nil {
+			return err
+		}
+		l.Account = common.BytesToAddress(acc)
+		l.AssetsHash = common.BytesToHash(ahash)
+		l.Leaf = common.BytesToHash(leafRaw)
+		l.Assets = toAddresses(assets)
+		if err := fn(l); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
 }
 
 // EpochLeafFor looks up one account's leaf in a commitment.

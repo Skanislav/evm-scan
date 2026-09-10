@@ -13,6 +13,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 
 	"github.com/Skanislav/evm-scan/internal/merkle"
+	"github.com/Skanislav/evm-scan/internal/snapshot"
 	"github.com/Skanislav/evm-scan/internal/store"
 )
 
@@ -53,6 +54,7 @@ type epochStore interface {
 	MarkPublished(ctx context.Context, id int64, onchainID int64, txHash common.Hash) error
 	MarkClaimed(ctx context.Context, id int64, tx common.Hash, rewardWei string) error
 	SetEpochStatus(ctx context.Context, id int64, status string) error
+	SetEpochURI(ctx context.Context, id int64, uri string) error
 	PendingSubmissions(ctx context.Context, chainID uint64) ([]store.Epoch, error)
 	PublishedUnfinalized(ctx context.Context, chainID uint64) ([]store.Epoch, error)
 	UnclaimedFinalized(ctx context.Context, chainID uint64) ([]store.Epoch, error)
@@ -190,6 +192,18 @@ func (p *Publisher) Build(ctx context.Context, chainID uint64, uri string, force
 		return store.Epoch{}, err
 	}
 	e.ID = id
+
+	// The pointer to the published table names the epoch, and the epoch has no id
+	// until the row above exists — so the template is expanded here rather than by
+	// the caller. It has to be settled before Publish, because the contract takes the
+	// uri as an argument and has no setter: an epoch published with the wrong string
+	// carries it forever.
+	if expanded := snapshot.URI(uri, chainID, id); expanded != uri {
+		if err := p.st.SetEpochURI(ctx, id, expanded); err != nil {
+			return store.Epoch{}, fmt.Errorf("record commitment uri: %w", err)
+		}
+		e.URI = expanded
+	}
 
 	p.log.Info("built index commitment", "epoch", id, "chain_id", chainID, "leaves", len(leaves),
 		"from_block", from, "to_block", to, "root", e.MerkleRoot.Hex(),

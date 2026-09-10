@@ -114,6 +114,11 @@ func (m *memStore) SetEpochStatus(_ context.Context, id int64, status string) er
 	return nil
 }
 
+func (m *memStore) SetEpochURI(_ context.Context, id int64, uri string) error {
+	m.epochs[id].URI = uri
+	return nil
+}
+
 func (m *memStore) byStatus(pred func(*store.Epoch) bool) []store.Epoch {
 	var out []store.Epoch
 	for id := int64(1); id < m.nextID; id++ {

@@ -115,6 +115,7 @@ func New(d Deps) *Server {
 	s.mux.HandleFunc("POST /v1/epochs", s.createEpoch)
 	s.mux.HandleFunc("GET /v1/epochs/{id}", s.getEpoch)
 	s.mux.HandleFunc("GET /v1/epochs/{id}/proof", s.epochProof)
+	s.mux.HandleFunc("GET /v1/epochs/{id}/snapshot", s.epochSnapshot)
 	// ERC-3668 gateway for HintRegistry.contractsOf.
 	s.mux.HandleFunc("GET /ccip/{sender}/{data}", s.ccipGet)
 	s.mux.HandleFunc("POST /ccip", s.ccipPost)

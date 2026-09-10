@@ -62,6 +62,7 @@ func main() {
 		ccipMode = flag.Bool("ccip", false, "resolve HintRegistry.contractsOf through ERC-3668 instead of checking one epoch")
 		gateway  = flag.String("gateway", "", "gateway URL template to use with -ccip (default: the registry's own list)")
 		chainID  = flag.Uint64("chain", 0, "chain the index is about, for -ccip (default: the node's own chain)")
+		snap     = flag.String("snapshot", "", "verify a published index table (path, URL, or - for stdin) against the epoch it claims")
 	)
 	flag.Parse()
 
@@ -70,6 +71,18 @@ func main() {
 		os.Exit(2)
 	}
 
+	if *snap != "" {
+		// -epoch defaults to 0, which is a real epoch id, so "not given" has to be
+		// distinguishable: a snapshot names its own epoch and that is the usual path.
+		id := int64(-1)
+		if isFlagSet("epoch") {
+			id = *epoch
+		}
+		if err := runSnapshot(context.Background(), *snap, *nodeURL, *registry, id); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	if *ccipMode {
 		if err := runCCIP(*nodeURL, *registry, *account, *gateway, *chainID); err != nil {
 			log.Fatal(err)
@@ -303,4 +316,16 @@ func fetchProof(ctx context.Context, apiURL string, epochID int64, account commo
 		return nil, fmt.Errorf("decode proof: %w", err)
 	}
 	return &pr, nil
+}
+
+// isFlagSet reports whether a flag was given on the command line, as opposed to
+// holding its zero default.
+func isFlagSet(name string) bool {
+	found := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			found = true
+		}
+	})
+	return found
 }

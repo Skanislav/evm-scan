@@ -49,7 +49,18 @@ registry:
   # Base gas is cheap enough that the timer, not the cost, is what bounds how often
   # a commitment is posted. Identical roots are skipped either way.
   auto_publish_interval: 1h
-  commitment_uri: ""
+  # Where the full index table for a commitment is published. A root proves a leaf
+  # to whoever already holds it and recovers nothing on its own, so an epoch whose
+  # data lives only in this deployment's Postgres dies with that database. This
+  # pointer is stored in the epoch and emitted in IndexPublished, so a recovery
+  # starts from the chain: read the uri, fetch the table, rebuild both trees, check
+  # them against the roots (evmscan-verify -snapshot), then evmscan-restore.
+  #
+  # {id} is this deployment's epoch id, which GET /v1/epochs/{id}/snapshot takes.
+  # Serving it from the daemon is the availability floor, not the goal: the file is
+  # self-authenticating against the chain, so it should be mirrored somewhere that
+  # outlives this service. Whoever holds a copy can hand it to anyone.
+  commitment_uri: "https://evm-scan-production.up.railway.app/v1/epochs/{id}/snapshot"
   publisher:
     mode: eoa
     submit_timeout: 10m
