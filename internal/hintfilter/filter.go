@@ -34,6 +34,8 @@ func (s Structure) String() string {
 		return "binary-fuse8"
 	case StructureSortedU64:
 		return "sorted-u64"
+	case StructureBloom:
+		return "bloom"
 	}
 	return "unknown"
 }
@@ -73,6 +75,10 @@ type Meta struct {
 	// it is true as of, and the reader has to display it.
 	EpochID int64
 	ToBlock uint64
+	// BloomBits sizes a StructureBloom filter. Zero asks Build for a default that
+	// targets roughly 1% false positives; set it explicitly to fit a budget instead
+	// of a rate — 256 for the one slot that can go on-chain.
+	BloomBits uint32
 	// Desc says how to re-derive the blinding secret, and never what it is. See
 	// SaltDesc.
 	Desc []byte
@@ -86,6 +92,7 @@ type Filter struct {
 
 	fuse   *xorfilter.BinaryFuse[uint8]
 	sorted []uint64
+	bloom  *bloom
 }
 
 // Build constructs a filter over keys. It may reorder and dedupe keys in place.
@@ -120,6 +127,18 @@ func Build(keys []uint64, meta Meta) (*Filter, error) {
 	switch meta.Structure {
 	case StructureSortedU64:
 		f.sorted = keys
+	case StructureBloom:
+		m := meta.BloomBits
+		if m == 0 {
+			// 1% by default: a rate that turns a token-list sweep into a handful of
+			// calls without needing the caller to have an opinion.
+			m = BloomBits(len(keys), 0.01)
+		}
+		b, err := newBloom(keys, m)
+		if err != nil {
+			return nil, err
+		}
+		f.bloom = b
 	case StructureFuse8:
 		fuse, err := xorfilter.NewBinaryFuse[uint8](keys)
 		if err != nil {
@@ -151,6 +170,8 @@ func (f *Filter) Contains(key uint64) bool {
 		return i < len(f.sorted) && f.sorted[i] == key
 	case StructureFuse8:
 		return f.fuse.Contains(key)
+	case StructureBloom:
+		return f.bloom.contains(key)
 	}
 	return false
 }

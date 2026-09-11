@@ -23,7 +23,7 @@ import (
 //	magic      "XORF"     4
 //	version    uint8      1
 //	flags      uint8      1   bit0: blinded
-//	structure  uint8      1   1 = binary-fuse8, 2 = sorted-u64
+//	structure  uint8      1   1 = binary-fuse8, 2 = sorted-u64, 3 = bloom
 //	chainID    uint64     8
 //	kind       uint8      1
 //	epochID    int64      8   -1 when not index-derived
@@ -45,6 +45,16 @@ import (
 // or, for sorted-u64:
 //
 //	keys  []uint64  count*8
+//
+// or, for bloom:
+//
+//	m       uint32  4   bit count, a multiple of 64
+//	k       uint8   1   probes per key
+//	bitmap  []byte  m/8
+//
+// A 256-bit bloom's bitmap is exactly 32 bytes, which is the size that fits an EVM
+// storage slot or an ENS text record — bloom.go says why that earns its own
+// structure.
 
 const (
 	magic   = "XORF"
@@ -134,6 +144,10 @@ func (f *Filter) Encode() ([]byte, error) {
 		for _, k := range f.sorted {
 			out = binary.BigEndian.AppendUint64(out, k)
 		}
+	case StructureBloom:
+		out = binary.BigEndian.AppendUint32(out, f.bloom.m)
+		out = append(out, f.bloom.k)
+		out = append(out, f.bloom.bytesOut()...)
 	case StructureFuse8:
 		out = binary.BigEndian.AppendUint64(out, f.fuse.Seed)
 		out = binary.BigEndian.AppendUint32(out, f.fuse.SegmentLength)
@@ -193,6 +207,19 @@ func Decode(b []byte) (*Filter, error) {
 		for i := range f.sorted {
 			f.sorted[i] = binary.BigEndian.Uint64(rest[i*8:])
 		}
+	case StructureBloom:
+		if len(rest) < 5 {
+			return nil, fmt.Errorf("%w: truncated in the bloom header", ErrFormat)
+		}
+		// m and k are read from the file rather than recomputed from count. A reader
+		// that derived k from the key count would silently probe different bits
+		// whenever the builder's sizing rule differed by one, and report an empty
+		// wallet rather than an error.
+		b, err := bloomFromBytes(rest[5:], binary.BigEndian.Uint32(rest[0:4]), rest[4])
+		if err != nil {
+			return nil, err
+		}
+		f.bloom = b
 	case StructureFuse8:
 		if len(rest) < 28 {
 			return nil, fmt.Errorf("%w: truncated in the fuse header", ErrFormat)

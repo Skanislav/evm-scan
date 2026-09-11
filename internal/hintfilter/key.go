@@ -41,6 +41,20 @@ const (
 	// KindAccountToken keys an (account, token) pair: "did this account touch this
 	// contract?" This is the one that narrows a portfolio read.
 	KindAccountToken Kind = 2
+	// KindInterop keys an ERC-7930 interoperable address: the chain and the contract
+	// in one canonical preimage.
+	//
+	// The other two kinds put the chain id in the subkey, which makes a filter answer
+	// for exactly one chain. That is right for an index bounded by one chain and wrong
+	// for a wallet, which is spread across all of them: it forces one file per chain,
+	// and a reader sweeping twenty-four chains would fetch twenty-four filters to ask
+	// one question. Folding the chain into the preimage instead gives one filter for
+	// everywhere, and the same contract address on two chains keys differently because
+	// the chain is part of what is hashed.
+	//
+	// Subkeys for this kind are derived with chainID 0, meaning "no single chain" —
+	// see Subkey.
+	KindInterop Kind = 3
 )
 
 func (k Kind) String() string {
@@ -49,6 +63,8 @@ func (k Kind) String() string {
 		return "token"
 	case KindAccountToken:
 		return "account-token"
+	case KindInterop:
+		return "interop"
 	}
 	return "unknown"
 }
@@ -100,4 +116,50 @@ func TokenKey(subkey [32]byte, token common.Address) uint64 {
 // that a builder and a reader cannot disagree about it silently.
 func PairKey(subkey [32]byte, account, token common.Address) uint64 {
 	return Key(subkey, account[:], token[:])
+}
+
+// Interop7930 encodes an ERC-7930 v1 interoperable address for an EVM contract:
+// the chain and the account in one canonical, self-describing preimage.
+//
+//	0001 | 0000 | refLen | chainRef | addrLen | address
+//	 ^ver  ^EVM             ^chain id, minimal BE       ^20 bytes
+//
+// The chain reference is minimal big-endian, which is what makes the encoding
+// canonical: chain 1 is one byte, chain 8453 is two. Two encoders that disagree
+// about leading zeros would produce different keys for the same contract, and the
+// resulting filter would answer no to a token the reader is holding — so this is
+// written once and used by both the builder and the reader.
+//
+// internal/ens.DecodeChainID reads the chain-only form of the same encoding.
+func Interop7930(chainID uint64, addr common.Address) []byte {
+	var ref []byte
+	for i := 7; i >= 0; i-- {
+		b := byte(chainID >> (8 * i))
+		if len(ref) > 0 || b != 0 {
+			ref = append(ref, b)
+		}
+	}
+	if len(ref) == 0 {
+		ref = []byte{0}
+	}
+	out := make([]byte, 0, 5+len(ref)+1+len(addr))
+	out = append(out, 0x00, 0x01, 0x00, 0x00, byte(len(ref)))
+	out = append(out, ref...)
+	out = append(out, byte(len(addr)))
+	return append(out, addr[:]...)
+}
+
+// InteropKey is Key for a KindInterop filter.
+func InteropKey(subkey [32]byte, chainID uint64, token common.Address) uint64 {
+	return Key(subkey, Interop7930(chainID, token))
+}
+
+// InteropSubkey is the subkey for a cross-chain filter.
+//
+// chainID 0 rather than any real chain: the chain is already in every preimage, so
+// binding one here as well would produce a filter that answers for a single chain
+// through keys that claim to span all of them — wrong in a way nothing downstream
+// could detect, because a subkey mismatch presents as an empty wallet.
+func InteropSubkey(secret []byte) [32]byte {
+	return Subkey(secret, 0, KindInterop)
 }

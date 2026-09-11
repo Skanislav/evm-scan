@@ -137,12 +137,22 @@ shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module 
   leaf = `keccak256(abi.encode(account, chainId, keccak256(abi.encodePacked(sorted unique
   assets))))`, sorted-pair keccak tree. Changing either side requires changing the other and
   re-running `cmd/evmscan-verify`, which checks the Go proof against the Solidity verifier.
-- `internal/hintfilter` is the `.xorf` membership filter: a binary-fuse8 or sorted-u64
-  table over 64-bit keys, published so a reader can narrow a portfolio read locally
-  instead of naming their address to the API. Keys are
+- `internal/hintfilter` is the `.xorf` membership filter: a binary-fuse8, sorted-u64
+  or bloom table over 64-bit keys, published so a reader can narrow a portfolio read
+  locally instead of naming their address to the API. Keys are
   `uint64be(keccak256(subkey ‖ parts)[0:8])` with
   `subkey = keccak256(secret ‖ "evmscan/xorf/v1" ‖ chainId ‖ kind)`; a non-empty secret
-  blinds the file so only its holder can test it. **The Go writer and the JavaScript
+  blinds the file so only its holder can test it. `KindInterop` keys an **ERC-7930**
+  interoperable address instead of a bare one, putting the chain inside the preimage
+  so a single filter spans every chain — its subkey binds `chainId` 0, because binding
+  a chain there as well would answer for one chain through keys that claim all of
+  them, and a subkey mismatch presents as an empty wallet rather than an error.
+  `StructureBloom` exists for the size the other two are bad at: at 65 keys fuse8's
+  fixed segment geometry costs 198 bytes and sorted-u64 costs 562, where a bloom hits
+  0.18% in 128 bytes and **fits one EVM storage slot at 256 bits** — which is what
+  makes a per-account hint publishable on-chain or as an ENS text record. Its bitmap
+  is MSB-first bytes, not packed words, so the JavaScript reader indexes it without
+  reproducing Go's word endianness. **The Go writer and the JavaScript
   reader in `web/index.html` must agree byte-for-byte** — `internal/hintfilter/testdata`
   is the fixture that enforces it, regenerated with `go test ./internal/hintfilter
   -update`, and `testdata/browser-watch.xorf` (WebAuthn prf) plus

@@ -408,6 +408,17 @@
       </div>
     </div>
 
+    <!-- What discovery found that the index does not keep. A balance read at head is
+         gone the moment the tab closes; an indexed asset is committed to a root and
+         served from the registry. This is where one becomes the other. -->
+    <div id="preserve" hidden style="margin-top:40px">
+      <div style="display:flex; align-items:baseline; justify-content:space-between; gap:25px; flex-wrap:wrap">
+        <h3 style="font-size:26px; margin:0">Keep these on-chain</h3>
+        <span class="hint" id="preserve-count"></span>
+      </div>
+      <div id="preserve-body" style="margin-top:12px"></div>
+    </div>
+
     <div class="row" style="margin-top:18px">
       <button class="linkbtn" id="spam-toggle" hidden></button>
       <span class="hint" id="spam-note"></span>
@@ -1332,39 +1343,51 @@ async function sendRequest() {
 
   $('req-send').disabled = true;
   try {
-    const value = ethToWei($('req-value').value);
-    if (value < BigInt(REG.min_funding_wei || 0)) {
-      throw new Error(`deposit is below the registry's minimum funding of ${weiToEth(REG.min_funding_wei)} ETH`);
-    }
-    if (HEAD && Number(from) < HEAD - 8191) {
-      throw new Error(`from block ${from} is older than this node can serve (head ${HEAD}, window 8191)`);
-    }
-    // An asset key is (chainId, token), and a deposit against a key nothing can cover
-    // is not refundable: revokeAsset returns the bond, never the funding. So check the
-    // token is actually a contract on the chain being registered before spending.
-    let live;
-    try {
-      live = await api(`/v1/accounts/${token}/portfolio?chain_id=${INDEXED_CHAIN}&code=true`);
-    } catch {
-      live = null; // a node that will not answer is not proof of absence
-    }
-    if (live && live.account_state && live.account_state.is_contract === false) {
-      throw new Error(
-        `${short(token)} has no contract code on chain ${INDEXED_CHAIN}. Registering it would fund an ` +
-        `asset key nothing can index, and the deposit is not refundable.`);
-    }
-
-    const data = encodeRequest(INDEXED_CHAIN, token, kind, from);
-    const tx = await window.ethereum.request({
-      method: 'eth_sendTransaction',
-      params: [{ from: WALLET, to: REG.address, data, value: '0x' + value.toString(16) }],
-    });
+    const tx = await requestIndexing(token, kind, from, ethToWei($('req-value').value));
     $('req-result').hidden = false;
     $('req-result').innerHTML = `Submitted <code>${esc(tx)}</code>. The mirror picks the registration up on
       its next sync; nothing else needs to be told.`;
     $('req-token').value = '';
   } catch (e) { showErr('req-err', e); }
   finally { $('req-send').disabled = false; }
+}
+
+// The transaction itself, without the form around it.
+//
+// Split out so the wallet tab can offer the same action per holding: the checks below
+// are the ones that cost real money to get wrong, and a second call site that skipped
+// them would be a second way to fund an asset key nothing can ever cover.
+async function requestIndexing(token, kind, from, value) {
+  if (!window.ethereum) throw new Error('no injected wallet found — this needs MetaMask or another EIP-1193 wallet');
+  if (!WALLET) await connectWallet();
+  if (!WALLET) throw new Error('connect a wallet first');
+
+  if (value < BigInt(REG.min_funding_wei || 0)) {
+    throw new Error(`deposit is below the registry's minimum funding of ${weiToEth(REG.min_funding_wei)} ETH`);
+  }
+  if (HEAD && Number(from) < HEAD - 8191) {
+    throw new Error(`from block ${from} is older than this node can serve (head ${HEAD}, window 8191)`);
+  }
+  // An asset key is (chainId, token), and a deposit against a key nothing can cover
+  // is not refundable: revokeAsset returns the bond, never the funding. So check the
+  // token is actually a contract on the chain being registered before spending.
+  let live;
+  try {
+    live = await api(`/v1/accounts/${token}/portfolio?chain_id=${INDEXED_CHAIN}&code=true`);
+  } catch {
+    live = null; // a node that will not answer is not proof of absence
+  }
+  if (live && live.account_state && live.account_state.is_contract === false) {
+    throw new Error(
+      `${short(token)} has no contract code on chain ${INDEXED_CHAIN}. Registering it would fund an ` +
+      `asset key nothing can index, and the deposit is not refundable.`);
+  }
+
+  const data = encodeRequest(INDEXED_CHAIN, token, kind, from);
+  return await window.ethereum.request({
+    method: 'eth_sendTransaction',
+    params: [{ from: WALLET, to: REG.address, data, value: '0x' + value.toString(16) }],
+  });
 }
 
 // --------------------------------------------------------------------------
@@ -1754,6 +1777,19 @@ function xorfDecode(buf) {
     if (b.length - off !== Number(f.count) * 8) throw new Error('xorf: key length mismatch');
     f.keys = new BigUint64Array(Number(f.count));
     for (let i = 0; i < f.keys.length; i++) { f.keys[i] = dv.getBigUint64(off); off += 8; }
+  } else if (f.structure === 3) {
+    // Bloom. m and k come out of the file rather than being recomputed from count:
+    // a reader that derived k itself would probe different bits the moment the
+    // builder's sizing rule moved by one, and report an empty wallet rather than
+    // an error. See internal/hintfilter/bloom.go.
+    if (b.length - off < 5) throw new Error('xorf: truncated in the bloom header');
+    f.m = dv.getUint32(off);
+    f.k = b[off + 4];
+    off += 5;
+    if (f.m === 0 || f.m % 64 !== 0) throw new Error(`xorf: bloom bit count ${f.m} is not a multiple of 64`);
+    if (f.k === 0) throw new Error('xorf: bloom with zero probes matches everything');
+    if (b.length - off !== f.m / 8) throw new Error('xorf: bloom bitmap length mismatch');
+    f.bitmap = b.subarray(off, off + f.m / 8);
   } else if (f.structure === 1) {
     f.seed = dv.getBigUint64(off);
     f.segmentLength = dv.getUint32(off + 8);
@@ -1772,6 +1808,22 @@ function xorfDecode(buf) {
 
 function xorfContains(f, key) {
   key = BigInt.asUintN(64, key);
+  if (f.structure === 3) {
+    // Kirsch-Mitzenmacher: two halves of the key give k probes for the price of the
+    // one hash that made it. h2 is forced odd so stepping by it visits distinct
+    // positions instead of cycling early when it shares a factor with m. Number is
+    // safe from here — every value is under 2^32 — but the halves have to be taken
+    // out of the BigInt before that is true.
+    const h1 = Number(key & 0xffffffffn);
+    const h2 = Number((key >> 32n) & 0xffffffffn) | 1;
+    for (let i = 0; i < f.k; i++) {
+      // (h1 + i*h2) mod 2^32 first, matching Go's uint32 arithmetic, and only then
+      // mod m. Doing it in one step in double precision would drift past 2^53.
+      const p = ((h1 + Math.imul(i, h2)) >>> 0) % f.m;
+      if ((f.bitmap[p >>> 3] & (1 << (7 - (p & 7)))) === 0) return false;
+    }
+    return true;
+  }
   if (f.structure === 2) {
     let lo = 0, hi = f.keys.length;
     while (lo < hi) {
@@ -1832,6 +1884,41 @@ async function xorfKey(subkey, ...parts) {
 }
 const tokenKey = (sub, token) => xorfKey(sub, hexToBytes(token));
 const pairKey = (sub, account, token) => xorfKey(sub, hexToBytes(account), hexToBytes(token));
+
+// ERC-7930 v1 interoperable address: the chain and the contract in one canonical
+// preimage.
+//
+//   0001 | 0000 | refLen | chainRef | addrLen | address
+//    ^ver  ^EVM             ^minimal big-endian      ^20 bytes
+//
+// The chain reference is minimal big-endian — chain 1 is one byte, 8453 is two —
+// and that is what makes it canonical. Two encoders that disagreed about leading
+// zeros would key the same contract differently, and the filter would then answer
+// no about a token the reader is holding. internal/hintfilter/key.go is the other
+// implementation; testdata/public-bloom-interop.xorf is what keeps them equal.
+//
+// Keying on this instead of on a bare address is what lets one filter span every
+// chain: the other kinds put the chain id in the subkey, which means one file per
+// chain, and a reader sweeping twenty-four of them would fetch twenty-four filters
+// to ask one question.
+function interop7930(chainId, addr) {
+  const id = BigInt(chainId);
+  let ref = [];
+  for (let i = 7; i >= 0; i--) {
+    const b = Number((id >> BigInt(8 * i)) & 0xffn);
+    if (ref.length > 0 || b !== 0) ref.push(b);
+  }
+  if (!ref.length) ref = [0];
+  const a = hexToBytes(addr);
+  return bytesCat(Uint8Array.of(0x00, 0x01, 0x00, 0x00, ref.length), Uint8Array.from(ref),
+                  Uint8Array.of(a.length), a);
+}
+
+const interopKey = (sub, chainId, token) => xorfKey(sub, interop7930(chainId, token));
+// chainId 0: the chain is already inside every preimage, so binding one here too
+// would make a filter that answers for a single chain through keys that claim to
+// span all of them — and a subkey mismatch presents as an empty wallet, not an error.
+const interopSubkey = (secret) => xorfSubkey(secret, 0, 3 /* KindInterop */);
 
 // Filters are cached per name for the life of the page. They are content-addressed
 // and revalidate with an ETag, so a repeat visit usually costs a 304.
@@ -2106,6 +2193,8 @@ window.buildWatchlist = buildWatchlist;
 window.evmscanHints = {
   filter: hintFilter, manifest: hints, decode: xorfDecode, tokenList,
   subkey: xorfSubkey, contains: xorfContains, pairKey, tokenKey,
+  requestIndexing, registry: () => REG, head: () => HEAD, indexedChain: () => INDEXED_CHAIN,
+  weiToEth, ethToWei,
   buildWatchlist, hexToBytes, bytesToB64url, b64urlToBytes,
   passkeyCreate, passkeySecret, walletSecret, passwordSecret,
   api, onChain, esc, short, chainRpc, lensBalances, resolveAccount,
@@ -2828,6 +2917,13 @@ async function lookup() {
     $('wallet-addr').textContent = addr;
     renderWalletTotals();
     renderHoldings();
+
+    // Everything above is read at head and gone when the tab closes. The module below
+    // is what makes it outlast the visit: it remembers this set locally so the next
+    // visit is a short read rather than the long one, and offers the on-chain action
+    // for the holdings the index does not keep. Imported lazily and never awaited —
+    // a failure there must not take the holdings off the screen.
+    loadHints().then(m => m.afterLookup(addr, HOLDINGS, indexed)).catch(() => {});
   } catch (e) {
     $('holdings-wrap').hidden = true;
     $('wallet-head').hidden = true;
