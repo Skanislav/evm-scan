@@ -399,8 +399,10 @@ export function openWatchlist() {
   const holdings = (window.evmscanHoldings ? window.evmscanHoldings() : []) || [];
   // Only fungible contracts. A token list is a list of fungible tokens and a KindToken
   // filter is keyed by one address, so NFT rows would go in and never be asked about.
+  // Same rule as the hint: a set the reader has already triaged should not come back
+  // untriaged in the one artifact here they might keep for years.
   const tokens = holdings
-    .filter(h => h.address && (!h.standard || h.standard === 'erc20'))
+    .filter(h => h.address && !h.aside && (!h.standard || h.standard === 'erc20'))
     .map(h => ({ address: h.address, symbol: h.symbol || '' }));
 
   watchPanel().innerHTML = `
@@ -980,8 +982,13 @@ export async function mark(seed, chainId, addrs) {
 
 export async function afterLookup(account, holdings, indexed) {
   const chainId = H.chainId();
+  // `aside` is the reader's own verdict on their own holdings, set in the table above
+  // and stored per account in this browser. Honouring it here is what makes that
+  // verdict mean anything: the hint is what the next lookup spends, so a hint rebuilt
+  // from everything on screen would hand the reader their dust back every visit and
+  // the triage would last exactly until they looked the account up again.
   const pairs = (holdings || [])
-    .filter(h => h.address && (!h.standard || h.standard === 'erc20'))
+    .filter(h => h.address && !h.aside && (!h.standard || h.standard === 'erc20'))
     .map(h => ({ chainId, address: h.address }));
 
   // Rebuilt from scratch rather than merged. A filter cannot be enumerated, so the

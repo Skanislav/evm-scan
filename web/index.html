@@ -390,6 +390,10 @@
       </div>
       <div id="holdings"></div>
     </div>
+    <div class="row" style="margin-top:12px">
+      <button class="linkbtn" id="aside-toggle" hidden></button>
+    </div>
+    <p class="hint" id="aside-note" style="margin:6px 0 0; max-width:92ch"></p>
     <p class="hint" id="hint-use" hidden style="margin-top:14px; max-width:92ch"></p>
     <div id="xchain" style="margin-top:40px">
       <div style="display:flex; align-items:baseline; justify-content:space-between; gap:25px; flex-wrap:wrap">
@@ -424,6 +428,7 @@
       <button class="linkbtn" id="spam-toggle" hidden></button>
       <span class="hint" id="spam-note"></span>
     </div>
+
   </div>
 
   <!-- A blinded filter over the reader's own set: testable by whoever holds the
@@ -831,6 +836,10 @@ let WALLET_ADDR = '', WALLET_NAME = '', HOLDINGS = [], VALUATION = null, SHOW_SP
 // that silently changes what gets asked about is exactly the thing this page should
 // not have.
 let HINT_USE = null;
+// The rows the reader set aside, and the indexed half of the last lookup. Both are
+// read again when a verdict changes, which is why they outlive the lookup that
+// produced them.
+let ASIDE = new Set(), INDEXED = [], SHOW_ASIDE = false;
 let ACCOUNTS = [], ACCT_OFFSET = 0, ACCT_MORE = false, ACCT_SELECTED = null;
 let graphLoaded = false;
 
@@ -2920,7 +2929,13 @@ async function lookup() {
     // The daemon formats the hint name from registry.ens_parent; it resolves nothing.
     if (r.hint_name) { resolved.hintName = r.hint_name; showResolved(resolved); }
     const indexed = r.assets || [];
+    INDEXED = indexed;
     VALUATION = indexed.length ? r.valuation : null;
+
+    // The reader's own verdicts, per account, from this browser. Read before the rows
+    // exist so the first render is already triaged rather than flashing the untriaged
+    // set and then collapsing it.
+    ASIDE = loadAside(addr);
 
     // The index knows what it has seen; the lens knows what is held now. An account
     // whose last token event fell out of the node's window has no rows above and may
@@ -2942,6 +2957,7 @@ async function lookup() {
     // short by however many of them there are. Twenty-nine more keccaks, and the
     // sentence becomes true.
     await tagHinted(await seedP, r.chain_id);
+    applyAside();
 
     // Mark contracts no token list vouches for. The test runs here, against a
     // filter this browser already holds, so flagging junk costs no request and
@@ -3038,6 +3054,78 @@ function renderWalletTotals() {
       <div class="kicker" style="margin-top:7px">${label}</div>
       <div style="font-size:14.5px; color:var(--color-neutral-700); margin-top:3px">${note}</div>
     </div>`).join('');
+}
+
+// --------------------------------------------------------------------------
+// Triaging your own holdings
+//
+// The Triage tab is the operator's: approve or spam, a row in the deployment's
+// ledger, everyone who reads this index lives with the verdict. This is the reader's,
+// and it is a different axis with a different blast radius — nothing here leaves the
+// browser and nothing here is a claim about the contract. A lookup of a busy address
+// returns airdrop spray beside real positions, and the reader is the only one who can
+// say which is which for them.
+//
+// What setting a row aside does, exactly:
+//
+//   - It keeps the contract out of the hint. That is the point. The hint is what the
+//     next visit spends, and a hint stuffed with dust spends the reader's lookups
+//     rediscovering dust.
+//   - It collapses the row, the way a spam verdict does, reversibly and from the same
+//     place.
+//
+// What it deliberately does not do:
+//
+//   - It does not stop the contract being asked about. Balances are read from the
+//     chain at head in a batch that is already paid for, and a reader who set
+//     something aside in March should still see it if it moves in June. A list the
+//     reader wrote is still a list, and no list on this page decides what exists.
+//   - It does not change the valuation. That number comes from the daemon over the
+//     assets it has indexed, and quietly editing it here would leave two different
+//     answers to one question on the same screen.
+//
+// Stored as addresses rather than as a filter, because this is the one set here that
+// has to be enumerable: a bloom can say "this was set aside" and cannot list what to
+// put back, and an undo you cannot see is not an undo.
+// --------------------------------------------------------------------------
+const asideKey = (account) => `evmscan.aside.${account.toLowerCase()}`;
+
+function loadAside(account) {
+  try {
+    const raw = localStorage.getItem(asideKey(account));
+    return new Set(raw ? JSON.parse(raw).map(a => String(a).toLowerCase()) : []);
+  } catch { return new Set(); }
+}
+
+function saveAside(account, set) {
+  try {
+    localStorage.setItem(asideKey(account), JSON.stringify([...set]));
+  } catch { /* private window, or full; a preference that cannot be written is not an error */ }
+}
+
+// Applied to the rows rather than consulted at each use, so the render, the hint
+// builder and the watchlist builder all read one flag and none of them has to agree
+// with the others about what the storage key is.
+function applyAside() {
+  for (const h of HOLDINGS) h.aside = !!(h.address && ASIDE.has(h.address.toLowerCase()));
+}
+
+function setAside(address, on) {
+  const k = address.toLowerCase();
+  on ? ASIDE.add(k) : ASIDE.delete(k);
+  saveAside(WALLET_ADDR, ASIDE);
+  applyAside();
+  renderHoldings();
+  // Rebuild the hint from what is left, now. Without this the reader's triage would
+  // last exactly until the next lookup rewrote the hint from the unfiltered set, which
+  // is the same shape of bug as a hint nothing ever read.
+  loadHints().then(m => m.afterLookup(WALLET_ADDR, HOLDINGS, INDEXED)).catch(() => {});
+}
+
+function wireAsideButtons(root) {
+  for (const b of root.querySelectorAll('[data-aside]')) {
+    b.addEventListener('click', () => setAside(b.dataset.aside, b.dataset.on === '1'));
+  }
 }
 
 // --------------------------------------------------------------------------
@@ -3144,7 +3232,11 @@ function renderHoldings() {
   if (!WALLET_ADDR) return;
   const rows = HOLDINGS.map(h => ({ ...h, verdict: verdictOf(h.address) }));
   const spamCount = rows.filter(h => h.verdict === 'spam').length;
-  const shown = SHOW_SPAM ? rows : rows.filter(h => h.verdict !== 'spam');
+  const asideCount = rows.filter(h => h.aside).length;
+  // Two independent collapses, and they stay independent: the operator's verdict is
+  // about the contract and the reader's is about this wallet, so a row can be hidden
+  // by either and each toggle brings back only its own.
+  const shown = rows.filter(h => (SHOW_SPAM || h.verdict !== 'spam') && (SHOW_ASIDE || !h.aside));
 
   $('holdings-title').textContent = `Holdings on ${chainName()}`;
   $('holdings-wrap').hidden = rows.length === 0;
@@ -3162,15 +3254,19 @@ function renderHoldings() {
            <button class="btn btn-primary btn-sm" data-approve="${esc(h.address)}">Approve</button>
            <button class="btn btn-secondary btn-spam btn-sm" data-spam="${esc(h.address)}">Spam</button>
          </div>`;
-    return `<div class="tablerow ${v === 'spam' ? 'dim' : ''}" style="grid-template-columns:${COLS.hold}">
+    return `<div class="tablerow ${v === 'spam' || h.aside ? 'dim' : ''}" style="grid-template-columns:${COLS.hold}">
       <div style="min-width:0">
         <div class="row" style="gap:9px">
           <span class="sym">${h.symbol ? esc(h.symbol) : '<span class="empty">unknown</span>'}</span>
           <span class="nm">${esc(h.name || '')}</span>
           ${h.unlisted ? '<span class="tag" title="no token list this deployment loaded vouches for this contract. Checked in your browser, against a filter already downloaded — the daemon was not asked.">unlisted</span>' : ''}
           ${h.hinted ? '<span class="tag" title="your hint already knew about this contract, so it was asked about first. The balance beside it was still read from the chain just now — the hint says where to look and never what is there.">in your hint</span>' : ''}
+          ${h.aside ? '<span class="tag" title="you set this aside, in this browser. It stays out of your hint and it is still read from the chain on every lookup — setting aside decides what your hint spends itself on, not what exists.">set aside</span>' : ''}
         </div>
-        <div class="addr">${esc(h.address)}</div>
+        <div class="addr">${esc(h.address)}
+          <button class="linkbtn" data-aside="${esc(h.address)}" data-on="${h.aside ? '0' : '1'}"
+                  style="margin-left:10px; font-size:12px">${h.aside ? 'put back' : 'set aside'}</button>
+        </div>
       </div>
       <div class="num mono">${formatUnits(h.balance, h.decimals)}</div>
       <div class="num">${h.standard === 'erc20' ? priceOnly(h.price)
@@ -3181,6 +3277,14 @@ function renderHoldings() {
     </div>`;
   }).join('');
   wireVerdictButtons($('holdings'));
+  wireAsideButtons($('holdings'));
+
+  $('aside-toggle').hidden = !asideCount;
+  $('aside-toggle').textContent = SHOW_ASIDE
+    ? `Hide the ${asideCount} you set aside` : `Show ${asideCount} you set aside`;
+  $('aside-note').textContent = asideCount
+    ? 'Set aside in this browser, and kept out of the hint the next lookup spends. They are still read from the chain every time, and the valuation is unchanged: this is a judgement about what is worth remembering, not about what is there.'
+    : '';
 
   $('spam-toggle').hidden = !spamCount;
   $('spam-toggle').textContent = SHOW_SPAM
@@ -3400,6 +3504,7 @@ window.evmscanHoldings = () => HOLDINGS;
 $('account').addEventListener('keydown', e => { if (e.key === 'Enter') lookup(); });
 $('to-triage').addEventListener('click', () => show('triage'));
 $('spam-toggle').addEventListener('click', () => { SHOW_SPAM = !SHOW_SPAM; renderHoldings(); });
+$('aside-toggle').addEventListener('click', () => { SHOW_ASIDE = !SHOW_ASIDE; renderHoldings(); });
 $('xchain-open').addEventListener('click', openXChain);
 $('xchain-all').addEventListener('click', () => {
   // "All available" is every mainnet the list has tokens for that viem knows and
