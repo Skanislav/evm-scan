@@ -65,6 +65,9 @@ chains:
     # pricing touches the commitment, so a slightly old quote costs nothing.
     pricing:
       cache_ttl: 10m
+      # Sepolia has no built-in sources and none are named here, so nothing is
+      # valued; this is what the page says instead of an empty column.
+      note: "Sepolia has no feed registry and no liquidity worth quoting, so holdings here carry no value."
 
     discovery:
       enabled: true

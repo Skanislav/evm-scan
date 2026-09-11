@@ -11,6 +11,18 @@ import (
 	"github.com/Skanislav/evm-scan/internal/price"
 )
 
+// pricingNotes collects each chain's stated reason for having no prices, so the
+// status endpoint can pass the operator's words through.
+func pricingNotes(chains []config.Chain) map[uint64]string {
+	out := map[uint64]string{}
+	for _, c := range chains {
+		if n := strings.TrimSpace(c.Pricing.Note); n != "" {
+			out[c.ChainID] = n
+		}
+	}
+	return out
+}
+
 // newPricer builds one chain's pricer from its config layered over the chain's
 // built-in defaults. It returns nil when pricing is off or has nothing to read.
 func newPricer(src chain.Source, c config.Chain, log *slog.Logger) *price.Pricer {

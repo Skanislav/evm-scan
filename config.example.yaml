@@ -123,6 +123,9 @@ chains:
 
     pricing:
       enabled: true
+      # Why there are no prices here, in your words, for a chain with nothing to
+      # read or with pricing off. The page shows it where a value would be.
+      # note: "This chain has no feed registry and no liquidity worth quoting."
       # false drops the built-in addresses and uses only what is written here.
       use_defaults: true
       # feed_registry: "0x47Fb2585D2C56Fe188D0E6ec628a38b74fCeeeDf"   # mainnet only

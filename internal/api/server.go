@@ -72,10 +72,13 @@ type Deps struct {
 	// spends something. Empty leaves those endpoints open.
 	AuthToken string
 	// Cost prices RPC traffic so /v1/status can report what the deployment spends.
-	Cost       config.Cost
-	CORSOrigin string
-	WebDir     string
-	Log        *slog.Logger
+	Cost config.Cost
+	// PricingNotes is, per chain, the operator's reason for having no prices there
+	// (config pricing.note). Reported by /v1/status for chains without a pricer.
+	PricingNotes map[uint64]string
+	CORSOrigin   string
+	WebDir       string
+	Log          *slog.Logger
 	// TokenFilters are the compiled token lists, keyed by chain id. Built by
 	// LoadTokenLists before the server starts, because fetching third-party URLs is
 	// startup work and does not belong on a request path.
@@ -480,6 +483,38 @@ type pricingStatus struct {
 	TWAPWindow   string `json:"twap_window"`
 	// NativeUSD is the native asset's current USD price, when the feed answered.
 	NativeUSD string `json:"native_usd,omitempty"`
+	// Reason says why Enabled is false, so a page can tell "this chain has no
+	// sources" from "the operator turned it off". Note is the operator's own words
+	// for the same thing, when they left any.
+	Reason string `json:"reason,omitempty"`
+	Note   string `json:"note,omitempty"`
+}
+
+// pricingStatusFor describes a chain's price discovery, or explains its absence.
+// Without a pricer the reason is derived: a chain with built-in sources only ends
+// up here when its config switched them off, while one without has nothing to read
+// unless the operator names a source.
+func pricingStatusFor(chainID uint64, p *price.Pricer, note string) *pricingStatus {
+	if p == nil {
+		ps := &pricingStatus{Note: note}
+		if _, known := price.Defaults(chainID); known {
+			ps.Reason = fmt.Sprintf("pricing is switched off for chain %d in this deployment's config", chainID)
+		} else {
+			ps.Reason = fmt.Sprintf("no on-chain price sources are configured for chain %d, and it has no built-in ones", chainID)
+		}
+		return ps
+	}
+	src := p.Sources()
+	return &pricingStatus{
+		Enabled:      true,
+		FeedRegistry: src.FeedRegistry != (common.Address{}),
+		NativeFeed:   src.NativeUSDFeed != (common.Address{}) || src.FeedRegistry != (common.Address{}),
+		PinnedFeeds:  len(src.Feeds),
+		UniswapV3:    src.V3Factory != (common.Address{}),
+		UniswapV2:    src.V2Factory != (common.Address{}),
+		QuoteTokens:  len(src.QuoteTokens),
+		TWAPWindow:   p.TWAPWindow().String(),
+	}
 }
 
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {
@@ -542,19 +577,9 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		cs.RPC = s.rpcUsage(src)
-		cs.Pricing = &pricingStatus{}
-		if p := s.pricerFor(id); p != nil {
-			src := p.Sources()
-			cs.Pricing = &pricingStatus{
-				Enabled:      true,
-				FeedRegistry: src.FeedRegistry != (common.Address{}),
-				NativeFeed:   src.NativeUSDFeed != (common.Address{}) || src.FeedRegistry != (common.Address{}),
-				PinnedFeeds:  len(src.Feeds),
-				UniswapV3:    src.V3Factory != (common.Address{}),
-				UniswapV2:    src.V2Factory != (common.Address{}),
-				QuoteTokens:  len(src.QuoteTokens),
-				TWAPWindow:   p.TWAPWindow().String(),
-			}
+		p := s.pricerFor(id)
+		cs.Pricing = pricingStatusFor(id, p, s.d.PricingNotes[id])
+		if p != nil {
 			if res, _ := s.quotes(ctx, p, nil); res != nil && res.Native != nil {
 				cs.Pricing.NativeUSD = price.FormatPrice(res.Native.USD)
 			}
