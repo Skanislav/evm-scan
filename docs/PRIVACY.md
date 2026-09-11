@@ -138,6 +138,7 @@ where a reader would otherwise assume a protection they do not have:
 | `GET /v1/epochs/{id}/manifest` | shipped |
 | `evmscan-verify -filter` | shipped; needs a node, a registry and a finalized epoch to say anything |
 | `text(node, "evmscan.uri")` on HintResolver | shipped; **no deployment to read it from yet** |
+| cross-chain sweep over viem's chain registry | shipped; measured below |
 | unlisted-contract marking in the account table | shipped |
 | `passkeySecret` / `walletSecret` / `passwordSecret` / `buildWatchlist` | implemented and
   round-tripped against Go, but **console-only — there is no UI to reach them** |
@@ -193,6 +194,16 @@ this document describes a capability rather than a feature.
 
 - **It is not an authorization boundary.** It hides a set from a host. It does not
   stop anyone who already knows an address from watching that address on chain.
+
+- **A cross-chain sweep leaks to every endpoint it touches.** "Elsewhere" reads one
+  RPC per chain, and each one sees the address being asked about. Selecting every
+  available chain sends it to around twenty endpoints this deployment has no
+  relationship with — viem's public defaults. That is a `docs/CLIENT-SIDE.md` Tier 1
+  trade, the reader's own read against a node of their choosing, and it is legitimate
+  as long as it is not a surprise: the panel states it before the sweep runs, counts
+  how many of the selected endpoints are not the reader's, offers a per-chain
+  override, and names the host that answered on every row. Nothing about the sweep
+  reaches this daemon.
 
 - **The rest of the page still leaks.** Name resolution goes to a public mainnet RPC,
   disclosed inline. `/v1/accounts/{address}` is still the default path. Filters are
