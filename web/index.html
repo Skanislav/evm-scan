@@ -312,6 +312,19 @@
     </div>
   </div>
 
+  <!-- Hints out. The same index as an ENS record, read here and not from the API: the
+       browser walks ENS to the resolver, reads the plain records from the registry, and
+       fetches the contracts record through the gateway, which the chain verifies before
+       the page shows it. The card exists to make that path visible. -->
+  <div class="panel" id="ens-card" hidden>
+    <div class="kicker">as an ENS record · read in your browser</div>
+    <h3 style="font-size:17px; word-break:break-all; margin-top:8px"><code id="ens-name"></code></h3>
+    <div class="hint" id="ens-walk" style="margin:6px 0 16px"></div>
+    <div class="kvgrid" id="ens-kv" style="margin-bottom:18px"></div>
+    <div id="ens-contracts" class="prose"></div>
+    <div class="hint" id="ens-how" hidden style="margin-top:16px"></div>
+  </div>
+
   <div class="chips" id="networks" style="margin-top:34px">
     <span class="kicker" style="margin-right:6px">networks</span>
     <span class="empty">loading…</span>
@@ -2305,6 +2318,228 @@ function showResolved(r) {
 }
 
 // --------------------------------------------------------------------------
+// Hints out: the account's index as an ENS record, read in the browser
+//
+// The API above already said what this account touched. The card reads the same
+// answer a second way, with no evm-scan code in the path: the Universal Resolver on
+// the reader's RPC walks root → eth → <parent> → hints and names the resolver
+// (ENSv2 is a tree of registries, so that walk is real); the plain records come from
+// the registry in one eth_call each; the contracts record reverts OffchainLookup, the
+// browser fetches the gateway named in the revert, and the resolver's callback hands
+// the answer to HintRegistry, which checks the proof against the finalized root
+// before anything is rendered. A gateway can withhold an answer, not forge one.
+// This mirrors internal/ens.ResolveText and cmd/evmscan-ens check.
+// --------------------------------------------------------------------------
+const UR_FIND_ABI = [
+  { type: 'function', name: 'findResolver', stateMutability: 'view',
+    inputs: [{ name: 'name', type: 'bytes' }],
+    outputs: [{ name: 'resolver', type: 'address' }, { name: 'node', type: 'bytes32' }, { name: 'offset', type: 'uint256' }] },
+];
+const HINT_RESOLVER_ABI = [
+  { type: 'function', name: 'resolve', stateMutability: 'view',
+    inputs: [{ name: 'name', type: 'bytes' }, { name: 'data', type: 'bytes' }], outputs: [{ name: '', type: 'bytes' }] },
+  { type: 'function', name: 'text', stateMutability: 'view',
+    inputs: [{ name: 'node', type: 'bytes32' }, { name: 'key', type: 'string' }], outputs: [{ name: '', type: 'string' }] },
+  { type: 'error', name: 'OffchainLookup', inputs: [
+    { name: 'sender', type: 'address' }, { name: 'urls', type: 'string[]' }, { name: 'callData', type: 'bytes' },
+    { name: 'callbackFunction', type: 'bytes4' }, { name: 'extraData', type: 'bytes' }] },
+  { type: 'error', name: 'UnsupportedResolverProfile', inputs: [{ name: 'selector', type: 'bytes4' }] },
+  { type: 'error', name: 'InvalidAccountLabel', inputs: [] },
+  { type: 'error', name: 'NoFinalizedEpoch', inputs: [{ name: 'chainId', type: 'uint64' }] },
+  // HintRegistry's own, which the resolver's callback lets bubble up unchanged.
+  { type: 'error', name: 'NoFinalizedEpoch', inputs: [] },
+  { type: 'error', name: 'StaleEpoch', inputs: [] },
+  { type: 'error', name: 'BadProof', inputs: [] },
+  { type: 'error', name: 'Unsorted', inputs: [] },
+];
+// What each revert means to a reader; the table in docs/ENS.md, in prose.
+const HINT_ERRORS = {
+  NoFinalizedEpoch: 'the registry has no finalized epoch for this chain yet',
+  StaleEpoch: 'the gateway answered for an epoch that was superseded a moment ago; look up again',
+  BadProof: 'the chain rejected the gateway\'s proof, so its answer was discarded rather than shown',
+  Unsorted: 'the gateway\'s list was malformed and the chain refused it',
+  InvalidAccountLabel: 'the first label is not a hex address',
+  UnsupportedResolverProfile: 'the resolver does not serve this record type',
+};
+function revertData(e) {
+  const d = String((e && e.data) || '');
+  if (/^0x[0-9a-fA-F]{8,}$/.test(d)) return d;
+  const m = String((e && e.message) || '').match(/0x[0-9a-fA-F]{8,}/);
+  return m ? m[0] : null;
+}
+function decodeHintRevert(viem, e) {
+  const raw = revertData(e);
+  if (!raw) return null;
+  try { return viem.decodeErrorResult({ abi: HINT_RESOLVER_ABI, data: raw }); } catch { return null; }
+}
+function explainRevert(viem, e) {
+  const dec = decodeHintRevert(viem, e);
+  if (!dec) return e;
+  const why = HINT_ERRORS[dec.errorName];
+  return Object.assign(new Error(why ? `${dec.errorName}: ${why}` : `the resolver reverted ${dec.errorName}`), { code: dec.errorName });
+}
+function gatewayHost(tpl) {
+  try { return new URL(tpl.replace('{sender}', 'x').replace('{data}', 'x')).host; } catch { return tpl; }
+}
+// ERC-3668: a template with {data} is a GET, anything else a POST; the first gateway
+// that answers wins. The error carries the HTTP status so a 404 can be explained.
+async function fetchGateway(urls, sender, callData) {
+  const senderHex = sender.toLowerCase();
+  let last = null;
+  for (const tpl of urls) {
+    try {
+      const res = tpl.includes('{data}')
+        ? await fetch(tpl.replace('{sender}', senderHex).replace('{data}', callData))
+        : await fetch(tpl.replace('{sender}', senderHex), { method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ sender: senderHex, data: callData }) });
+      const text = await res.text();
+      if (!res.ok) {
+        let msg = text.trim();
+        try { msg = JSON.parse(text).error || msg; } catch { /* not JSON */ }
+        throw Object.assign(new Error(`gateway ${gatewayHost(tpl)}: ${res.status} ${msg}`), { gateway: gatewayHost(tpl), status: res.status });
+      }
+      const data = JSON.parse(text).data;
+      if (!/^0x[0-9a-fA-F]*$/.test(data || '')) throw new Error(`gateway ${gatewayHost(tpl)} answered with something that is not hex`);
+      return { data, host: gatewayHost(tpl) };
+    } catch (e) { last = e; }
+  }
+  throw last || new Error('the resolver named no gateway');
+}
+// Where on the path the resolver sits. `offset` is a byte offset into the DNS-encoded
+// name; turned back into labels it says which suffix the resolver is registered on.
+async function findHintResolver(viem, url, norm) {
+  const data = viem.encodeFunctionData({ abi: UR_FIND_ABI, functionName: 'findResolver', args: [dnsEncode(viem, norm)] });
+  const out = await rpc(url, 'eth_call', [{ to: UNIVERSAL_RESOLVER, data }, 'latest']);
+  const [resolver, node, offset] = viem.decodeFunctionResult({ abi: UR_FIND_ABI, functionName: 'findResolver', data: out });
+  const labels = norm.split('.');
+  const enc = new TextEncoder();
+  let skipped = 0, consumed = 0;
+  for (const l of labels) {
+    const len = 1 + enc.encode(l).length;
+    if (consumed + len > Number(offset)) break;
+    consumed += len; skipped++;
+  }
+  return { resolver, node, foundAt: labels.slice(skipped).join('.'), wildcard: skipped > 0 };
+}
+// One text record, straight from chain or through the gateway and the callback.
+async function readHintRecord(viem, url, found, norm, key) {
+  const inner = viem.encodeFunctionData({ abi: HINT_RESOLVER_ABI, functionName: 'text', args: [found.node, key] });
+  const data = viem.encodeFunctionData({ abi: HINT_RESOLVER_ABI, functionName: 'resolve', args: [dnsEncode(viem, norm), inner] });
+  let out, gateway = null;
+  try {
+    out = await rpc(url, 'eth_call', [{ to: found.resolver, data }, 'latest']);
+  } catch (e) {
+    const dec = decodeHintRevert(viem, e);
+    if (!dec || dec.errorName !== 'OffchainLookup') throw explainRevert(viem, e);
+    const [sender, urls, callData, callbackFn, extraData] = dec.args;
+    const answer = await fetchGateway(urls, sender, callData);
+    gateway = answer.host;
+    const cb = callbackFn + viem.encodeAbiParameters([{ type: 'bytes' }, { type: 'bytes' }], [answer.data, extraData]).slice(2);
+    try {
+      out = await rpc(url, 'eth_call', [{ to: found.resolver, data: cb }, 'latest']);
+    } catch (e2) { throw explainRevert(viem, e2); }
+  }
+  // One output, so viem hands back the bytes value itself, holding an encoded string.
+  const bytes = viem.decodeFunctionResult({ abi: HINT_RESOLVER_ABI, functionName: 'resolve', data: out });
+  const [value] = viem.decodeAbiParameters([{ type: 'string' }], bytes);
+  return { value, gateway };
+}
+
+async function renderEnsCard(hintName, indexed) {
+  const card = $('ens-card');
+  const walk = $('ens-walk'), kv = $('ens-kv'), list = $('ens-contracts'), how = $('ens-how');
+  $('ens-name').textContent = hintName;
+  kv.innerHTML = ''; list.innerHTML = ''; how.hidden = true;
+  card.hidden = false;
+  const url = namesRpc();
+  if (!url) { walk.innerHTML = '<span class="empty">no RPC for this chain to ask ENS on</span>'; return; }
+  const host = esc(new URL(url).host);
+  walk.innerHTML = `<span class="empty">asking the Universal Resolver on <code>${host}</code>…</span>`;
+
+  let viem, norm, found;
+  try {
+    viem = await import(VIEM_MODULE);
+    norm = normalizeName(hintName);
+    found = await findHintResolver(viem, url, norm);
+  } catch (e) {
+    walk.innerHTML = `<span class="err">ENS could not be asked: ${esc(e.message)}</span>`;
+    return;
+  }
+  if (/^0x0{40}$/.test(found.resolver)) {
+    walk.innerHTML = `<span class="empty">no resolver on the path: <code>hints</code> is not registered under this deployment's name yet</span>`;
+    return;
+  }
+  const path = norm.split('.').reverse().map(l => `<code>${esc(l)}</code>`).join(' → ');
+  walk.innerHTML = `The Universal Resolver on <code>${host}</code> walked ${path} and found the resolver at
+    <span class="addr">${esc(found.resolver)}</span> on <code>${esc(found.foundAt)}</code>`
+    + (found.wildcard ? ' — a wildcard, so one resolver answers for every account label under it.' : '.');
+
+  // The plain records: what the registry says the finalized commitment is.
+  const keys = ['evmscan.epoch', 'evmscan.range', 'evmscan.root', 'evmscan.registry'];
+  const vals = {};
+  await Promise.all(keys.map(async k => {
+    try { vals[k] = (await readHintRecord(viem, url, found, norm, k)).value; }
+    catch (e) { vals[k] = { err: explainRevert(viem, e).message }; }
+  }));
+  const cell = (label, v, mono) => {
+    const body = (v && v.err) ? `<span class="err" style="font-size:12px">${esc(v.err)}</span>`
+      : v === '' ? '<span class="empty">none yet</span>'
+      : `<span class="${mono ? 'addr' : ''}">${esc(mono ? short(v, 6) : v)}</span>`;
+    return `<div><div class="k">${label}</div><div class="v" style="font-size:15px">${body}</div></div>`;
+  };
+  kv.innerHTML = cell('finalized epoch', vals['evmscan.epoch'])
+    + cell('blocks', String(vals['evmscan.range'] || '').replace('-', ' – '))
+    + cell('index root', vals['evmscan.root'], true)
+    + cell('registry', vals['evmscan.registry'], true);
+  const epoch = typeof vals['evmscan.epoch'] === 'string' ? vals['evmscan.epoch'] : '';
+
+  // The contracts record: through the gateway, verified by the chain.
+  list.innerHTML = `<span class="empty">fetching <code>evmscan.contracts</code> through the gateway and verifying it on-chain…</span>`;
+  try {
+    const { value, gateway } = await readHintRecord(viem, url, found, norm, 'evmscan.contracts');
+    const committed = value ? value.split(',') : [];
+    const live = new Set(indexed.map(a => a.address.toLowerCase()));
+    const meta = new Map(ASSETS.concat(CANDIDATES, indexed).map(a => [a.address.toLowerCase(), a]));
+    const notYet = indexed.filter(a => !committed.includes(a.address.toLowerCase()));
+    const via = gateway ? `The gateway at <code>${esc(gateway)}</code> supplied the list and a proof; ` : '';
+    let html = `<div style="margin-bottom:10px"><strong>${committed.length} contract${committed.length === 1 ? '' : 's'}</strong>
+      in the committed record${epoch ? ` (epoch ${esc(epoch)})` : ''}. ${via}<code>HintRegistry</code> checked it against the
+      finalized root before this page saw it, so this list is the chain's word, not this deployment's.</div>`;
+    if (committed.length) {
+      html += '<div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:6px 24px">'
+        + committed.map(a => {
+          const m = meta.get(a) || {};
+          const sym = m.symbol ? ` <span class="sym">${esc(m.symbol)}</span>` : '';
+          const flag = live.has(a) ? '' : ' <span class="tag">not in the live index</span>';
+          return `<div><span class="addr" style="font-size:12.5px">${esc(a)}</span>${sym}${flag}</div>`;
+        }).join('') + '</div>';
+    }
+    if (notYet.length) {
+      html += `<div class="hint" style="margin-top:12px">${notYet.length} contract${notYet.length === 1 ? '' : 's'} in the live
+        index above ${notYet.length === 1 ? 'is' : 'are'} not in this record: the record is the last <em>finalized</em> commitment,
+        which trails the head by the challenge window on purpose.</div>`;
+    }
+    list.innerHTML = html;
+  } catch (e) {
+    let why = esc(e.message);
+    if (e.status === 404 && e.gateway) {
+      why = `the gateway at <code>${esc(e.gateway)}</code> holds no copy of finalized epoch ${esc(epoch || '?')}. That happens when
+        an indexer publishes and then loses its database; the next epoch it finalizes repairs it. The records above still came
+        from the chain.`;
+    } else if (e.code === 'NoFinalizedEpoch') {
+      why = `${esc(HINT_ERRORS.NoFinalizedEpoch)}; the first commitment becomes final once its challenge window closes.`;
+    }
+    list.innerHTML = `<div><code>evmscan.contracts</code> is not readable right now: ${why}</div>`;
+  }
+
+  const chain = chainLabel(activeChainID()).toLowerCase();
+  how.innerHTML = `Any ENS client reads the same record with no evm-scan code, e.g.
+    <code>ens get text ${esc(norm)} --key evmscan.contracts --chain ${esc(chain)}</code>
+    or viem's <code>getEnsText</code> against the Universal Resolver.`;
+  how.hidden = false;
+}
+
+// --------------------------------------------------------------------------
 // Wallet
 // --------------------------------------------------------------------------
 
@@ -2342,6 +2577,7 @@ async function lookup() {
   const typed = $('account').value.trim();
   if (!typed) return;
   showErr('account-err', null);
+  $('ens-card').hidden = true;
   $('lookup').disabled = true;
   try {
     const resolved = await resolveAccount(typed);
@@ -2354,6 +2590,11 @@ async function lookup() {
     // The daemon formats the hint name from registry.ens_parent; it resolves nothing.
     if (r.hint_name) { resolved.hintName = r.hint_name; showResolved(resolved); }
     const indexed = r.assets || [];
+    // Not awaited: the record is a second, independent read of the same index, and
+    // the holdings below should not wait on a gateway round trip to appear.
+    if (r.hint_name) {
+      renderEnsCard(r.hint_name, indexed).catch(e => { $('ens-walk').innerHTML = `<span class="err">${esc(e.message)}</span>`; });
+    }
     VALUATION = indexed.length ? r.valuation : null;
 
     // The index knows what it has seen; the lens knows what is held now. An account
