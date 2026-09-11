@@ -1760,9 +1760,11 @@ function walletTokens() {
   const out = [];
   const push = a => { const k = a.toLowerCase(); if (!seen.has(k)) { seen.add(k); out.push(a); } };
   for (const a of ASSETS) push(a.address);
+  // Spam is asked about too, and hidden at render. Leaving it out here would make the
+  // "show N marked spam" count zero on a fresh lookup — a wallet holding three spam
+  // tokens would be told it holds none, which is the opposite of what the toggle is for.
   for (const c of CANDIDATES) {
     if (c.promoted) continue;
-    if (c.spam && !SHOW_SPAM) continue;
     // The lens batches by twenty and tokens= caps at 512; this cap is what keeps both
     // the URL and the number of eth_calls bounded no matter how busy discovery is.
     if (out.length >= 50) break;
@@ -2151,21 +2153,21 @@ $('chain-cancel').addEventListener('click', resetAddChain);
 $('chain-node').addEventListener('keydown', e => { if (e.key === 'Enter') addChain(); });
 $('add-chain-close').addEventListener('click', () => { $('add-chain').hidden = true; });
 
-// ?account=0x… lets a link hand this page a subject.
+loadChains();
+loadStatus();
+loadDecisions();
+
+// ?account=0x… lets a link hand this page a subject. The lookup has to wait for the
+// asset and candidate lists: walletTokens() reads both, and firing it first would ask
+// the lens about an empty set and quietly show an assets-only wallet.
 const deepLinked = new URLSearchParams(location.search).get('account');
-if (deepLinked) {
+Promise.all([loadAssets(), loadCandidates()]).then(() => {
+  if (!deepLinked) return;
   $('account').value = deepLinked;
   show('wallet');
   lookup();
-} else {
-  show('overview');
-}
-
-loadChains();
-loadStatus();
-loadAssets();
-loadCandidates();
-loadDecisions();
+});
+show(deepLinked ? 'wallet' : 'overview');
 // Discovery moves; the rest does not. An account lookup, the epochs table and the
 // graph are left alone until something asks for them again.
 setInterval(() => {
