@@ -2400,8 +2400,17 @@ const hintCache = new Map();
 // the label needed to tell those apart: an ETag that does not match the manifest means
 // the two reads saw different builds, and returning null asks the caller to try again
 // with a fresh manifest rather than accusing anyone of corruption.
+//
+// `cache: 'no-cache'` is what makes that comparison mean anything. The daemon serves
+// the file with max-age=300 and rebuilds it as often as every five minutes, so a
+// plain fetch answers from the browser's copy — no request, no revalidation — for up
+// to five minutes after a rebuild, while the manifest (never cached) is already the
+// new one. That read as "rebuilt while it was downloading" on every attempt until
+// the cached copy aged out. no-cache still uses the copy, but only after asking the
+// daemon whether it stands: an If-None-Match round trip that comes back 304 when it
+// does, which is the ETag revalidation the panel promises.
 async function fetchHintFilter(name, fresh) {
-  const res = await fetch(`/v1/hints/${name}.xorf`);
+  const res = await fetch(`/v1/hints/${name}.xorf`, { cache: 'no-cache' });
   if (!res.ok) throw new Error(`/v1/hints/${name}.xorf: ${res.status}`);
   const bytes = new Uint8Array(await res.arrayBuffer());
   const m = (await hints(fresh).catch(() => [])).find(f => f.name === name) || null;
@@ -2426,7 +2435,7 @@ async function hintFilter(name) {
       // One retry, with the manifest re-read. A second disagreement is not a rebuild
       // racing a download, it is a deployment rebuilding faster than it can serve.
       const got = await fetchHintFilter(name, false) || await fetchHintFilter(name, true);
-      if (!got) throw new Error(`${name}.xorf was rebuilt while it was downloading; ask again`);
+      if (!got) throw new Error(`${name}.xorf and its manifest describe different builds twice in a row — the daemon is rebuilding the filter faster than it can serve it; ask again in a moment`);
       const f = xorfDecode(got.bytes.buffer);
       f.manifest = got.manifest;
       return f;
