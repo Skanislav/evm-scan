@@ -195,6 +195,16 @@ this document describes a capability rather than a feature.
 - **It is not an authorization boundary.** It hides a set from a host. It does not
   stop anyone who already knows an address from watching that address on chain.
 
+- **A filter answers about its own set, and nothing else.** The index filter was
+  briefly used to narrow the cross-chain sweep, which looked obviously right and was
+  badly wrong: the index is bounded by the promoted asset set, so a miss means "not
+  indexed", not "no balance". On the hosted mainnet deployment — eight promoted
+  assets — that turned 65 real holdings into 1, silently, because a skipped read is
+  indistinguishable from a zero. A filter cannot have a false negative about the set
+  it was built over; it can only be asked about the wrong set. Narrowing is sound
+  where the index is authoritative for the question asked, which is the wallet
+  lookup, not a token-list sweep.
+
 - **A cross-chain sweep leaks to every endpoint it touches.** "Elsewhere" reads one
   RPC per chain, and each one sees the address being asked about. Selecting every
   available chain sends it to around twenty endpoints this deployment has no

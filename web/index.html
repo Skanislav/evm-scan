@@ -2048,20 +2048,15 @@ async function markUnlisted(rows, chainId) {
 // makes, pointed at one endpoint per chain. What is new is deciding *which*
 // contracts to ask about on a chain nobody has indexed.
 //
-// Two answers, and the difference is the whole cost story:
+// The answer is: read all of them, and keep the list small enough that this is
+// affordable. Measured, the lens returns about 920 bytes per token, so EIP-170's
+// 24,576-byte reply ceiling lands the batch at 24 — the existing constant is a
+// near-optimum rather than a conservative guess, which means batching harder is not
+// a lever. Curation is the lever instead: the Uniswap default list is 1,516
+// contracts across 22 chains and sweeps in about seven seconds, where CoinGecko's
+// 5,828 mainnet contracts alone would be 243 calls against a public endpoint.
 //
-//   - Where this deployment has an index filter, test the account against it
-//     first. A published token list is a few hundred contracts per chain; the
-//     filter usually cuts that to a handful, and a handful is one call.
-//   - Everywhere else, sweep the list. Measured: the lens returns about 920 bytes
-//     per token, so EIP-170's 24,576-byte reply ceiling lands the batch at 24 —
-//     the existing constant is near-optimal rather than conservative, and a
-//     405-token chain costs 17 calls.
-//
-// So the filter is the request saving, and it exists on exactly the chains this
-// daemon indexes. Elsewhere the curated list is small enough that sweeping it is
-// affordable, which is why a *curated* list is the default rather than a long-tail
-// one: CoinGecko's 5,828 mainnet tokens would be 243 calls.
+// The index filter is deliberately not used to narrow this; see below for why.
 // ---------------------------------------------------------------------------
 
 // Bundled rather than the barrel: esm.sh serves viem/chains as ~800 separate
@@ -2139,34 +2134,27 @@ async function sweepableChains() {
 
 const hostOf = (u) => { try { return new URL(u).host; } catch { return u; } };
 
-// narrowByFilter cuts a chain's candidate list down to what the index says this
-// account actually touched. It is the whole reason the filter exists, and it only
-// works where this deployment publishes one — everywhere else the caller sweeps.
+// The index filter deliberately does NOT narrow this sweep, and the reason is worth
+// writing down because the opposite looks obviously right.
 //
-// False positives are fine and self-correcting: the lens reads the balance and a
-// zero drops the row. A false negative would hide a holding, and cannot happen for
-// a pair that was in the index when the filter was built. What can happen is
-// staleness, so a filter that is behind narrows against an older block; the row
-// count is reported with the block it was true as of.
-async function narrowByFilter(chainId, account, tokens) {
-  let f;
-  try {
-    f = await hintFilter(`index-${chainId}`);
-  } catch {
-    return { tokens, narrowed: false };
-  }
-  const sub = await xorfSubkey(new Uint8Array(0), chainId, 2 /* KindAccountToken */);
-  const keep = [];
-  for (const t of tokens) {
-    if (xorfContains(f, await pairKey(sub, account, t.address))) keep.push(t);
-  }
-  return { tokens: keep, narrowed: true, toBlock: f.toBlock };
-}
+// The filter answers "is this (account, contract) pair in the index". The index is
+// bounded by the promoted asset set — eight contracts on the hosted mainnet
+// deployment — not by the chain. So a miss means "we do not index that contract",
+// which is nothing like "you hold none of it". Narrowing a 405-contract list by it
+// took a real account from 65 holdings to 1, silently: every token outside the
+// promoted set vanished, and a filter miss is indistinguishable from a zero balance
+// once the read has been skipped.
+//
+// That is the one failure this whole path exists to avoid — a false negative in
+// front of a reader — and it is not a bug in the filter. A filter cannot have a
+// false negative about the set it was built over; the mistake was asking it about a
+// different set. Narrowing is sound only where the index is authoritative for the
+// question, which is the wallet lookup, not a list sweep.
 
 // sweepChain reads one chain and reports what is held there.
 async function sweepChain(chain, account, onProgress) {
-  const { tokens, narrowed, toBlock } = await narrowByFilter(chain.id, account, chain.tokens);
-  if (!tokens.length) return { chain, held: [], calls: 0, narrowed, toBlock, scanned: 0 };
+  const tokens = chain.tokens;
+  if (!tokens.length) return { chain, held: [], calls: 0, scanned: 0 };
 
   const held = [];
   let calls = 0;
@@ -2196,7 +2184,7 @@ async function sweepChain(chain, account, onProgress) {
     }
     if (onProgress) onProgress({ chain, done: Math.min(i + LENS_BATCH, tokens.length), total: tokens.length, held });
   }
-  return { chain, held, calls, narrowed, toBlock, scanned: tokens.length };
+  return { chain, held, calls, scanned: tokens.length };
 }
 
 function withTimeout(p, ms, what) {
@@ -2344,9 +2332,7 @@ async function runXChain() {
       + done.map(r => r.error
           ? `<div class="hint" style="padding:6px 0">${esc(r.chain.name)}: ${esc(r.error)}</div>`
           : `<div class="hint" style="padding:6px 0">${esc(r.chain.name)}: ${r.held.length} held, `
-            + `${r.scanned} of ${r.chain.tokens.length} contracts read in ${r.calls} call${r.calls === 1 ? '' : 's'}`
-            + (r.narrowed ? ` — narrowed by the index filter${r.toBlock ? ` as of block ${r.toBlock}` : ''}` : '')
-            + `</div>`).join('');
+            + `${r.scanned} contracts read in ${r.calls} call${r.calls === 1 ? '' : 's'}</div>`).join('');
   };
   render();
 
