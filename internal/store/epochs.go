@@ -467,3 +467,106 @@ func toAddresses(raw [][]byte) []common.Address {
 	}
 	return out
 }
+
+// PruneReport is what PruneEpochData removed, in epochs.
+type PruneReport struct {
+	LeafEpochs     int64
+	CoverageEpochs int64
+}
+
+// PruneEpochData drops the leaf and coverage rows of commitments nothing can need
+// any more. The epoch rows themselves stay: they are the publisher's record of what
+// it posted, and they are small. The rows that are not small are the leaves — one
+// per account, every time an epoch is built — and a publisher on a timer writes a
+// fresh set each interval, so without this the table grows without bound and the
+// database eventually fills, which took the hosted Sepolia deployment down once.
+//
+// What is kept, and why:
+//
+//   - Leaves of the latest finalized epoch and everything newer. The registry's
+//     callback only accepts the latest finalized epoch, so that is the only one the
+//     gateway serves proofs for; the newer ones are its successors in waiting. A
+//     never-posted epoch keeps its leaves only while it is the newest, in case its
+//     submission is retried.
+//   - Coverage rows until the epoch's reward is claimed — claimCoverage needs the
+//     proof — or until the epoch is known never to be claimable: rejected, or never
+//     posted and already superseded.
+//
+// A pruned epoch can no longer serve GET /v1/epochs/{id}/snapshot or /proof; the API
+// answers 410 for it. Its on-chain uri still names it, so a reader who needs that
+// exact table has to have mirrored it, which docs/RECOVERY.md says of every epoch.
+func (s *Store) PruneEpochData(ctx context.Context, chainID uint64) (PruneReport, error) {
+	var rep PruneReport
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return rep, err
+	}
+	defer tx.Rollback(ctx)
+
+	const bounds = `
+		SELECT COALESCE(MAX(id) FILTER (WHERE status = 'finalized' AND onchain_id IS NOT NULL), 0),
+		       COALESCE(MAX(id), 0)
+		FROM epochs WHERE chain_id = $1`
+	var latestFinalized, newest int64
+	if err := tx.QueryRow(ctx, bounds, int64(chainID)).Scan(&latestFinalized, &newest); err != nil {
+		return rep, err
+	}
+
+	leafVictims, err := tx.Exec(ctx, `
+		DELETE FROM epoch_leaves WHERE epoch_id IN (
+			SELECT e.id FROM epochs e
+			WHERE e.chain_id = $1 AND e.id < $2
+			  AND (e.id < $3 OR (e.onchain_id IS NULL AND e.status IN ('built', 'rejected')))
+			  AND EXISTS (SELECT 1 FROM epoch_leaves l WHERE l.epoch_id = e.id)
+		)`, int64(chainID), newest, latestFinalized)
+	if err != nil {
+		return rep, err
+	}
+	coverageVictims, err := tx.Exec(ctx, `
+		DELETE FROM epoch_coverage WHERE epoch_id IN (
+			SELECT e.id FROM epochs e
+			WHERE e.chain_id = $1 AND e.id < $2
+			  AND (e.claimed_at IS NOT NULL OR e.status = 'rejected'
+			       OR (e.onchain_id IS NULL AND e.status = 'built'))
+			  AND EXISTS (SELECT 1 FROM epoch_coverage c WHERE c.epoch_id = e.id)
+		)`, int64(chainID), newest)
+	if err != nil {
+		return rep, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return rep, err
+	}
+	// Exec reports rows, not epochs; the epoch counts are what a log line wants.
+	// They are recovered cheaply because every epoch's leaf count is on its row.
+	if leafVictims.RowsAffected() > 0 || coverageVictims.RowsAffected() > 0 {
+		rep.LeafEpochs, rep.CoverageEpochs = s.countPrunedSince(ctx, chainID, newest, latestFinalized)
+	}
+	return rep, nil
+}
+
+// countPrunedSince counts epochs below the newest that now have no leaves, and
+// below it that now have no coverage, for the prune report. Best effort: a count
+// that fails leaves the report at zero rather than failing the prune.
+func (s *Store) countPrunedSince(ctx context.Context, chainID uint64, newest, latestFinalized int64) (leaves, coverage int64) {
+	_ = s.pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM epochs e
+		WHERE e.chain_id = $1 AND e.id < $2 AND e.leaf_count > 0
+		  AND NOT EXISTS (SELECT 1 FROM epoch_leaves l WHERE l.epoch_id = e.id)`,
+		int64(chainID), newest).Scan(&leaves)
+	_ = s.pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM epochs e
+		WHERE e.chain_id = $1 AND e.id < $2 AND e.coverage_root IS NOT NULL
+		  AND NOT EXISTS (SELECT 1 FROM epoch_coverage c WHERE c.epoch_id = e.id)`,
+		int64(chainID), newest).Scan(&coverage)
+	_ = latestFinalized
+	return leaves, coverage
+}
+
+// HasEpochLeaves reports whether a commitment's leaves are still stored, which is
+// how the API tells a pruned epoch (410) from one that never had accounts.
+func (s *Store) HasEpochLeaves(ctx context.Context, epochID int64) (bool, error) {
+	var ok bool
+	err := s.pool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM epoch_leaves WHERE epoch_id = $1)`, epochID).Scan(&ok)
+	return ok, err
+}

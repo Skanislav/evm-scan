@@ -56,6 +56,12 @@ evmscan-restore -snapshot https://…/v1/epochs/2/snapshot \
 
 `evmscan-restore -dry-run` verifies and reports without writing.
 
+The daemon keeps the table only for the latest finalized epoch and its successors;
+older epochs' leaves are pruned once a newer one finalizes, and their snapshot and
+proof endpoints answer 410 from then on. The roots stay on chain forever, so an
+epoch you may want to restore *to* has to be mirrored while it is current — which
+is the point of the uri being public.
+
 ## What comes back, and what does not
 
 | | Recovered | Why |

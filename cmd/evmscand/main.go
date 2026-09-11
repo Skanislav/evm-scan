@@ -331,6 +331,14 @@ func publishTick(ctx context.Context, p *hintreg.Publisher, chainID uint64, uri 
 	if _, err := p.ClaimDue(ctx, chainID); err != nil && ctx.Err() == nil {
 		log.Error("claim coverage reward failed", "chain_id", chainID, "err", err)
 	}
+	// Leaves are written per epoch and are the one table that grows without bound;
+	// drop the sets nothing can ask for any more, now that settling has moved on.
+	if rep, err := p.Prune(ctx, chainID); err != nil && ctx.Err() == nil {
+		log.Error("prune commitment data failed", "chain_id", chainID, "err", err)
+	} else if rep.LeafEpochs+rep.CoverageEpochs > 0 {
+		log.Info("pruned superseded commitment data", "chain_id", chainID,
+			"leaf_epochs", rep.LeafEpochs, "coverage_epochs", rep.CoverageEpochs)
+	}
 	if pending > 0 {
 		log.Info("submission still in flight; not building another", "chain_id", chainID, "pending", pending)
 		return

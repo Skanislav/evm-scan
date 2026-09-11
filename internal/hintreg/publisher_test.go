@@ -90,6 +90,10 @@ func (m *memStore) MarkClaimed(_ context.Context, id int64, tx common.Hash, rewa
 	return nil
 }
 
+func (m *memStore) PruneEpochData(context.Context, uint64) (store.PruneReport, error) {
+	return store.PruneReport{}, nil
+}
+
 func (m *memStore) UnclaimedFinalized(context.Context, uint64) ([]store.Epoch, error) {
 	return m.byStatus(func(e *store.Epoch) bool {
 		return e.Status == store.EpochFinalized && e.OnchainID != nil && e.ClaimedAt == nil

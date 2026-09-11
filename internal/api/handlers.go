@@ -685,6 +685,9 @@ func (s *Server) epochProof(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "query failed", err)
 		return
 	}
+	if s.epochPruned(w, ctx, e) {
+		return
+	}
 
 	pr, err := s.accountProof(ctx, e, account)
 	if errors.Is(err, store.ErrNotFound) {

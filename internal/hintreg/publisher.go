@@ -74,6 +74,7 @@ type epochStore interface {
 	PendingSubmissions(ctx context.Context, chainID uint64) ([]store.Epoch, error)
 	PublishedUnfinalized(ctx context.Context, chainID uint64) ([]store.Epoch, error)
 	UnclaimedFinalized(ctx context.Context, chainID uint64) ([]store.Epoch, error)
+	PruneEpochData(ctx context.Context, chainID uint64) (store.PruneReport, error)
 	LatestCommittedRoots(ctx context.Context, chainID uint64) (root, coverage common.Hash, ok bool, err error)
 	// GetChainProfile is read for one field, trust, and it is the field that
 	// decides whether this chain's data may sit behind a bond at all.
@@ -682,6 +683,14 @@ func (p *Publisher) epochIDFromReceipt(r *types.Receipt) (int64, error) {
 		return new(big.Int).SetBytes(l.Topics[1].Bytes()).Int64(), nil
 	}
 	return 0, errors.New("hintreg: IndexPublished log not found in receipt")
+}
+
+// Prune drops the leaf and coverage rows of commitments nothing can need any more,
+// keeping the latest finalized epoch servable and unclaimed coverage claimable. It
+// runs every publish tick, after finalizing and claiming, so what it removes has
+// already been settled. See store.PruneEpochData for exactly what is kept.
+func (p *Publisher) Prune(ctx context.Context, chainID uint64) (store.PruneReport, error) {
+	return p.st.PruneEpochData(ctx, chainID)
 }
 
 // ProofFor rebuilds a commitment's tree and returns an account's inclusion proof.

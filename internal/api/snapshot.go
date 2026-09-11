@@ -2,6 +2,7 @@ package api
 
 import (
 	"compress/gzip"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -46,6 +47,9 @@ func (s *Server) epochSnapshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if s.epochPruned(w, ctx, e) {
+		return
+	}
 	coverage, err := s.d.Store.EpochCoverage(ctx, id)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "read coverage failed", err)
@@ -115,4 +119,23 @@ func (s *Server) epochSnapshot(w http.ResponseWriter, r *http.Request) {
 			s.d.Log.Error("snapshot gzip close failed", "epoch", id, "err", err)
 		}
 	}
+}
+
+// epochPruned answers 410 for a commitment whose leaves have been pruned (see
+// store.PruneEpochData) and reports whether it did. A superseded epoch's table is
+// gone from here for good; its root is still on chain, so a mirrored copy verifies.
+func (s *Server) epochPruned(w http.ResponseWriter, ctx context.Context, e store.Epoch) bool {
+	if e.LeafCount == 0 {
+		return false
+	}
+	has, err := s.d.Store.HasEpochLeaves(ctx, e.ID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "query failed", err)
+		return true
+	}
+	if has {
+		return false
+	}
+	writeErr(w, http.StatusGone, "this commitment's table was pruned after a later epoch finalized; only mirrored copies remain", nil)
+	return true
 }

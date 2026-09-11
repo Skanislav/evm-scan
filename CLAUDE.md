@@ -79,6 +79,10 @@ shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module 
   is the only implementation. A submission reference is persisted (`epochs.submission_ref`,
   status `submitted`) before the receipt wait, and `ResumePending` settles it after a
   restart, so nothing is ever posted twice. `Build` refuses an unchanged root unless forced.
+  Every epoch stores a full leaf set, so `Publisher.Prune` (each publish tick, via
+  `store.PruneEpochData`) drops leaves below the latest finalized epoch and coverage rows
+  once claimed; the epoch rows stay, and the API answers 410 for a pruned epoch's
+  snapshot or proof. Without it the database fills.
 - `HintRegistry` adjudicates disputes in one of two modes fixed at construction, read via
   `Client.Mode`. **Oracle mode** (UMA Optimistic Oracle V3, `contracts/src/IOptimisticOracleV3.sol`,
   `MockOptimisticOracleV3.sol` for tests): `publishIndex` asserts the commitment, the bond is

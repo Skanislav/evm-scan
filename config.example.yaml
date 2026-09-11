@@ -40,6 +40,8 @@ registry:
   publisher_key: ""
   sync_interval: 30s
   # Set > 0 to build and post a commitment on a timer. Identical roots are skipped.
+  # Each epoch stores one leaf per account until a later epoch finalizes, so keep this
+  # near the registry's challenge window rather than far below it.
   auto_publish_interval: 0
   commitment_uri: ""
   # How commitments reach the chain. "eoa" signs with publisher_key and pays its own

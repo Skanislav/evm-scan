@@ -22,8 +22,10 @@ registry:
   publisher_key: ""
   sync_interval: 60s
   # Post a commitment on a timer. Identical roots are skipped, so this is an upper
-  # bound on how often gas is spent, not a guarantee that it is.
-  auto_publish_interval: 30m
+  # bound on how often gas is spent, not a guarantee that it is. Matched to the
+  # registry's one-hour challenge window: each epoch stores a full leaf set until a
+  # later one finalizes, so the interval bounds how many sets are alive at once.
+  auto_publish_interval: 1h
   commitment_uri: ""
   publisher:
     mode: eoa
