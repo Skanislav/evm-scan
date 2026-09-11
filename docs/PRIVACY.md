@@ -119,6 +119,10 @@ where a reader would otherwise assume a protection they do not have:
 | filter format, both structures | shipped, cross-verified Go ↔ JS |
 | token filters from config, served and cached | shipped |
 | `index-{chain}.xorf` | wired and unit-tested; **never built against a real index** |
+| epoch-bound digest (`epochs.filter_keccak`, `Publisher.Build`) | shipped |
+| `GET /v1/epochs/{id}/manifest` | shipped |
+| `evmscan-verify -filter` | shipped; needs a node, a registry and a finalized epoch to say anything |
+| `text(node, "evmscan.uri")` on HintResolver | shipped; **no deployment to read it from yet** |
 | unlisted-contract marking in the account table | shipped |
 | `passkeySecret` / `walletSecret` / `passwordSecret` / `buildWatchlist` | implemented and
   round-tripped against Go, but **console-only — there is no UI to reach them** |
@@ -146,6 +150,15 @@ this document describes a capability rather than a feature.
   be one — a recoverable blinding is not blinding. Passkeys sync through their
   platform keychain; a wallet-derived secret lives as long as the seed does.
 
+- **The digest is only as good as the URI's scheme.** An epoch commits a digest of
+  its filter into a manifest, and names that manifest's URI inside the same bonded
+  `publishIndex` transaction as the root. Over `ipfs://` the URI *is* the content, so
+  the commitment fixes the document. Over `https://` it fixes only the address: the
+  publisher committed to naming that URL, not to what it serves, and a deployment
+  answering for its own artifact is the circularity the digest existed to break.
+  `evmscan-verify -filter` prints which one it followed, every time. Only the IPFS
+  form actually closes the loop, and nothing here publishes to IPFS yet.
+
 - **Omission, unchanged from `docs/CLIENT-SIDE.md`.** A publisher can under-populate a
   filter and no client can detect it locally: `Contains` returning false is
   indistinguishable from "was never inserted". `index-{chain}.xorf` is exactly as
@@ -155,9 +168,13 @@ this document describes a capability rather than a feature.
   *verifiable* drift across from the merkle path, where it is earned.
 
 - **Staleness is a false negative.** A pair indexed after a filter was built is a
-  holding the filter will hide. The header carries `toBlock` and the cache rebuilds
-  when coverage advances, but a reader that does not show "as of block N" cannot tell
-  "you hold nothing" from "nothing was indexed yet".
+  holding the filter will hide. Two filters exist for this reason and they answer
+  different questions. The epoch-bound one is fixed at the block a publisher bonded,
+  so it is checkable and behind; the rolling one is current and vouched for by
+  nobody. `/v1/hints/index-{chain}.xorf` serves the first when a finalized epoch
+  exists and the second otherwise, and the header says which (`epochId` is `-1` for
+  the rolling one). A reader that does not show "as of block N" cannot tell "you hold
+  nothing" from "nothing was indexed yet".
 
 - **It is not an authorization boundary.** It hides a set from a host. It does not
   stop anyone who already knows an address from watching that address on chain.

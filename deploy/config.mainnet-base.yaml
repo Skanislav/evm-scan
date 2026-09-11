@@ -60,7 +60,7 @@ registry:
   # Serving it from the daemon is the availability floor, not the goal: the file is
   # self-authenticating against the chain, so it should be mirrored somewhere that
   # outlives this service. Whoever holds a copy can hand it to anyone.
-  commitment_uri: "https://evm-scan-production.up.railway.app/v1/epochs/{id}/snapshot"
+  commitment_uri: "https://evm-scan-production.up.railway.app/v1/epochs/{id}/manifest"
   publisher:
     mode: eoa
     submit_timeout: 10m

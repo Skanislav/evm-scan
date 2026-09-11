@@ -28,6 +28,38 @@ type AccountAssetSet struct {
 	Assets  []common.Address
 }
 
+// FromIndex builds the index filter over an index snapshot's (account, token) pairs.
+//
+// EpochID is deliberately left at -1 even when the caller is building for a known
+// epoch. The publisher fixes this filter's digest while composing the epoch, before
+// the database has assigned the epoch an id and long before the chain has; writing
+// the id into the header would mean the digest could not be computed until after the
+// thing that records it already existed. The binding runs the other way instead —
+// the epoch row names its filter's digest — and ToBlock ties the two to one block.
+func FromIndex(chainID uint64, sets []AccountAssetSet, toBlock uint64) (*Filter, []byte, Manifest, error) {
+	if len(sets) == 0 {
+		return nil, nil, Manifest{}, ErrEmpty
+	}
+	sub := Subkey(PublicSecret, chainID, KindAccountToken)
+	keys := make([]uint64, 0, len(sets)*3)
+	for _, s := range sets {
+		for _, a := range s.Assets {
+			keys = append(keys, PairKey(sub, s.Account, a))
+		}
+	}
+	f, err := Build(keys, Meta{
+		ChainID: chainID, Kind: KindAccountToken, EpochID: -1, ToBlock: toBlock,
+	})
+	if err != nil {
+		return nil, nil, Manifest{}, err
+	}
+	enc, err := f.Encode()
+	if err != nil {
+		return nil, nil, Manifest{}, err
+	}
+	return f, enc, BuildManifest(f, enc, fmt.Sprintf("index chain %d", chainID), ""), nil
+}
+
 // Cache serves the index filter for one chain, rebuilding it when the chain's
 // coverage has moved on.
 //
@@ -118,25 +150,10 @@ func (c *Cache) Get(ctx context.Context) (*Filter, []byte, Manifest, error) {
 		return nil, nil, Manifest{}, ErrEmpty
 	}
 
-	sub := Subkey(PublicSecret, c.chainID, KindAccountToken)
-	keys := make([]uint64, 0, len(sets)*3)
-	for _, s := range sets {
-		for _, a := range s.Assets {
-			keys = append(keys, PairKey(sub, s.Account, a))
-		}
-	}
-
-	f, err := Build(keys, Meta{
-		ChainID: c.chainID, Kind: KindAccountToken, EpochID: -1, ToBlock: to,
-	})
+	f, newEnc, newMan, err := FromIndex(c.chainID, sets, to)
 	if err != nil {
 		return nil, nil, Manifest{}, err
 	}
-	newEnc, err := f.Encode()
-	if err != nil {
-		return nil, nil, Manifest{}, err
-	}
-	newMan := BuildManifest(f, newEnc, fmt.Sprintf("index chain %d", c.chainID), "")
 
 	c.mu.Lock()
 	// Another goroutine may have finished a newer build while this one ran. Keep

@@ -30,6 +30,8 @@ import {DNSNameLib} from "./DNSNameLib.sol";
 ///   text(node, "evmscan.epoch")    id of that epoch
 ///   text(node, "evmscan.range")    "<fromBlock>-<toBlock>" the epoch covers
 ///   text(node, "evmscan.root")     the epoch's index root
+///   text(node, "evmscan.uri")      the pointer that epoch committed: the index table, and
+///                                  the digest of the membership filter beside it
 ///   text(node, "evmscan.registry") this resolver's HintRegistry
 ///   text(node, "evmscan.chain")    the chain the account was indexed on
 ///
@@ -54,6 +56,7 @@ contract HintResolver {
     bytes32 private constant KEY_EPOCH = keccak256("evmscan.epoch");
     bytes32 private constant KEY_RANGE = keccak256("evmscan.range");
     bytes32 private constant KEY_ROOT = keccak256("evmscan.root");
+    bytes32 private constant KEY_URI = keccak256("evmscan.uri");
     bytes32 private constant KEY_REGISTRY = keccak256("evmscan.registry");
     bytes32 private constant KEY_CHAIN = keccak256("evmscan.chain");
 
@@ -167,11 +170,17 @@ contract HintResolver {
                 abi.encode(chainId, account)
             );
         }
-        if (k == KEY_EPOCH || k == KEY_RANGE || k == KEY_ROOT) {
+        if (k == KEY_EPOCH || k == KEY_RANGE || k == KEY_ROOT || k == KEY_URI) {
             (bool found, uint256 epochId, HintRegistry.Epoch memory e) = registry.latestFinalizedEpoch(chainId);
             if (!found) return "";
             if (k == KEY_EPOCH) return DNSNameLib.toDecimalString(epochId);
             if (k == KEY_ROOT) return DNSNameLib.toHexString(e.root);
+            // Returned verbatim. The publisher named this URI inside the same bonded
+            // transaction as the root, and what hangs off it — the index table, and
+            // the membership filter's digest in the manifest beside it — is the
+            // caller's to fetch and parse. A resolver that parsed URIs would be
+            // committing this contract to a document format it cannot verify.
+            if (k == KEY_URI) return e.uri;
             return string(
                 abi.encodePacked(
                     DNSNameLib.toDecimalString(e.fromBlock), "-", DNSNameLib.toDecimalString(e.toBlock)

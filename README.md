@@ -419,6 +419,7 @@ epoch that made verifying it in practice too expensive to bother with.
 | `GET` | `/v1/decisions` | The verdicts passed on discovered contracts, newest first. |
 | `GET` | `/v1/epochs` · `POST /v1/epochs` | List / build + publish commitments (`force` to repost an unchanged root). |
 | `GET` | `/v1/epochs/{id}/proof?account=` | Inclusion proof for `verifyInclusion`. |
+| `GET` | `/v1/epochs/{id}/manifest` | What the epoch's URI points at: roots, and the digest of the membership filter it committed. |
 | `GET` | `/ccip/{sender}/{data}.json` · `POST /ccip` | ERC-3668 gateway for `HintRegistry.contractsOf` and for `HintResolver`'s `evmscan.contracts` record: leaf and proof for the latest finalized epoch, verified on-chain by the callback. |
 | `GET` | `/v1/status` · `/v1/health` | Sync state, node locality, index size, registry economics. Health is 503 when a node, the database or an indexer is down. |
 

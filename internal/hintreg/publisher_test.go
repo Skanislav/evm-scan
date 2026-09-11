@@ -13,8 +13,10 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
 
 	"github.com/Skanislav/evm-scan/contracts"
+	"github.com/Skanislav/evm-scan/internal/hintfilter"
 	"github.com/Skanislav/evm-scan/internal/store"
 )
 
@@ -686,5 +688,84 @@ func TestClaimDue(t *testing.T) {
 	// Claimed epochs are not claimed again.
 	if n, _ := f.pub.ClaimDue(ctx, 1); n != 0 {
 		t.Fatal("must not claim twice")
+	}
+}
+
+// TestBuildCommitsFilterDigest pins the binding this whole path rests on: the epoch
+// names a digest, and rebuilding the filter from the same index at the same block
+// reproduces it. If those two ever drift, a reader checking a downloaded .xorf
+// against the chain is told the file is wrong when it is not — or, worse, told it
+// is right when it is not.
+func TestBuildCommitsFilterDigest(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+
+	e, err := f.pub.Build(ctx, 1, "", false)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if e.FilterKeccak == (common.Hash{}) {
+		t.Fatal("Build committed no filter digest")
+	}
+
+	rows := make([]hintfilter.AccountAssetSet, len(f.st.sets))
+	for i, s := range f.st.sets {
+		rows[i] = hintfilter.AccountAssetSet{Account: s.Account, Assets: s.Assets}
+	}
+	_, enc, m, err := hintfilter.FromIndex(1, rows, e.ToBlock)
+	if err != nil {
+		t.Fatalf("FromIndex: %v", err)
+	}
+	if m.Keccak256 != e.FilterKeccak.Hex() {
+		t.Errorf("epoch committed %s, rebuilding the filter gives %s",
+			e.FilterKeccak.Hex(), m.Keccak256)
+	}
+
+	// And the digest is over the bytes a reader would actually download, not over
+	// some internal form of them.
+	if crypto.Keccak256Hash(enc) != e.FilterKeccak {
+		t.Error("the committed digest is not the keccak of the served file")
+	}
+
+	// The filter has to answer for the index it was built from. A digest that
+	// matches an empty filter would still pass every check above.
+	filter, err := hintfilter.Decode(enc)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	sub := hintfilter.Subkey(hintfilter.PublicSecret, 1, hintfilter.KindAccountToken)
+	for _, s := range f.st.sets {
+		for _, a := range s.Assets {
+			if !filter.Contains(hintfilter.PairKey(sub, s.Account, a)) {
+				t.Errorf("indexed pair %s/%s is missing from the committed filter", s.Account, a)
+			}
+		}
+	}
+	if filter.ToBlock != e.ToBlock {
+		t.Errorf("filter says block %d, epoch covers to %d", filter.ToBlock, e.ToBlock)
+	}
+}
+
+// TestBuildFilterFollowsTheIndex guards against a digest that is computed once and
+// then reused: a changed index must produce a changed filter.
+func TestBuildFilterFollowsTheIndex(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+
+	first, err := f.pub.Build(ctx, 1, "", false)
+	if err != nil {
+		t.Fatalf("first build: %v", err)
+	}
+
+	f.st.sets = append(f.st.sets, store.AccountAssetSet{
+		Account: common.HexToAddress("0x9"),
+		Assets:  []common.Address{common.HexToAddress("0xf")},
+	})
+	second, err := f.pub.Build(ctx, 1, "", false)
+	if err != nil {
+		t.Fatalf("second build: %v", err)
+	}
+	if second.FilterKeccak == first.FilterKeccak {
+		t.Error("the index changed but the committed filter digest did not")
 	}
 }
