@@ -269,6 +269,18 @@ shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module 
   reader's RPC, the mirror through its injected `EthCall`. The daemon never resolves a
   name, no API parameter takes one, and nobody here follows an ERC-3668 gateway on a
   reader's behalf.
+- A reader's own hint is published to their own ENS name, as an `evmscan.hint` text
+  record on mainnet (`publishToENS` in `web/hints.js`), not to a contract of ours:
+  any ENS client can read it and nothing here has to keep running for it to work.
+  The value is the whole `.xorf`, base64url-encoded. base64url rather than hex
+  because a text record stores the string — 175 bytes is 234 base64url characters
+  against 352 hex, measured as 244,199 gas versus 313,941 against a real resolver.
+  The whole file rather than the bare bitmap because `k` depends on the key count and
+  a reader cannot recover it; the header costs about 46,000 gas over a bitmap alone,
+  which is the price of keeping one wire format instead of two that can drift. Cost
+  the writes with `eth_estimateGas` against a real resolver, never from SSTORE
+  arithmetic: ENS stores a dynamic string, so reasoning from fixed slots understated
+  it by more than a factor of two.
 - Hint filters annotate, never filter. A token list is curated and therefore
   incomplete, so dropping what is not on one hides real holdings of long-tail tokens.
   `known` rides alongside a portfolio row and is absent — not false — when no list is

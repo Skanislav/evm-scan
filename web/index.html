@@ -2196,6 +2196,8 @@ window.evmscanHints = {
   interopKey, interopSubkey, interop7930,
   requestIndexing, registry: () => REG, head: () => HEAD, indexedChain: () => INDEXED_CHAIN,
   weiToEth, ethToWei,
+  namehash: async (name) => namehash(await import(VIEM_MODULE), normalizeName(name)),
+  normalizeName, rpc, nameRpc, viem: () => import(VIEM_MODULE),
   buildWatchlist, hexToBytes, bytesToB64url, b64urlToBytes,
   passkeyCreate, passkeySecret, walletSecret, passwordSecret,
   api, onChain, esc, short, chainRpc, lensBalances, resolveAccount,

@@ -873,6 +873,19 @@ function renderPreserve(account, holdings, indexed, hint) {
       they could already do gives away nothing.
       <br><code style="word-break:break-all">${H.esc(abbrev(hint.hex))}</code>
       <button class="linkbtn" id="preserve-copy">copy all ${H.esc(String(hint.m / 8))} bytes</button>
+    </p>
+    <div class="row" style="gap:10px; margin-top:10px; flex-wrap:wrap">
+      <input class="input" type="text" id="hint-name" style="flex:1 1 240px" spellcheck="false"
+             autocomplete="off" placeholder="your ENS name, to publish it there">
+      <button class="btn btn-secondary btn-sm" id="hint-publish">Publish to ENS</button>
+      <span class="hint" id="hint-status"></span>
+    </div>
+    <p class="hint" style="margin:8px 0 0; max-width:74ch">
+      Written as an <code>${H.esc(ENS_TEXT_KEY)}</code> text record on a name you own, on mainnet —
+      so any ENS client can read it and nothing here has to stay running for it to work. Measured
+      against a real resolver, that is about 244,000 gas: roughly $0.39 at the 0.6 gwei of the day
+      this was written, nearer $12 at a more ordinary 20. Occasional and deliberate; the copy in
+      this browser is the one that gets used every visit.
     </p>` : '';
 
   if (!rows.length) {
@@ -942,6 +955,24 @@ function renderPreserve(account, holdings, indexed, hint) {
 const abbrev = (hex) => hex.length <= 42 ? hex : `${hex.slice(0, 22)}…${hex.slice(-18)}`;
 
 function wireCopy(hint) {
+  const pub = $('hint-publish');
+  if (pub && hint) {
+    pub.addEventListener('click', async () => {
+      const status = $('hint-status');
+      const name = ($('hint-name').value || '').trim();
+      if (!name) { status.textContent = 'type the name first'; return; }
+      pub.disabled = true;
+      try {
+        const { tx } = await publishToENS(name, hint, status);
+        status.innerHTML = `published · <code>${H.esc(String(tx).slice(0, 12))}…</code>`;
+      } catch (e) {
+        status.textContent = e.message || String(e);
+      } finally {
+        pub.disabled = false;
+      }
+    });
+  }
+
   const btn = $('preserve-copy');
   if (!btn || !hint) return;
   btn.addEventListener('click', async () => {
@@ -978,4 +1009,156 @@ async function keep(btn, minWei) {
     btn.textContent = label;
     throw e;
   }
+}
+
+
+// ---------------------------------------------------------------------------
+// Publishing the hint to ENS
+//
+// The hint is the one artifact here that belongs to the reader rather than to the
+// deployment, so it goes somewhere the reader owns: a text record on their own name.
+// No new contract, no registry entry, nothing for this project to keep running — any
+// ENS client can read it, and if this daemon disappears the hint does not.
+//
+// What is written is the whole .xorf, base64url-encoded, not the bare bitmap. A
+// bitmap alone is unreadable: the probe count k depends on how many keys went in and
+// a reader has no way to recover it, so something has to carry it. The .xorf header
+// already does, and reusing it keeps one wire format with one pair of implementations
+// and one set of fixtures rather than a second encoding that can drift.
+//
+// base64url rather than hex because an ENS text record is a string, and the string is
+// what gets stored: 175 bytes is 352 hex characters against 234 base64url ones, and
+// measured against the real resolver that is 313,941 gas versus 244,199. Same bytes,
+// 22% less money.
+//
+// The costs, measured with eth_estimateGas against a real ENS resolver as the actual
+// owner of a name rather than derived from SSTORE arithmetic, which got it wrong by
+// more than a factor of two:
+//
+//	 payload                  base64  estimated gas
+//	  32 B                        43        104,369
+//	  64 B                        86        127,552
+//	 128 B bitmap alone          171        197,929
+//	 175 B whole .xorf           234        244,199
+//
+// So the self-describing header costs about 46,000 gas over a bare bitmap. At 0.62
+// gwei that is seven cents and at 20 gwei it is $2.40 — worth knowing, and worth
+// revisiting with a compact two-byte header if this ever gets used in anger.
+//
+// At 244,199 gas: $0.39 at today's 0.62 gwei, about $12.70 at a more ordinary 20.
+// That makes publishing an occasional, deliberate act rather than something to do on
+// every lookup — which is why it is a button, and why the localStorage copy is the
+// one that gets used every visit.
+// ---------------------------------------------------------------------------
+
+// The record key, matching the evmscan.* convention HintResolver already uses for
+// evmscan.contracts and evmscan.uri.
+const ENS_TEXT_KEY = 'evmscan.hint';
+
+// The ENS registry, at the same address on every chain that has one.
+const ENS_REGISTRY = '0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e';
+const SEL_RESOLVER = '0x0178b8bf'; // resolver(bytes32)
+const SEL_OWNER = '0x02571be3';    // owner(bytes32)
+const SEL_SET_TEXT = '0x10f13a8c'; // setText(bytes32,string,string)
+
+const hex32 = (h) => h.replace(/^0x/, '').padStart(64, '0');
+
+// abi-encode setText(bytes32 node, string key, string value) by hand, the way every
+// other call site in this repo does. Two dynamic arguments is not a dependency's
+// worth of work, and viem is already loaded for keccak anyway.
+export function encodeSetText(node, key, value) {
+  const enc = new TextEncoder();
+  const parts = [enc.encode(key), enc.encode(value)];
+  // head: node, offset to key, offset to value
+  const headWords = 3;
+  let offset = headWords * 32;
+  let head = hex32(node);
+  const tails = [];
+  for (const b of parts) {
+    head += hex32(offset.toString(16));
+    const padded = new Uint8Array(Math.ceil(b.length / 32) * 32);
+    padded.set(b);
+    tails.push(hex32(b.length.toString(16)) + [...padded].map(x => x.toString(16).padStart(2, '0')).join(''));
+    offset += 32 + padded.length;
+  }
+  return SEL_SET_TEXT + head + tails.join('');
+}
+
+async function ensCall(to, data) {
+  return await H.rpc(H.nameRpc(), 'eth_call', [{ to, data }, 'latest']);
+}
+
+// Who can write this name's records, and where they live. Read before asking for a
+// signature, because "the transaction reverted" is a worse answer than "that name
+// has no resolver" when the second one is knowable for free.
+async function ensTarget(name) {
+  const node = await H.namehash(name);
+  const resolver = '0x' + (await ensCall(ENS_REGISTRY, SEL_RESOLVER + hex32(node))).slice(-40);
+  if (/^0x0{40}$/.test(resolver)) {
+    throw new Error(`${H.normalizeName(name)} has no resolver set, so it can hold no records`);
+  }
+  const owner = '0x' + (await ensCall(ENS_REGISTRY, SEL_OWNER + hex32(node))).slice(-40);
+  return { node, resolver, owner };
+}
+
+async function publishToENS(name, hint, status) {
+  if (!window.ethereum) throw new Error('no injected wallet found — this needs MetaMask or another EIP-1193 wallet');
+
+  status.textContent = 'reading the name…';
+  const { node, resolver, owner } = await ensTarget(name);
+
+  const [from] = await window.ethereum.request({ method: 'eth_requestAccounts' });
+  // A name can be owned by a wrapper or a safe, so a mismatch is a warning and not a
+  // refusal — but it is the overwhelmingly likely reason a setText reverts, and
+  // saying so first costs nothing.
+  if (owner && from && owner.toLowerCase() !== from.toLowerCase() && !/^0x0{40}$/.test(owner)) {
+    status.innerHTML = `<strong>Heads up:</strong> ${H.esc(H.normalizeName(name))} is owned by
+      ${H.esc(H.short(owner))} and your wallet is ${H.esc(H.short(from))}. Sending anyway — if that
+      owner is a wrapper or a multisig this still works, otherwise it will revert.`;
+  }
+
+  // ENS lives on mainnet. The page may be looking at any chain, so move the wallet
+  // rather than sending a record write to whatever it happened to be on.
+  const want = '0x1';
+  if (await window.ethereum.request({ method: 'eth_chainId' }) !== want) {
+    status.textContent = 'switch your wallet to Ethereum mainnet…';
+    await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: want }] });
+  }
+
+  const value = H.bytesToB64url(hint.bytes);
+  const data = encodeSetText(node, ENS_TEXT_KEY, value);
+
+  status.textContent = 'confirm in your wallet…';
+  const tx = await window.ethereum.request({
+    method: 'eth_sendTransaction',
+    params: [{ from, to: resolver, data }],
+  });
+  return { tx, resolver, node, value };
+}
+
+// Read one back. Any ENS client can do this — that is the point of putting it here
+// rather than in a contract of ours — so this is the same call a third party makes.
+export async function readENSHint(name) {
+  const { resolver } = await ensTarget(name);
+  const node = await H.namehash(name);
+  const enc = new TextEncoder().encode(ENS_TEXT_KEY);
+  const padded = new Uint8Array(Math.ceil(enc.length / 32) * 32);
+  padded.set(enc);
+  const data = '0x59d1d43c' // text(bytes32,string)
+    + hex32(node) + hex32((64).toString(16))
+    + hex32(enc.length.toString(16))
+    + [...padded].map(x => x.toString(16).padStart(2, '0')).join('');
+  const out = await ensCall(resolver, data);
+  // abi-decoded string: offset, length, bytes.
+  const body = out.slice(2);
+  const len = parseInt(body.slice(64, 128), 16);
+  if (!len) return null;
+  const hex = body.slice(128, 128 + len * 2);
+  const s = new TextDecoder().decode(Uint8Array.from(hex.match(/../g).map(h => parseInt(h, 16))));
+  // base64url is what publishToENS writes; accept 0x-hex too, because it costs three
+  // lines and a record written by some other tool should not be unreadable here.
+  const bytes = s.startsWith('0x')
+    ? Uint8Array.from(s.slice(2).match(/../g).map(h => parseInt(h, 16)))
+    : H.b64urlToBytes(s);
+  return { bytes, filter: H.decode(bytes.buffer) };
 }
