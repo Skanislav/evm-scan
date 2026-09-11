@@ -399,8 +399,11 @@ epoch that made verifying it in practice too expensive to bother with.
 | `GET` | `/v1/assets` | Registered hints and their scan progress. |
 | `POST` | `/v1/assets` | Register a hint locally (gated by `api.allow_registration`). |
 | `GET` | `/v1/assets/{addr}/accounts` | Accounts known to have touched a contract. |
-| `GET` | `/v1/candidates` | Contracts discovered at the head, ranked by activity. |
+| `GET` | `/v1/accounts?q=` | Accounts in the index, busiest first. `q` is a hex address prefix. |
+| `GET` | `/v1/candidates` | Contracts discovered at the head, ranked by activity. `include_spam=true` shows the ones ruled out. |
 | `POST` | `/v1/candidates/{addr}/promote` | Commit a discovered contract to being indexed. |
+| `POST` | `/v1/candidates/{addr}/spam` · `/unspam` | Rule a contract not worth indexing, and take it back. A spam mark drops it out of the promotable ranking and out of auto-promote. |
+| `GET` | `/v1/decisions` | The verdicts passed on discovered contracts, newest first. |
 | `GET` | `/v1/epochs` · `POST /v1/epochs` | List / build + publish commitments (`force` to repost an unchanged root). |
 | `GET` | `/v1/epochs/{id}/proof?account=` | Inclusion proof for `verifyInclusion`. |
 | `GET` | `/ccip/{sender}/{data}.json` · `POST /ccip` | ERC-3668 gateway for `HintRegistry.contractsOf`: leaf and proof for the latest finalized epoch, verified on-chain by the callback. |

@@ -145,7 +145,22 @@ shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module 
   the response codec and an ERC-3668 client shared with `cmd/evmscan-verify -ccip`. The
   callback only accepts the latest finalized epoch, so the gateway reads that id from the
   registry, not from the local table.
-  Routes use Go 1.22 method-prefixed patterns on `http.ServeMux`. Static UI is `web/index.html`.
+  Routes use Go 1.22 method-prefixed patterns on `http.ServeMux`. `authorized` guards
+  everything that is not a read, minus one allowlisted exception (`POST /ccip`, which any
+  ERC-3668 resolver has to reach) — an inverted rule, so a new mutating route is guarded
+  before anyone remembers to add it, and `auth_test.go` is what holds the exception open.
+- A candidate carries at most one live verdict. `spam_at` drops it out of
+  `PromotableCandidates` — the only query auto-promote reads, so that one clause is the
+  whole rule — and promotion clears the mark rather than sitting beside it, which is what
+  lets `/v1/decisions` be a single ordered scan over `COALESCE(promoted_at, spam_at)`.
+  Discovery keeps counting a spam contract; a verdict is about what to index, not what to
+  watch.
+- `web/` is the UI, served by `http.FileServer` from `WebDir` — no build step, no bundler.
+  `index.html` is one page of five tabs (wallet, overview, triage, accounts, graph);
+  `graph.js` is the WebGL graph, imported the first time that tab is opened because
+  three.js is most of a megabyte and most visits never ask for a picture. Token metadata is
+  attacker-controlled text from the chain, so everything interpolated into markup goes
+  through `esc()`.
 - `mirror/` is a separate TypeScript package (`make test-mirror`, own `node_modules`, not
   in the Go build): the commitment encoding ported for clients, plus a local-first mirror
   that keeps the committed rows in the client's SQLite via Evolu and rebuilds the keccak
