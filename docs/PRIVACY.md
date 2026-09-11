@@ -51,11 +51,26 @@ Two numbers, and only one of them is measured.
 **7,750 bytes** — 1.33 bytes per token, built from the live list and byte-identical
 across two independent fetches.
 
-**Index filter, estimated:** `docs/RECOVERY.md` records epoch 1 as 540,059 accounts;
-at roughly three assets each that is ~1.6M pairs, or about 2 MB. **This has not been
-built against a real index yet** — the figure is arithmetic, not a measurement, and
-the comparison against `GET /v1/epochs/{id}/snapshot` ("tens of megabytes on a real
-chain") should be treated as a design expectation until someone runs it.
+**Index filter, measured** against the hosted mainnet index, epoch 7 (on-chain epoch
+4), built from its published snapshot:
+
+| | |
+| --- | --- |
+| accounts | 773,948 |
+| (account, contract) pairs | 857,417 |
+| filter | **974,918 bytes** — 1.14 bytes per key |
+| the snapshot it was built from | 50,102,272 bytes gzipped |
+| ratio | **51× smaller** |
+
+That ratio is the argument. `GET /v1/epochs/{id}/snapshot` is already a private
+client-side path — download the whole table, match locally, check both roots against
+the chain — and it costs 50 MB. The filter answers the one question a portfolio read
+actually asks for under a megabyte, and a reader can rebuild it from the same
+snapshot to check that the served one matches:
+
+```bash
+evmscan-hint build -index -snapshot https://<host>/v1/epochs/7/snapshot -o index.xorf
+```
 
 **Why this is safe:** nothing is written and nothing is trusted. A filter says where
 to look; the live read through the lens says what is there. A stale or lying filter
@@ -118,7 +133,7 @@ where a reader would otherwise assume a protection they do not have:
 |---|---|
 | filter format, both structures | shipped, cross-verified Go ↔ JS |
 | token filters from config, served and cached | shipped |
-| `index-{chain}.xorf` | wired and unit-tested; **never built against a real index** |
+| `index-{chain}.xorf` | shipped; built and cross-checked against the hosted mainnet index |
 | epoch-bound digest (`epochs.filter_keccak`, `Publisher.Build`) | shipped |
 | `GET /v1/epochs/{id}/manifest` | shipped |
 | `evmscan-verify -filter` | shipped; needs a node, a registry and a finalized epoch to say anything |

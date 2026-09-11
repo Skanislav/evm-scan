@@ -444,7 +444,7 @@ internal/ens/        on.eth chain names for the daemon; the hint-name scheme and
 cmd/evmscand/        the daemon
 cmd/evmscan-demo/    devnet bootstrapper
 cmd/evmscan-verify/  independent proof checker
-cmd/evmscan-hint/    builds and inspects .xorf hint filters
+cmd/evmscan-hint/    builds and inspects .xorf hint filters (from a token list, a database, or a published snapshot)
 cmd/evmscan-deploy/  registry deployer: fixes the adjudication mode, prints it, seeds requests
 cmd/evmscan-ens/     deploys HintResolver and attaches it under an ENSv2 name
 deploy/              container entrypoint and hosted config (Railway)
