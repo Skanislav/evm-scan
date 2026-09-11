@@ -752,6 +752,10 @@
           </div>
         </div>
 
+        <!-- Its own line, outside the hint panel: a list that will not load is the
+             first thing the private lookup and the wallet both depend on, and an
+             error inside a closed panel is an error nobody sees. -->
+        <div class="err" id="assets-err" hidden style="margin:0 0 10px"></div>
         <div class="scroll">
           <div class="tablehead cols-assets">
             <span>asset</span><span class="num">logs</span><span>backfill to floor</span><span>source</span>
@@ -1623,6 +1627,7 @@ function priceSource(p) {
 async function loadAssets() {
   try {
     const { assets = [] } = await api(onChain('/v1/assets'));
+    showErr('assets-err', null);
     ASSETS = assets;
     $('asset-count').textContent = num(assets.length);
     const floor = STATUS ? STATUS.history_floor : 0;
@@ -1654,7 +1659,9 @@ async function loadAssets() {
     }).join('')
       : '<div class="empty" style="padding:14px 0">No assets indexed yet.</div>';
     renderClaims();
-  } catch (e) { showErr('asset-err', e); }
+  } catch (e) {
+    showErr('assets-err', new Error(`the asset list did not load (${e.message || e}); the wallet and the private lookup need it, and the next poll retries`));
+  }
 }
 
 async function register() {
