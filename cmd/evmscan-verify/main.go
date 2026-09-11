@@ -145,7 +145,8 @@ func runENS(nodeURL, name, urHex, key, registryAddr, gatewayURL string) error {
 	}
 	fmt.Printf("name       %s\n", name)
 	fmt.Printf("namehash   %s\n", node0.Hex())
-	fmt.Printf("resolver   %s (%d label(s) up)\n", resolver.Hex(), offset)
+	at, up := ens.NameAtOffset(name, offset)
+	fmt.Printf("resolver   %s (on %s, %d label(s) up)\n", resolver.Hex(), at, up)
 
 	art, err := contracts.Load("HintResolver")
 	if err != nil {

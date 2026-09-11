@@ -80,6 +80,22 @@ func HintName(account common.Address, parent string, chainID uint64, explicitCha
 	return label + ".hints." + parent
 }
 
+// NameAtOffset is the name a Universal Resolver's findResolver answered for: offset
+// is a byte position in the DNS-encoded name, and the resolver it returned belongs
+// to the name that starts there. It returns that suffix and how many labels were
+// skipped to reach it (0 = an exact match, more = a wildcard match).
+func NameAtOffset(normalized string, offset uint64) (suffix string, skipped int) {
+	labels := Labels(normalized)
+	var pos uint64
+	for i, l := range labels {
+		if pos >= offset {
+			return strings.Join(labels[i:], "."), i
+		}
+		pos += 1 + uint64(len(l))
+	}
+	return "", len(labels)
+}
+
 // ParseHintName is the inverse of HintName: the account and optional chain id in a
 // name served by HintResolver. ok is false when the first label is not an address.
 func ParseHintName(name string) (account common.Address, chainID uint64, hasChain bool, ok bool) {

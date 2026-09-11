@@ -74,6 +74,23 @@ func TestHintNameRoundTrip(t *testing.T) {
 	}
 }
 
+func TestNameAtOffset(t *testing.T) {
+	name := "d8da6bf26964af9d7eed9e03e53415d37aa96045.hints.evm-scan.eth"
+	if s, n := NameAtOffset(name, 0); s != name || n != 0 {
+		t.Fatalf("offset 0 = %q %d", s, n)
+	}
+	// 1 length byte + 40 hex bytes: the resolver sits on hints.evm-scan.eth.
+	if s, n := NameAtOffset(name, 41); s != "hints.evm-scan.eth" || n != 1 {
+		t.Fatalf("offset 41 = %q %d", s, n)
+	}
+	if s, n := NameAtOffset(name, 47); s != "evm-scan.eth" || n != 2 {
+		t.Fatalf("offset 47 = %q %d", s, n)
+	}
+	if s, n := NameAtOffset(name, 999); s != "" || n != 4 {
+		t.Fatalf("offset past the end = %q %d", s, n)
+	}
+}
+
 func TestSplitContracts(t *testing.T) {
 	got, err := SplitContracts(" 0x000000000000000000000000000000000000dEaD, 0x0000000000000000000000000000000000000001 ")
 	if err != nil || len(got) != 2 || got[0] != common.HexToAddress("0xdead") {

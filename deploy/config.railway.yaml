@@ -25,6 +25,10 @@ registry:
   # bound on how often gas is spent, not a guarantee that it is.
   auto_publish_interval: 30m
   commitment_uri: "https://evm-scan-sepolia.up.railway.app/v1/epochs/{id}/snapshot"
+  # HintResolver is attached under hints.evm-scan.eth on Sepolia's ENSv2 (docs/ENS.md),
+  # so account responses carry <hex>.hints.evm-scan.eth. Formatting only; nothing
+  # resolves through it here.
+  ens_parent: "evm-scan.eth"
   publisher:
     mode: eoa
     submit_timeout: 3m

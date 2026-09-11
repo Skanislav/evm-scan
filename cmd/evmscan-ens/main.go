@@ -454,8 +454,10 @@ func check(ctx context.Context, args []string) error {
 	if resolver == (common.Address{}) {
 		return errors.New("no resolver on the path; is the label registered with a resolver in the name's subregistry?")
 	}
-	fmt.Printf("resolver   %s (found %d label(s) up: %s)\n", resolver.Hex(), offset,
-		map[bool]string{true: "wildcard, as intended", false: "exact"}[offset > 0])
+	norm, _ := ens.Normalize(*name) // FindResolver already accepted it
+	at, up := ens.NameAtOffset(norm, offset)
+	fmt.Printf("resolver   %s (on %s, %d label(s) up: %s)\n", resolver.Hex(), at, up,
+		map[bool]string{true: "wildcard, as intended", false: "exact"}[up > 0])
 	if err := s.mustHaveCode(ctx, "resolver", resolver); err != nil {
 		return err
 	}
