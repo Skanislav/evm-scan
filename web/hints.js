@@ -322,3 +322,352 @@ function paint(out, rows) {
 }
 
 render().catch(fail);
+
+// ---------------------------------------------------------------------------
+// The private watchlist
+//
+// The panel above reads a filter somebody else published. This writes one, and the
+// inversion is the whole point: blind the keys under a secret only the reader holds
+// and the file becomes testable by them and opaque to everyone else, including
+// whoever stores it. A filter can be tested but never enumerated, so the dictionary
+// attack *is* the read path — you walk a public token list and test each entry, and
+// anyone else holding the same file and the same list learns nothing from either.
+//
+// docs/PRIVACY.md has the threat model. Three things from it belong on screen rather
+// than in a document, because they are choices the reader lives with:
+//
+//   - A passkey is the strongest secret and the least portable. WebAuthn binds a
+//     credential to an origin, so a watchlist blinded on a hosted page cannot be
+//     opened on localhost or on the reader's own daemon — and for a project whose
+//     premise is self-hosting, that has to be said *before* they build a file they
+//     cannot reopen, not after.
+//   - A published blinded filter is an offline oracle against its own secret: guess,
+//     derive, test a thousand popular tokens, and a hit rate far above 0.4% confirms
+//     the guess. Against 32 bytes of authenticator entropy that is hopeless; against
+//     a human password it is only as hard as the KDF, and WebCrypto's best here is
+//     PBKDF2. So the password option says it is the weak one at the moment of choice.
+//   - Losing the secret loses the read, and there is no recovery path, because a
+//     recoverable blinding is not a blinding.
+//
+// The file carries a descriptor saying how to re-derive its secret — which provider,
+// which credential, which salt — but never the secret. That is what lets the reader
+// open a file months later without remembering anything but the passkey tap: the
+// file knows what to ask for.
+// ---------------------------------------------------------------------------
+
+const KIND_TOKEN = 1;
+const SIGN_MESSAGE = 'evmscan/xorf/v1';
+const PBKDF2_ITERATIONS = 600000;
+
+const PROVIDERS = {
+  passkey: {
+    label: 'A passkey',
+    strength: 'strongest',
+    note: `32 bytes of authenticator entropy — nobody guesses that. The catch is portability:
+      WebAuthn binds a credential to this origin, so a list blinded here cannot be opened on
+      your own daemon or on localhost.`,
+  },
+  wallet: {
+    label: 'Your wallet',
+    strength: 'portable',
+    note: `A fixed message, signed deterministically — Ledger and Trezor both use RFC 6979, so
+      the same message gives the same bytes forever. Readable on any deployment. A BIP-39
+      passphrase gives a different address and therefore a different list, for free.`,
+  },
+  password: {
+    label: 'A password',
+    strength: 'weakest — compatibility',
+    note: `Stretched with PBKDF2 at 600,000 iterations, because WebCrypto has no Argon2id and
+      this page ships no vendored code. A published file is an offline oracle against its own
+      password, and that is markedly weaker against a GPU than the two above. Use a passkey
+      unless you need this.`,
+  },
+};
+
+const watchPanel = () => $('watch-panel');
+
+export function openWatchlist() {
+  const holdings = (window.evmscanHoldings ? window.evmscanHoldings() : []) || [];
+  // Only fungible contracts. A token list is a list of fungible tokens and a KindToken
+  // filter is keyed by one address, so NFT rows would go in and never be asked about.
+  const tokens = holdings
+    .filter(h => h.address && (!h.standard || h.standard === 'erc20'))
+    .map(h => ({ address: h.address, symbol: h.symbol || '' }));
+
+  watchPanel().innerHTML = `
+    <p class="prose" style="margin:0 0 14px">
+      A watchlist is a filter over contracts you care about, with every key blinded under a secret
+      only you hold. It can be <em>tested</em> but never <em>read out</em>, so the file is safe
+      somewhere that has no business knowing what is in it — this daemon, a gist, IPFS. You read it
+      back by walking a public token list and testing each entry; anyone else holds the same file,
+      walks the same list, and learns nothing.
+    </p>
+    <div class="row" style="gap:10px; margin-bottom:16px; flex-wrap:wrap">
+      <button class="btn btn-secondary btn-sm" id="watch-tab-build">Build one</button>
+      <button class="btn btn-secondary btn-sm" id="watch-tab-open">Open one</button>
+    </div>
+    <div id="watch-build"></div>
+    <div id="watch-read" hidden></div>
+    <div class="err" id="watch-err" hidden></div>`;
+
+  $('watch-tab-build').addEventListener('click', () => {
+    $('watch-build').hidden = false; $('watch-read').hidden = true;
+  });
+  $('watch-tab-open').addEventListener('click', () => {
+    $('watch-build').hidden = true; $('watch-read').hidden = false;
+  });
+
+  renderBuild(tokens);
+  renderRead();
+}
+
+function watchErr(e) {
+  const el = $('watch-err');
+  el.hidden = false;
+  el.textContent = e.message || String(e);
+}
+
+function providerPicker(idPrefix) {
+  return Object.entries(PROVIDERS).map(([key, p], i) => `
+    <label style="display:block; margin:10px 0; cursor:pointer">
+      <input type="radio" name="${idPrefix}-secret" value="${key}"${i === 0 ? ' checked' : ''}>
+      <strong>${H.esc(p.label)}</strong>
+      <span class="kicker" style="margin-left:8px">${H.esc(p.strength)}</span>
+      <div class="hint" style="margin:2px 0 0 22px; max-width:70ch">${p.note}</div>
+    </label>`).join('');
+}
+
+const pickedProvider = (idPrefix) =>
+  (document.querySelector(`input[name="${idPrefix}-secret"]:checked`) || {}).value || 'passkey';
+
+// ---------------------------------------------------------------------------
+// Building
+// ---------------------------------------------------------------------------
+
+function renderBuild(tokens) {
+  const el = $('watch-build');
+  if (!tokens.length) {
+    el.innerHTML = `<p class="empty">Look up an account first — its holdings are what a watchlist
+      is built from.</p>`;
+    return;
+  }
+  el.innerHTML = `
+    <div class="kicker">${H.esc(String(tokens.length))} contract${tokens.length === 1 ? '' : 's'} to save</div>
+    <p class="hint" style="margin:6px 0 4px">
+      ${tokens.map(t => H.esc(t.symbol || H.short(t.address))).join(' · ')}
+    </p>
+    <p class="hint" style="margin:10px 0 0; max-width:74ch">
+      The file hides <em>which</em> contracts, never <em>how many</em>: the count is in the header
+      and the length follows from it. Padding to a bucket would fix that and is not built.
+    </p>
+    <div style="margin-top:14px">${providerPicker('build')}</div>
+    <div class="row" id="watch-pw-row" hidden style="margin:8px 0">
+      <input class="input" type="password" id="watch-pw" style="flex:1 1 280px"
+             autocomplete="new-password" placeholder="a password you will not lose">
+    </div>
+    <div class="row" style="gap:10px; margin-top:12px; flex-wrap:wrap">
+      <button class="btn btn-primary btn-sm" id="watch-build-go">Build and download</button>
+      <span class="hint" id="watch-build-status"></span>
+    </div>
+    <p class="hint" style="margin-top:12px; max-width:74ch">
+      Lose the secret and the list is unreadable. There is no recovery path and there should not be
+      one — a blinding you can be talked out of is not a blinding.
+    </p>`;
+
+  for (const r of el.querySelectorAll('input[name="build-secret"]')) {
+    r.addEventListener('change', () => { $('watch-pw-row').hidden = pickedProvider('build') !== 'password'; });
+  }
+  $('watch-build-go').addEventListener('click', () => build(tokens).catch(watchErr));
+}
+
+// Derive a secret and, with it, the descriptor that says how to derive it again. The
+// two are produced together on purpose: a file whose descriptor disagrees with how it
+// was actually built is one nobody can open, and the failure surfaces months later.
+async function deriveForBuild(kind, status) {
+  if (kind === 'passkey') {
+    status.textContent = 'registering a passkey…';
+    const credId = await H.passkeyCreate('evm-scan watchlist');
+    status.textContent = 'tap the passkey again to derive the key…';
+    const secret = await H.passkeySecret(credId);
+    return { secret, desc: { kdf: 'webauthn-prf', cred_id: credId, input: H.bytesToB64url(new TextEncoder().encode(SIGN_MESSAGE)) } };
+  }
+  if (kind === 'wallet') {
+    status.textContent = 'sign the message in your wallet…';
+    const { secret, account } = await H.walletSecret();
+    return { secret, desc: { kdf: 'eip191', account, message: SIGN_MESSAGE } };
+  }
+  const pw = $('watch-pw').value;
+  if (!pw) throw new Error('type a password first');
+  status.textContent = 'stretching the password…';
+  const { secret, kdfSalt } = await H.passwordSecret(pw);
+  return { secret, desc: { kdf: 'pbkdf2', kdf_salt: kdfSalt, iterations: PBKDF2_ITERATIONS } };
+}
+
+async function build(tokens) {
+  $('watch-err').hidden = true;
+  const status = $('watch-build-status');
+  const btn = $('watch-build-go');
+  btn.disabled = true;
+  try {
+    const { secret, desc } = await deriveForBuild(pickedProvider('build'), status);
+    const chainId = H.chainId();
+    status.textContent = 'building…';
+    const bytes = await H.buildWatchlist(tokens.map(t => t.address), chainId,
+      secret, { ...desc, chain_id: chainId, built_at: new Date().toISOString() });
+
+    // The download is the durable artifact. The secret is deliberately not: it lives
+    // for the life of the page and is re-derived by a tap or a signature next time.
+    const blob = new Blob([bytes], { type: 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `watchlist-${chainId}-${new Date().toISOString().slice(0, 10)}.xorf`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    status.innerHTML = `${H.esc(String(tokens.length))} contracts, ${H.esc(String(bytes.length))} bytes,
+      blinded under ${H.esc(desc.kdf)}. Saved.`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Reading one back
+// ---------------------------------------------------------------------------
+
+function renderRead() {
+  $('watch-read').innerHTML = `
+    <p class="prose" style="margin:0 0 12px">
+      Open a file you built earlier. It is tested against the token list this page already loads,
+      which is what reading a blinded filter means: the file never gives up its contents, so the
+      only way in is to ask it about addresses you can name.
+    </p>
+    <div class="row" style="gap:10px; flex-wrap:wrap">
+      <input type="file" id="watch-file" accept=".xorf,application/octet-stream" class="input" style="flex:1 1 280px">
+    </div>
+    <div id="watch-file-info" style="margin-top:14px"></div>`;
+  $('watch-file').addEventListener('change', (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (f) openFile(f).catch(watchErr);
+  });
+}
+
+async function openFile(file) {
+  $('watch-err').hidden = true;
+  const info = $('watch-file-info');
+  info.innerHTML = '<span class="empty">reading…</span>';
+
+  const buf = await file.arrayBuffer();
+  const f = H.decode(buf);
+  if (f.kind !== KIND_TOKEN) {
+    throw new Error(`that is a ${f.kind === 2 ? '(account, contract)' : `kind-${f.kind}`} filter, not a watchlist`);
+  }
+  // A file that is not blinded is readable by everyone who holds it. Say so rather
+  // than opening it quietly, because the whole reason to keep one of these anywhere
+  // is the belief that it is opaque.
+  const d = f.desc || {};
+  info.innerHTML = `
+    <div class="kicker">${H.esc(String(f.count))} contracts · chain ${H.esc(String(f.chainId))} ·
+      ${f.blinded ? H.esc(d.kdf || 'blinded') : 'NOT blinded'}${d.built_at ? ' · built ' + H.esc(String(d.built_at).slice(0, 10)) : ''}</div>
+    ${f.blinded ? '' : `<p class="hint" style="margin:6px 0 0">This file is not blinded — anyone
+      holding it can test it without a secret.</p>`}
+    <div style="margin-top:12px">${f.blinded ? providerPicker('read') : ''}</div>
+    <div class="row" id="watch-read-pw-row" hidden style="margin:8px 0">
+      <input class="input" type="password" id="watch-read-pw" style="flex:1 1 280px"
+             autocomplete="current-password" placeholder="the password it was built with">
+    </div>
+    <div class="row" style="gap:10px; margin-top:12px; flex-wrap:wrap">
+      <button class="btn btn-primary btn-sm" id="watch-read-go">Open it</button>
+      <span class="hint" id="watch-read-status"></span>
+    </div>
+    <div id="watch-read-out" style="margin-top:16px"></div>`;
+
+  // The descriptor says which provider built the file, so preselect it rather than
+  // making the reader remember. They can still override — a descriptor is a hint from
+  // the file, and the file is the thing whose honesty is in question.
+  const preset = { 'webauthn-prf': 'passkey', eip191: 'wallet', pbkdf2: 'password', argon2id: 'password' }[d.kdf];
+  if (preset) {
+    const r = document.querySelector(`input[name="read-secret"][value="${preset}"]`);
+    if (r) r.checked = true;
+  }
+  const syncPw = () => { $('watch-read-pw-row').hidden = !f.blinded || pickedProvider('read') !== 'password'; };
+  for (const r of info.querySelectorAll('input[name="read-secret"]')) r.addEventListener('change', syncPw);
+  syncPw();
+
+  $('watch-read-go').addEventListener('click', () => readBack(f, d).catch(watchErr));
+}
+
+// Re-derive using what the descriptor recorded. A passkey needs its credential id and
+// a PBKDF2 secret needs its salt, and neither is guessable from the file's keys — which
+// is why they travel in the header instead of in the reader's memory.
+async function deriveForRead(kind, d, status) {
+  if (kind === 'passkey') {
+    if (!d.cred_id) throw new Error('this file does not name a credential, so its passkey cannot be found');
+    status.textContent = 'tap the passkey…';
+    return await H.passkeySecret(d.cred_id);
+  }
+  if (kind === 'wallet') {
+    status.textContent = 'sign the message in your wallet…';
+    return (await H.walletSecret()).secret;
+  }
+  const pw = $('watch-read-pw').value;
+  if (!pw) throw new Error('type the password it was built with');
+  status.textContent = 'stretching the password…';
+  return (await H.passwordSecret(pw, d.kdf_salt)).secret;
+}
+
+async function readBack(f, d) {
+  const status = $('watch-read-status');
+  const out = $('watch-read-out');
+  const btn = $('watch-read-go');
+  btn.disabled = true;
+  try {
+    const secret = f.blinded ? await deriveForRead(pickedProvider('read'), d, status) : new Uint8Array(0);
+    const sub = await H.subkey(secret, f.chainId, f.kind);
+
+    // The candidate set. The public token list is the dictionary, and the reader's
+    // current holdings are added because a watchlist is usually built from them and a
+    // long-tail contract that no list carries would otherwise be invisible in its own
+    // file — the one failure that would make this feature look broken to the person
+    // it works for.
+    status.textContent = 'walking the token list…';
+    const candidates = new Map();
+    for (const h of (window.evmscanHoldings ? window.evmscanHoldings() : []) || []) {
+      if (h.address) candidates.set(h.address.toLowerCase(), { address: h.address, symbol: h.symbol || '', from: 'your holdings' });
+    }
+    try {
+      const list = await H.tokenList();
+      for (const t of (list.byChain.get(Number(f.chainId)) || [])) {
+        const k = t.address.toLowerCase();
+        if (!candidates.has(k)) candidates.set(k, { address: t.address, symbol: t.symbol || '', from: list.name });
+      }
+    } catch { /* no list reachable; holdings alone still answer for most files */ }
+
+    const found = [];
+    for (const c of candidates.values()) {
+      if (H.contains(f, await H.tokenKey(sub, c.address))) found.push(c);
+    }
+
+    status.textContent = '';
+    const missing = Number(f.count) - found.length;
+    out.innerHTML = `
+      <p class="prose" style="margin:0 0 6px">
+        <strong>${H.esc(String(found.length))}</strong> of the ${H.esc(String(f.count))} contracts in
+        this file turned up in ${H.esc(String(candidates.size))} addresses worth asking about.
+      </p>
+      ${found.length === 0 ? `<p class="hint">Nothing matched. Either this is the wrong secret — a
+        wrong one is indistinguishable from an empty file, by design — or the contracts in it are not
+        on any list this page can walk.</p>`
+        : missing > 0 ? `<p class="hint">The other ${H.esc(String(missing))} are in the file but were
+          never asked about: the dictionary is only as wide as the token list plus what is on screen.</p>`
+        : ''}
+      <div class="scroll" style="margin-top:10px">${found.map(c => `
+        <div class="tablerow" style="grid-template-columns: 1.6fr 2fr 1fr">
+          <span><strong>${H.esc(c.symbol || '—')}</strong></span>
+          <span class="addr">${H.esc(c.address)}</span>
+          <span class="hint num">${H.esc(c.from)}</span>
+        </div>`).join('')}</div>`;
+  } finally {
+    btn.disabled = false;
+  }
+}

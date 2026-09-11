@@ -408,6 +408,17 @@
       </div>
     </div>
 
+    <!-- A blinded filter over the reader's own set: testable by whoever holds the
+         secret, opaque to whoever stores the file. Offered here because the holdings
+         above are the natural thing to build one from. -->
+    <div id="watchlist" style="margin-top:40px">
+      <div style="display:flex; align-items:baseline; justify-content:space-between; gap:25px; flex-wrap:wrap">
+        <h3 style="font-size:26px; margin:0">Private watchlist</h3>
+        <button class="linkbtn" id="watch-open">keep this list somewhere that cannot read it</button>
+      </div>
+      <div id="watch-panel" hidden style="margin-top:14px"></div>
+    </div>
+
     <div class="row" style="margin-top:18px">
       <button class="linkbtn" id="spam-toggle" hidden></button>
       <span class="hint" id="spam-note"></span>
@@ -2082,7 +2093,7 @@ window.buildWatchlist = buildWatchlist;
 // half of them are const arrows and reading one from its own temporal dead zone
 // would throw at load with a message about the module, not about the ordering.
 window.evmscanHints = {
-  filter: hintFilter, manifest: hints,
+  filter: hintFilter, manifest: hints, decode: xorfDecode, tokenList,
   subkey: xorfSubkey, contains: xorfContains, pairKey, tokenKey,
   buildWatchlist, hexToBytes, bytesToB64url, b64urlToBytes,
   passkeyCreate, passkeySecret, walletSecret, passwordSecret,
@@ -3098,11 +3109,37 @@ $('private-open').addEventListener('click', () => {
     : 'hide the private lookup';
   if (p.hidden || hintsLoaded) return;
   hintsLoaded = true;
-  import('./hints.js').catch(e => {
+  loadHints().catch(e => {
     hintsLoaded = false;
     $('private-body').innerHTML = `<span class="err">could not load the private lookup: ${esc(e.message)}</span>`;
   });
 });
+
+// The watchlist builder is in the same module, for the same reason and behind the
+// same import — it needs the filter arithmetic, and a visit that never opens either
+// panel should pay for neither.
+let hintsModule = null;
+function loadHints() {
+  if (!hintsModule) hintsModule = import('./hints.js').catch(e => { hintsModule = null; throw e; });
+  return hintsModule;
+}
+$('watch-open').addEventListener('click', async () => {
+  const p = $('watch-panel');
+  p.hidden = !p.hidden;
+  $('watch-open').textContent = p.hidden
+    ? 'keep this list somewhere that cannot read it'
+    : 'hide the watchlist';
+  if (p.hidden) return;
+  p.innerHTML = '<span class="empty">loading…</span>';
+  try {
+    (await loadHints()).openWatchlist();
+  } catch (e) {
+    p.innerHTML = `<span class="err">could not load the watchlist builder: ${esc(e.message)}</span>`;
+  }
+});
+// The holdings the builder offers to save. Read at click time rather than captured,
+// because a reader looks up more than one account per visit.
+window.evmscanHoldings = () => HOLDINGS;
 $('account').addEventListener('keydown', e => { if (e.key === 'Enter') lookup(); });
 $('to-triage').addEventListener('click', () => show('triage'));
 $('spam-toggle').addEventListener('click', () => { SHOW_SPAM = !SHOW_SPAM; renderHoldings(); });

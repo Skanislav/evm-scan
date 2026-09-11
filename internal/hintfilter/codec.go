@@ -67,7 +67,14 @@ var ErrFormat = errors.New("hintfilter: malformed file")
 // what makes a blinded file self-describing: open one on a new device and it can
 // tell you which passkey to tap without telling anyone what is inside it.
 type SaltDesc struct {
-	// KDF is "webauthn-prf", "eip191" or "argon2id".
+	// KDF is "webauthn-prf", "eip191", "argon2id" or "pbkdf2".
+	//
+	// PBKDF2 is in this list because it is what the browser can actually do:
+	// WebCrypto has no Argon2id and the page vendors no WASM to supply one. It is
+	// markedly weaker against GPU attack, which is why the page says so where the
+	// reader chooses rather than here — but a descriptor that could not name the KDF
+	// its own builder used would make the file unopenable by the honest path while
+	// doing nothing to the attacker, who does not read descriptors.
 	KDF string `json:"kdf"`
 	// CredID and Input are the WebAuthn credential and PRF input, base64url.
 	CredID string `json:"cred_id,omitempty"`
@@ -88,6 +95,10 @@ type SaltDesc struct {
 	T       uint32 `json:"t,omitempty"`
 	P       uint8  `json:"p,omitempty"`
 	KDFSalt string `json:"kdf_salt,omitempty"`
+	// Iterations is PBKDF2's work factor, which Argon2's three parameters have no
+	// place to hold. It is recorded rather than assumed so that raising the factor
+	// later does not lock anyone out of a file built before the change.
+	Iterations uint32 `json:"iterations,omitempty"`
 }
 
 // Encode writes the filter in the wire format.
