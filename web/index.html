@@ -2231,8 +2231,16 @@ async function resolveAccount(input) {
 // points back. `no record` — nothing claimed. `failed` — a claim the forward record
 // contradicts, so the address stands for itself. `unavailable` — the endpoint could
 // not say, which is not the same as an absent name.
+// One key for the writer and every reader. A reverse name depends on which chain is
+// being asked, through which endpoint, and which mainnet library endpoint stood in,
+// so all of that is in the key; the table, the counter and the rail look it up through
+// the same function or they look up nothing.
+function reverseKey(addr) {
+  return `${activeChainID()}|${namesRpc()}|${nameRpc()}|${addr.toLowerCase()}`;
+}
+
 async function reverseName(addr) {
-  const key = `${activeChainID()}|${namesRpc()}|${nameRpc()}|${addr.toLowerCase()}`;
+  const key = reverseKey(addr);
   if (reverseCache.has(key)) return reverseCache.get(key);
   let out = null;
 
@@ -2534,7 +2542,7 @@ const ENS_SUB = {
 function renderAccounts() {
   $('accounts-more').hidden = !ACCT_MORE;
   $('accounts').innerHTML = ACCOUNTS.length ? ACCOUNTS.map(a => {
-    const rev = reverseCache.get(`${nameRpc()}|${a.account.toLowerCase()}`);
+    const rev = reverseCache.get(reverseKey(a.account));
     const state = rev ? rev.state : 'resolving';
     const named = state === 'cached';
     const cls = { cached: 'v-approved', failed: 'v-spam' }[state] || 'v-none';
@@ -2556,7 +2564,7 @@ function renderAccounts() {
     el.addEventListener('click', () => selectAccount(el.dataset.account)));
 
   const named = ACCOUNTS.filter(a => {
-    const r = reverseCache.get(`${nameRpc()}|${a.account.toLowerCase()}`);
+    const r = reverseCache.get(reverseKey(a.account));
     return r && r.state === 'cached';
   }).length;
   $('ens-line').textContent = ACCOUNTS.length ? `${named} named of ${ACCOUNTS.length} shown` : '';
@@ -2571,7 +2579,7 @@ async function resolveVisibleNames() {
   resolving = true;
   try {
     for (const a of ACCOUNTS.slice(0, 25)) {
-      if (reverseCache.has(`${nameRpc()}|${a.account.toLowerCase()}`)) continue;
+      if (reverseCache.has(reverseKey(a.account))) continue;
       await reverseName(a.account);
       renderAccounts();
       if (a.account === ACCT_SELECTED) renderAccountRail();
@@ -2597,7 +2605,7 @@ async function selectAccount(addr) {
 
 function renderAccountRail() {
   if (!ACCT_SELECTED) return;
-  const rev = reverseCache.get(`${nameRpc()}|${ACCT_SELECTED.toLowerCase()}`);
+  const rev = reverseCache.get(reverseKey(ACCT_SELECTED));
   $('acct-name').textContent = (rev && rev.state === 'cached') ? rev.name : short(ACCT_SELECTED, 8);
   $('acct-addr').textContent = ACCT_SELECTED;
   $('acct-record').textContent = {
