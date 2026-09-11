@@ -496,6 +496,11 @@ type epochJSON struct {
 	// consumer of a proposed commitment can see that it is not final yet.
 	OnchainStatus     string `json:"onchain_status,omitempty"`
 	ChallengeDeadline uint64 `json:"challenge_deadline,omitempty"`
+	// AssertionID is the oracle assertion backing the commitment; present only
+	// on an oracle-mode registry. Challenger is who bonded a challenge, when one
+	// was raised at the registry rather than directly at the oracle.
+	AssertionID string `json:"assertion_id,omitempty"`
+	Challenger  string `json:"challenger,omitempty"`
 	// Coverage lists the per-asset ranges behind CoverageRoot. Only on GET /v1/epochs/{id}.
 	Coverage []coverageJSON `json:"coverage,omitempty"`
 }
@@ -538,6 +543,12 @@ func (s *Server) withOnchain(ctx context.Context, v epochJSON) epochJSON {
 	if e, err := s.d.Registry.GetEpoch(ctx, *v.OnchainID); err == nil {
 		v.OnchainStatus = e.Status.String()
 		v.ChallengeDeadline = e.ChallengeDeadline
+		if e.AssertionID != (common.Hash{}) {
+			v.AssertionID = e.AssertionID.Hex()
+		}
+		if e.Challenger != (common.Address{}) {
+			v.Challenger = e.Challenger.Hex()
+		}
 	}
 	return v
 }

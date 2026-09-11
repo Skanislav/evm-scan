@@ -21,6 +21,10 @@ func TestAuthorizedGuardsOnlySpendingEndpoints(t *testing.T) {
 		// Resolving a name costs one eth_call and reports what anybody could read
 		// off mainnet themselves. Gating it would only make the UI worse.
 		{http.MethodGet, "/v1/chains/resolve"},
+		// The page probes whether an epoch's snapshot is still here with a HEAD, and
+		// the snapshot exists to be fetched by strangers (docs/RECOVERY.md).
+		{http.MethodGet, "/v1/epochs/1/snapshot"},
+		{http.MethodHead, "/v1/epochs/1/snapshot"},
 		// The gateway is the whole point of the index being public — and since the
 		// guard is now "everything that is not a read, except this one", this pair
 		// of assertions is the thing keeping it reachable.

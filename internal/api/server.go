@@ -63,9 +63,13 @@ type Deps struct {
 	// ENSParent is the name a HintResolver serves the index under (docs/ENS.md).
 	// Set, it lets account responses carry the account's hint name; the daemon
 	// never resolves anything through it.
-	ENSParent         string
-	Registry          *hintreg.Client
-	RegistryChainID   uint64
+	ENSParent       string
+	Registry        *hintreg.Client
+	RegistryChainID uint64
+	// RegistryMode is how the registry settles disputes, read once at startup by
+	// cmd/evmscand. Nil when that read failed; the server then reads it itself on
+	// the first status request and keeps it, since nothing in it can change.
+	RegistryMode      *hintreg.Mode
 	Publisher         *hintreg.Publisher
 	AllowRegistration bool
 	// AuthToken, when set, is required as a bearer token on every endpoint that
@@ -104,6 +108,10 @@ type Server struct {
 	hintsMu   sync.Mutex
 	hints     map[string]*hintfilter.Cache
 	hintLists map[string][]common.Address
+	// mode is the registry's adjudication mode, cached for the life of the process
+	// (see registryMode).
+	modeMu sync.Mutex
+	mode   *hintreg.Mode
 }
 
 // indexFilter returns the index filter cache for a chain, making it on first ask.
@@ -158,7 +166,7 @@ func (s *Server) lookupHint(name string) (*hintfilter.Cache, bool) {
 
 // New builds the router.
 func New(d Deps) *Server {
-	s := &Server{d: d, mux: http.NewServeMux(), started: time.Now()}
+	s := &Server{d: d, mux: http.NewServeMux(), started: time.Now(), mode: d.RegistryMode}
 	s.hints = map[string]*hintfilter.Cache{}
 	s.hintLists = map[string][]common.Address{}
 	for chainID, c := range d.TokenFilters {
@@ -218,7 +226,7 @@ func (s *Server) withMiddleware(next http.Handler) http.Handler {
 		if o := s.d.CORSOrigin; o != "" {
 			w.Header().Set("Access-Control-Allow-Origin", o)
 			w.Header().Set("Access-Control-Allow-Headers", "content-type, authorization")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, POST, PATCH, DELETE, OPTIONS")
 		}
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
@@ -482,24 +490,96 @@ type pricingStatus struct {
 	NativeUSD string `json:"native_usd,omitempty"`
 }
 
+// registryStatusJSON is the registry block of /v1/status: where the registry is, what
+// it charges, and how it settles a dispute.
+type registryStatusJSON struct {
+	ChainID uint64 `json:"chain_id"`
+	Address string `json:"address"`
+	// RewardPerBlockWei is what the registry pays a publisher per newly covered
+	// block of a funded asset; MinFundingWei is the least a request deposits.
+	RewardPerBlockWei string `json:"reward_per_block_wei,omitempty"`
+	MinFundingWei     string `json:"min_funding_wei,omitempty"`
+	// AssetBondWei is what registerAsset locks for an asset nobody has
+	// registered yet. requestIndexing wants assetBond + minFunding for a new
+	// asset and minFunding for one that already exists, so a caller building
+	// that transaction needs both numbers.
+	AssetBondWei string `json:"asset_bond_wei,omitempty"`
+	// Adjudication is how a challenged commitment is settled, fixed when the
+	// registry was deployed: "optimistic-oracle" (UMA's Optimistic Oracle V3) or
+	// "local-arbiter" (one key). Only the addresses that mode uses are present.
+	Adjudication string `json:"adjudication,omitempty"`
+	Oracle       string `json:"oracle,omitempty"`
+	BondCurrency string `json:"bond_currency,omitempty"`
+	Arbiter      string `json:"arbiter,omitempty"`
+	// PublisherBondWei is what a publisher stakes on a commitment and a challenger
+	// matches: in units of BondCurrency in oracle mode, wei otherwise. Zero means a
+	// challenge is free.
+	PublisherBondWei string `json:"publisher_bond_wei,omitempty"`
+	// ChallengeWindowSeconds is how long a commitment stays proposed before it can
+	// be finalized; the assertion liveness in oracle mode.
+	ChallengeWindowSeconds *uint64 `json:"challenge_window_seconds,omitempty"`
+}
+
+// registryStatusFrom fills the part of the block that never changes. Everything in
+// Mode is immutable on the contract, so it is read once and reported forever; a nil
+// mode leaves those fields out rather than guessing.
+func registryStatusFrom(chainID uint64, addr common.Address, m *hintreg.Mode) registryStatusJSON {
+	out := registryStatusJSON{ChainID: chainID, Address: addr.Hex()}
+	if m == nil {
+		return out
+	}
+	if m.AssetBond != nil {
+		out.AssetBondWei = m.AssetBond.String()
+	}
+	if m.PublisherBond != nil {
+		out.PublisherBondWei = m.PublisherBond.String()
+	}
+	window := m.ChallengeWindow
+	out.ChallengeWindowSeconds = &window
+	if m.OracleMode() {
+		out.Adjudication = "optimistic-oracle"
+		out.Oracle = m.Oracle.Hex()
+		if m.BondCurrency != (common.Address{}) {
+			out.BondCurrency = m.BondCurrency.Hex()
+		}
+	} else {
+		out.Adjudication = "local-arbiter"
+		if m.Arbiter != (common.Address{}) {
+			out.Arbiter = m.Arbiter.Hex()
+		}
+	}
+	return out
+}
+
+// registryMode returns how the registry adjudicates, reading it on first ask.
+//
+// Reading it is six eth_calls, which through a light client is not something to
+// repeat on a five-second status poll, and nothing in it can change after
+// deployment, so the first success is kept for the life of the process. A failure
+// is not kept: a node that could not answer at startup usually can a minute later.
+func (s *Server) registryMode(ctx context.Context) *hintreg.Mode {
+	s.modeMu.Lock()
+	defer s.modeMu.Unlock()
+	if s.mode != nil || s.d.Registry == nil {
+		return s.mode
+	}
+	m, err := s.d.Registry.Mode(ctx)
+	if err != nil {
+		if s.d.Log != nil {
+			s.d.Log.Debug("registry adjudication mode not readable yet", "err", err)
+		}
+		return nil
+	}
+	s.mode = &m
+	return s.mode
+}
+
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	out := struct {
-		Chains   []chainStatus `json:"chains"`
-		Registry *struct {
-			ChainID uint64 `json:"chain_id"`
-			Address string `json:"address"`
-			// RewardPerBlockWei is what the registry pays a publisher per newly covered
-			// block of a funded asset; MinFundingWei is the least a request deposits.
-			RewardPerBlockWei string `json:"reward_per_block_wei,omitempty"`
-			MinFundingWei     string `json:"min_funding_wei,omitempty"`
-			// AssetBondWei is what registerAsset locks for an asset nobody has
-			// registered yet. requestIndexing wants assetBond + minFunding for a new
-			// asset and minFunding for one that already exists, so a caller building
-			// that transaction needs both numbers.
-			AssetBondWei string `json:"asset_bond_wei,omitempty"`
-		} `json:"registry,omitempty"`
-		Publisher string `json:"publisher,omitempty"`
+		Chains    []chainStatus       `json:"chains"`
+		Registry  *registryStatusJSON `json:"registry,omitempty"`
+		Publisher string              `json:"publisher,omitempty"`
 	}{}
 
 	for _, e := range s.d.Chains.Entries() {
@@ -563,22 +643,21 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.d.Registry != nil {
-		out.Registry = &struct {
-			ChainID           uint64 `json:"chain_id"`
-			Address           string `json:"address"`
-			RewardPerBlockWei string `json:"reward_per_block_wei,omitempty"`
-			MinFundingWei     string `json:"min_funding_wei,omitempty"`
-			AssetBondWei      string `json:"asset_bond_wei,omitempty"`
-		}{ChainID: s.d.RegistryChainID, Address: s.d.Registry.Address().Hex()}
+		mode := s.registryMode(ctx)
+		reg := registryStatusFrom(s.d.RegistryChainID, s.d.Registry.Address(), mode)
 		if v, err := s.d.Registry.RewardPerBlock(ctx); err == nil {
-			out.Registry.RewardPerBlockWei = v.String()
+			reg.RewardPerBlockWei = v.String()
 		}
 		if v, err := s.d.Registry.MinFunding(ctx); err == nil {
-			out.Registry.MinFundingWei = v.String()
+			reg.MinFundingWei = v.String()
 		}
-		if v, err := s.d.Registry.AssetBond(ctx); err == nil {
-			out.Registry.AssetBondWei = v.String()
+		if mode == nil {
+			// The mode read carries the asset bond; without it, ask for that alone.
+			if v, err := s.d.Registry.AssetBond(ctx); err == nil {
+				reg.AssetBondWei = v.String()
+			}
 		}
+		out.Registry = &reg
 	}
 	if s.d.Publisher != nil {
 		out.Publisher = s.d.Publisher.Address().Hex()
