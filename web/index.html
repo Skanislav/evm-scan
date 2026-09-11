@@ -2724,6 +2724,9 @@ const ENS_SUB = {
 
 function renderAccounts() {
   $('accounts-more').hidden = !ACCT_MORE;
+  // The proof card may be sitting under a row about to be redrawn; park it first,
+  // or the redraw takes it with it.
+  $('proof-park').appendChild($('proof-card'));
   $('accounts').innerHTML = ACCOUNTS.length ? ACCOUNTS.map(a => {
     const rev = reverseCache.get(`${nameRpc()}|${a.account.toLowerCase()}`);
     const state = rev ? rev.state : 'resolving';
