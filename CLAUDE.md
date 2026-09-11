@@ -13,7 +13,7 @@ README.md explains the design rationale in depth; read it before changing archit
 ## Commands
 
 ```bash
-make build            # builds bin/evmscand, bin/evmscan-demo, bin/evmscan-verify, bin/evmscan-deploy
+make build            # builds bin/evmscand, bin/evmscan-demo, bin/evmscan-verify, bin/evmscan-deploy, bin/evmscan-restore, bin/evmscan-ens
 make check            # what CI runs: gofmt -w, go vet, go test ./...
 go test ./...         # unit tests only (hermetic, no node or DB needed)
 go test ./internal/merkle/ -run TestName -v      # single test
@@ -114,6 +114,11 @@ shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module 
   ENSIP-24 `data()` record holding an ERC-7930 chain-only address — so a network can
   be named rather than numbered. It is on-chain, one `eth_call` at head, no gateway.
   The registry carries identity only; the RPC endpoint is always operator-supplied.
+  The same package holds the hint-name scheme `<hex>.hints.<parent>` (`HintName`,
+  `ParseHintName`), `Normalize` (NFC + lowercase, not ENSIP-15; the page and the mirror
+  apply the identical transform), and the ENSv2 registry/factory ABIs `cmd/evmscan-ens`
+  needs. It does **not** resolve account names: those are resolved in the client, and
+  the API takes addresses only.
   `internal/chainprofile` holds the per-chain tuning ENS does not carry (block time,
   confirmations, log windows, native asset), since a confirmation depth copied
   between chains means a different amount of wall clock on each.
@@ -140,6 +145,18 @@ shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module 
   `/v1/accounts/{addr}/portfolio` (`internal/api/portfolio.go`). `contracts/evmtest` is a
   separate Go module that executes the lens in a real EVM (`make test-evm`), kept apart so
   go-ethereum's in-process node stays out of the daemon's dependency graph.
+- `contracts/src/HintResolver.sol` is "hints out": an ENSIP-10 wildcard resolver bound to
+  one HintRegistry that serves the committed index as ENS text records under
+  `<hex>.hints.<parent>` (docs/ENS.md). Its `evmscan.contracts` record reverts
+  `OffchainLookup` at the registry's gateways and the callback delegates to
+  `HintRegistry.contractsOfCallback`, so any ENS client (viem, ens-cli, the app) reads the
+  index verified against the latest finalized root with no evm-scan code. `cmd/evmscan-ens`
+  deploys it and attaches it under an ENSv2 name; `evmscan-verify -ens` reads it back and
+  checks it against `contractsOf`; `ens_sim_test.go` runs the loop on the simulated backend.
+  `internal/ccip.Resolve` packs the callback by the selector the revert named, so it serves
+  both contracts; the gateway does not check `sender`, because ENS's Universal Resolver
+  rewrites it and the answer is verified where it is used. `registry.ens_parent` only
+  lets account responses carry `hint_name`.
 - `internal/api` depends on the indexer through the small `Worker` interface, not the package.
   `gateway.go` is the ERC-3668 gateway for `HintRegistry.contractsOf`; `internal/ccip` holds
   the response codec and an ERC-3668 client shared with `cmd/evmscan-verify -ccip`. The
@@ -191,3 +208,7 @@ shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module 
   is only ever written from confirmed blocks.
 - Backfills stop at the probed history floor, never assume genesis is reachable.
 - Two node operations only: `eth_getLogs` and `eth_call` at head.
+- Account names resolve in the client: the page through the Universal Resolver on the
+  reader's RPC, the mirror through its injected `EthCall`. The daemon never resolves a
+  name, no API parameter takes one, and nobody here follows an ERC-3668 gateway on a
+  reader's behalf.

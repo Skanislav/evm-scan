@@ -254,7 +254,7 @@ func (s *Server) accountPortfolio(w http.ResponseWriter, r *http.Request) {
 	}
 	state.Price, state.ValueUSD = nativeQuote, nativeValue
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	resp := map[string]any{
 		"account":     account.Hex(),
 		"chain_id":    res.ChainID,
 		"as_of_block": res.BlockNumber,
@@ -272,7 +272,11 @@ func (s *Server) accountPortfolio(w http.ResponseWriter, r *http.Request) {
 		// weakest confidence in that sum and how many tokens had no price at all.
 		"valuation": valuationOut,
 		"read_by":   "deployless AssetLens (eth_call, no deployment); live state, not indexed",
-	})
+	}
+	if h := s.hintName(account, chainID); h != "" {
+		resp["hint_name"] = h
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // fillBalances reads every discovered asset's balance in one deployless call.

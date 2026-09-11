@@ -26,6 +26,12 @@ import (
 // account's leaf and proof for the latest finalized epoch, abi-encoded the way
 // contractsOfCallback expects. The contract verifies everything we return, so this
 // endpoint can be run by anyone with an index and trusted by no one.
+//
+// The `sender` in the URL is informational and deliberately not checked against the
+// registry: HintResolver issues the same lookup on the registry's behalf, and ENS's
+// Universal Resolver rewrites the sender to itself before handing the lookup to a
+// client. What the answer is verified against is the callback on chain, not who
+// asked for it.
 
 // ccipGet serves GET /ccip/{sender}/{data}.json.
 func (s *Server) ccipGet(w http.ResponseWriter, r *http.Request) {
@@ -50,9 +56,8 @@ func (s *Server) serveCCIP(w http.ResponseWriter, r *http.Request, senderHex, da
 		writeErr(w, http.StatusServiceUnavailable, "no registry configured", nil)
 		return
 	}
-	sender, err := parseAddress(senderHex)
-	if err != nil || sender != s.d.Registry.Address() {
-		writeErr(w, http.StatusBadRequest, "sender is not this gateway's registry", err)
+	if _, err := parseAddress(senderHex); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad sender", err)
 		return
 	}
 	data, err := hexutil.Decode(dataHex)

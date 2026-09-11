@@ -107,6 +107,9 @@ result on-chain:
   -gateway 'https://<domain>/ccip/{sender}/{data}.json'
 ```
 
+`HintResolver` (docs/ENS.md) advertises the same list, read from the registry at call
+time, so an ENS client resolving `<hex>.hints.<yourname>.eth` ends up at this gateway too.
+
 That call is `setGateways`, which only the arbiter of a local-arbiter registry can make.
 In oracle mode there is no setter, so the list is whatever `-gateway` said at deployment;
 pass the final domain then.

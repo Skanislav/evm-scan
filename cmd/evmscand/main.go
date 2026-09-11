@@ -227,6 +227,7 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 			StartChain:        sv.StartStored,
 			StopChain:         sv.Stop,
 			ENS:               ensResolver,
+			ENSParent:         cfg.Registry.ENSParent,
 			Registry:          regClient,
 			RegistryChainID:   cfg.Registry.ChainID,
 			Publisher:         publisher,
