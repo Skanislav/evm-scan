@@ -1814,26 +1814,49 @@ const pairKey = (sub, account, token) => xorfKey(sub, hexToBytes(account), hexTo
 // Filters are cached per name for the life of the page. They are content-addressed
 // and revalidate with an ETag, so a repeat visit usually costs a 304.
 const hintCache = new Map();
+
+// Fetch one filter and check the bytes against the digest its manifest quotes.
+//
+// Not against the operator — the digest arrives over the same connection as the file
+// — but against a truncated or half-cached response, which is the failure worth
+// catching: a short filter does not throw, it answers no to everything, and at the
+// call site that is indistinguishable from an empty wallet.
+//
+// The manifest and the file are two requests, and an index filter is rebuilt on a
+// timer, so they can legitimately straddle a rebuild and disagree about a perfectly
+// healthy deployment. The server's ETag is the served bytes' keccak, which is exactly
+// the label needed to tell those apart: an ETag that does not match the manifest means
+// the two reads saw different builds, and returning null asks the caller to try again
+// with a fresh manifest rather than accusing anyone of corruption.
+async function fetchHintFilter(name, fresh) {
+  const res = await fetch(`/v1/hints/${name}.xorf`);
+  if (!res.ok) throw new Error(`/v1/hints/${name}.xorf: ${res.status}`);
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  const m = (await hints(fresh).catch(() => [])).find(f => f.name === name) || null;
+  if (!m) return { bytes, manifest: null };
+
+  const etag = (res.headers.get('ETag') || '').replace(/"/g, '');
+  if (etag && m.keccak256 && etag !== m.keccak256) return null;
+
+  if (m.sha256) {
+    const sum = '0x' + [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))]
+      .map(b => b.toString(16).padStart(2, '0')).join('');
+    if (sum !== m.sha256) {
+      throw new Error(`${name}.xorf: sha256 ${sum} is not the ${m.sha256} the manifest quotes`);
+    }
+  }
+  return { bytes, manifest: m };
+}
+
 async function hintFilter(name) {
   if (!hintCache.has(name)) {
     hintCache.set(name, (async () => {
-      // The manifest is read first so the bytes can be checked rather than trusted.
-      // This is not a defence against the operator — the digest arrives over the same
-      // connection as the file — it is a defence against a truncated or half-cached
-      // response, which is the failure worth catching here: a short filter does not
-      // throw, it answers no to everything, and at the call site that is
-      // indistinguishable from an empty wallet.
-      const m = (await hints().catch(() => [])).find(f => f.name === name) || null;
-      const res = await fetch(`/v1/hints/${name}.xorf`);
-      if (!res.ok) throw new Error(`/v1/hints/${name}.xorf: ${res.status}`);
-      const bytes = new Uint8Array(await res.arrayBuffer());
-      if (m && m.sha256) {
-        const sum = '0x' + [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))]
-          .map(b => b.toString(16).padStart(2, '0')).join('');
-        if (sum !== m.sha256) throw new Error(`${name}.xorf: sha256 ${sum} is not the ${m.sha256} the manifest quotes`);
-      }
-      const f = xorfDecode(bytes.buffer);
-      f.manifest = m;
+      // One retry, with the manifest re-read. A second disagreement is not a rebuild
+      // racing a download, it is a deployment rebuilding faster than it can serve.
+      const got = await fetchHintFilter(name, false) || await fetchHintFilter(name, true);
+      if (!got) throw new Error(`${name}.xorf was rebuilt while it was downloading; ask again`);
+      const f = xorfDecode(got.bytes.buffer);
+      f.manifest = got.manifest;
       return f;
     })().catch(e => { hintCache.delete(name); throw e; }));
   }
@@ -1841,7 +1864,8 @@ async function hintFilter(name) {
 }
 
 let hintIndex = null;
-async function hints() {
+async function hints(fresh) {
+  if (fresh) hintIndex = null;
   if (!hintIndex) hintIndex = api('/v1/hints').then(r => r.filters).catch(e => { hintIndex = null; throw e; });
   return hintIndex;
 }

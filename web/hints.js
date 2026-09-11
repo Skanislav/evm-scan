@@ -98,10 +98,11 @@ async function render() {
     </p>
     <div class="kvgrid" id="private-facts" style="gap:28px; margin-bottom:18px"></div>
     <p class="hint" style="max-width:74ch; margin-bottom:6px">
-      <strong>What this can and cannot say.</strong> The index covers the
-      ${H.esc(String(assets.length))} contract${assets.length === 1 ? '' : 's'} this deployment has
-      promoted, not the chain — so a contract missing below is one nobody here indexes, which is a
-      different thing from a balance of zero. The file is true as of block
+      <strong>What this can and cannot say.</strong> The index covers
+      ${assets.length ? `the ${H.esc(String(assets.length))} contract${assets.length === 1 ? '' : 's'} this deployment has promoted`
+                      : 'only the contracts this deployment has promoted'},
+      not the chain — so a contract missing below is one nobody here indexes, which is a different
+      thing from a balance of zero. The file is true as of block
       ${H.esc(fmtInt(m.to_block || 0))}; anything newer than that is not in it yet. And roughly one
       hit in 256 is the filter guessing, which is why every hit is confirmed by reading the balance
       on chain.
@@ -156,12 +157,22 @@ async function run(m) {
     status.textContent = `downloading ${fmtBytes(m.bytes)}…`;
     const f = await H.filter(m.name);
 
+    // Take the kind from the file, not from the name. A filter keyed by single token
+    // — the tokens-N list — would happily accept pair keys and answer no to all of
+    // them, and "this account has touched nothing" is precisely the wrong answer to
+    // arrive at by testing the wrong file. The subkey is derived per kind, so getting
+    // this wrong is silent rather than loud unless it is checked here.
+    if (f.kind !== KIND_ACCOUNT_TOKEN) {
+      throw new Error(`${m.name}.xorf is a ${f.kind === 1 ? 'token' : `kind-${f.kind}`} filter, not the (account, contract) one this reads`);
+    }
+
     // Every asset the index covers, tested locally. Eight keccaks and eight array
     // probes: the cost of this is not the test, it is the download above, which is
     // why the download is the thing that happens once and is cached.
     status.textContent = 'testing locally…';
-    const sub = await H.subkey(new Uint8Array(0), f.chainId, KIND_ACCOUNT_TOKEN);
+    const sub = await H.subkey(new Uint8Array(0), f.chainId, f.kind);
     const assets = H.assets() || [];
+    if (!assets.length) throw new Error('the asset list has not loaded yet; try again in a moment');
     const hits = [];
     for (const a of assets) {
       if (H.contains(f, await H.pairKey(sub, account, a.address))) hits.push(a);
@@ -260,9 +271,13 @@ async function confirm(out, account, hits) {
   try {
     const rows = await H.lensBalances(account, hits.map(a => a.address));
     paint(out, rows);
-    note.innerHTML = `Balances read from <code>${H.esc(new URL(mine).host)}</code> in your browser.
-      This deployment served the filter and nothing else — it was never told which address it was
-      for, and never asked for a balance.`;
+    // At head, not at the block the filter names. The two numbers on this page are
+    // true at different times and a reader comparing them deserves to know which is
+    // which: the membership above is as of the filter's block, the balances are now.
+    note.innerHTML = `Balances read at head from <code>${H.esc(new URL(mine).host)}</code> in your
+      browser — not as of the block above, which is only when the index last said these contracts
+      had seen this account. This deployment served the filter and nothing else: it was never told
+      which address it was for, and never asked for a balance.`;
   } catch (e) {
     note.innerHTML = `Your RPC could not serve this (${H.esc(e.message)}). Nothing was read, and the
       address was not sent anywhere else to compensate.`;
@@ -274,8 +289,10 @@ async function readThroughDaemon(out, account, hits, note) {
     const p = await H.api(H.onChain(
       `/v1/accounts/${account}/portfolio?tokens=${hits.map(a => a.address).join(',')}`));
     paint(out, p.tokens || []);
-    note.innerHTML = `Balances read through the daemon, which now knows the address — you asked it
-      to. The filter test before it still cost nothing.`;
+    note.innerHTML = `Balances read through the daemon at block
+      ${H.esc(fmtInt(p.as_of_block || 0))}, which now knows the address — you asked it to. That is a
+      later block than the one the filter names above: membership is as of the index, balances are
+      as of now. The filter test before it still cost nothing.`;
   } catch (e) {
     note.innerHTML = `Could not read balances: ${H.esc(e.message)}`;
   }
