@@ -301,6 +301,18 @@
   <div class="hint" id="rpc-note" hidden style="margin-bottom:12px"></div>
   <div class="err" id="account-err" hidden></div>
 
+  <!-- The same question, asked without the address leaving the browser. "Look up"
+       above puts it in a URL; this works it out from a file every visitor downloads
+       identically. Offered beside the button rather than instead of it, because it
+       answers a narrower question and costs a 1.4 MB download to do it. -->
+  <div style="margin-top:4px">
+    <button class="linkbtn" id="private-open">or ask the index without naming the address</button>
+  </div>
+  <div class="panel" id="private" hidden>
+    <h3>Private lookup</h3>
+    <div id="private-body"><span class="empty">loading…</span></div>
+  </div>
+
   <div id="wallet-head" hidden>
     <div style="display:flex; align-items:flex-end; justify-content:space-between; gap:40px; flex-wrap:wrap">
       <div>
@@ -1805,9 +1817,24 @@ const hintCache = new Map();
 async function hintFilter(name) {
   if (!hintCache.has(name)) {
     hintCache.set(name, (async () => {
+      // The manifest is read first so the bytes can be checked rather than trusted.
+      // This is not a defence against the operator — the digest arrives over the same
+      // connection as the file — it is a defence against a truncated or half-cached
+      // response, which is the failure worth catching here: a short filter does not
+      // throw, it answers no to everything, and at the call site that is
+      // indistinguishable from an empty wallet.
+      const m = (await hints().catch(() => [])).find(f => f.name === name) || null;
       const res = await fetch(`/v1/hints/${name}.xorf`);
       if (!res.ok) throw new Error(`/v1/hints/${name}.xorf: ${res.status}`);
-      return xorfDecode(await res.arrayBuffer());
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      if (m && m.sha256) {
+        const sum = '0x' + [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))]
+          .map(b => b.toString(16).padStart(2, '0')).join('');
+        if (sum !== m.sha256) throw new Error(`${name}.xorf: sha256 ${sum} is not the ${m.sha256} the manifest quotes`);
+      }
+      const f = xorfDecode(bytes.buffer);
+      f.manifest = m;
+      return f;
     })().catch(e => { hintCache.delete(name); throw e; }));
   }
   return hintCache.get(name);
@@ -2017,6 +2044,27 @@ async function buildWatchlist(tokens, chainId, secret, desc) {
   return out;
 }
 window.buildWatchlist = buildWatchlist;
+
+// What web/hints.js is allowed to reach.
+//
+// It is a lazily imported module — the index filter is 1.4 MB and most visits never
+// ask for it — so it cannot close over this file's scope and has to be handed the
+// primitives, the way graph.js is handed window.evmscanChainID. Keeping the surface
+// named and small is the point: the filter arithmetic has exactly one implementation
+// on this page, and a second copy inside the module would be a second thing to keep
+// byte-identical with the Go writer.
+//
+// This sits below every declaration it names rather than next to hintFilter, because
+// half of them are const arrows and reading one from its own temporal dead zone
+// would throw at load with a message about the module, not about the ordering.
+window.evmscanHints = {
+  filter: hintFilter, manifest: hints,
+  subkey: xorfSubkey, contains: xorfContains, pairKey, tokenKey,
+  buildWatchlist, hexToBytes, bytesToB64url, b64urlToBytes,
+  passkeyCreate, passkeySecret, walletSecret, passwordSecret,
+  api, onChain, esc, short, chainRpc, lensBalances, resolveAccount,
+  chainId: activeChainID, assets: () => ASSETS,
+};
 
 // markUnlisted annotates rows with whether any configured token list vouches for
 // the contract. Absent filter, absent annotation: "nobody vouched" and "there was
@@ -3013,6 +3061,24 @@ async function buildEpoch() {
 // --------------------------------------------------------------------------
 
 $('lookup').addEventListener('click', lookup);
+
+// The private lookup lives in its own module for the same reason the graph does: the
+// filter it reads is 1.4 MB and the code that reads it is dead weight on every visit
+// that never opens this panel. Nothing is fetched until somebody asks.
+let hintsLoaded = false;
+$('private-open').addEventListener('click', () => {
+  const p = $('private');
+  p.hidden = !p.hidden;
+  $('private-open').textContent = p.hidden
+    ? 'or ask the index without naming the address'
+    : 'hide the private lookup';
+  if (p.hidden || hintsLoaded) return;
+  hintsLoaded = true;
+  import('./hints.js').catch(e => {
+    hintsLoaded = false;
+    $('private-body').innerHTML = `<span class="err">could not load the private lookup: ${esc(e.message)}</span>`;
+  });
+});
 $('account').addEventListener('keydown', e => { if (e.key === 'Enter') lookup(); });
 $('to-triage').addEventListener('click', () => show('triage'));
 $('spam-toggle').addEventListener('click', () => { SHOW_SPAM = !SHOW_SPAM; renderHoldings(); });
