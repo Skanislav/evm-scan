@@ -388,8 +388,15 @@ Resolver on the reader's own RPC, the mirror does the same through its injected
 `eth_call`, and the daemon takes addresses only. [docs/ENS.md](docs/ENS.md) is the design.
 
 Commitments are optimistic and served as soon as they are posted. `GET /v1/epochs/{id}`
-reports `onchain_status` and `challenge_deadline`, so a consumer can decide for itself
-whether "proposed" is good enough.
+reports `onchain_status`, `challenge_deadline` and, on an oracle-mode registry, the
+`assertion_id` and any `challenger`, so a consumer can decide for itself whether
+"proposed" is good enough. `GET /v1/status` says how the registry settles a dispute
+(`adjudication`, the oracle or arbiter, the publisher bond, the challenge window), read
+once because none of it can change. The page's accounts tab does the consumer's half in
+the browser: it reads each posted epoch back with `getEpoch` on the reader's RPC, probes
+the epoch's snapshot `uri` with a `HEAD`, and for a selected account recomputes the proof's
+hashes and runs `verifyInclusion` itself — the same steps as `evmscan-verify`, and none of
+them ask this server anything it could lie about.
 
 A root is only worth something to someone who can recompute it, which until now meant
 running this daemon. [docs/LOCALFIRST.md](docs/LOCALFIRST.md) is the other end: `mirror/`
@@ -418,9 +425,10 @@ epoch that made verifying it in practice too expensive to bother with.
 | `POST` | `/v1/candidates/{addr}/spam` · `/unspam` | Rule a contract not worth indexing, and take it back. A spam mark drops it out of the promotable ranking and out of auto-promote. |
 | `GET` | `/v1/decisions` | The verdicts passed on discovered contracts, newest first. |
 | `GET` | `/v1/epochs` · `POST /v1/epochs` | List / build + publish commitments (`force` to repost an unchanged root). |
-| `GET` | `/v1/epochs/{id}/proof?account=` | Inclusion proof for `verifyInclusion`. |
+| `GET` | `/v1/epochs/{id}/proof?account=` | Inclusion proof for `verifyInclusion`: the leaf, its siblings, the asset list behind the digest, and the on-chain epoch id to verify against. |
+| `GET` · `HEAD` | `/v1/epochs/{id}/snapshot` | The committed table as NDJSON, self-verifying against the on-chain roots (docs/RECOVERY.md). `HEAD` answers with headers only, so a reader can ask whether the snapshot behind an epoch's `uri` is still here. Open even when a token is set. |
 | `GET` | `/ccip/{sender}/{data}.json` · `POST /ccip` | ERC-3668 gateway for `HintRegistry.contractsOf` and for `HintResolver`'s `evmscan.contracts` record: leaf and proof for the latest finalized epoch, verified on-chain by the callback. |
-| `GET` | `/v1/status` · `/v1/health` | Sync state, node locality, index size, registry economics. Health is 503 when a node, the database or an indexer is down. |
+| `GET` | `/v1/status` · `/v1/health` | Sync state, node locality, index size, registry economics and adjudication mode. Health is 503 when a node, the database or an indexer is down. |
 
 Every account response carries `as_of_block` so a caller can pin what it saw.
 

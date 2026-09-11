@@ -190,7 +190,13 @@ shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module 
   `graph.js` is the WebGL graph, imported the first time that tab is opened because
   three.js is most of a megabyte and most visits never ask for a picture. Token metadata is
   attacker-controlled text from the chain, so everything interpolated into markup goes
-  through `esc()`.
+  through `esc()`. The accounts tab's commitments section reads the registry in the
+  browser through the reader's RPC (`regRpc`/`regCall`, an inline `HINT_REGISTRY_ABI`):
+  each posted epoch back with `getEpoch`, the snapshot `uri` with a `HEAD` probe, and the
+  selected account's proof card is `cmd/evmscan-verify` in JavaScript — recompute the
+  digest, leaf and root from the served inputs, then `verifyInclusion` on chain. It never
+  asks the daemon to verify anything, and the merkle rules it hard-codes are
+  `internal/merkle`'s.
 - `mirror/` is a separate TypeScript package (`make test-mirror`, own `node_modules`, not
   in the Go build): the commitment encoding ported for clients, plus a local-first mirror
   that keeps the committed rows in the client's SQLite via Evolu and rebuilds the keccak

@@ -96,7 +96,16 @@ fetched by strangers, and a recovery path nobody can reach is not a recovery pat
 **Epochs published before this shipped carry `uri = ""` permanently.** Their tables
 can still be dumped by id and mirrored by hand — the roots are on chain, so an old
 snapshot verifies exactly like a new one — but the chain will not tell anyone where
-to look.
+to look. The page's commitments table calls this state *no pointer on chain*.
+
+The same table probes every `https://` pointer from the reader's browser with a `HEAD`
+request, which the snapshot route answers with headers alone, and reports what came
+back: **reachable** (200), **pruned** (410: the table was dropped here after a newer
+epoch finalized, the root still stands and a mirrored copy still verifies), **snapshot
+unreachable** (404: the pointer is on chain and nothing answers at it — an indexer that
+published and then lost its database), or **not checkable** when the host does not
+allow cross-origin reads. An `ipfs://` pointer is shown and not probed; picking a
+gateway on the reader's behalf is not this page's call.
 
 ## Serving it from the daemon is the floor, not the goal
 

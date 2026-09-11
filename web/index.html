@@ -542,9 +542,20 @@
       </div>
 
       <h2 style="font-size:26px; margin:50px 0 4px">On-chain commitments</h2>
-      <p class="prose" style="margin:0 0 16px">A merkle root over the whole account→contracts index,
+      <p class="prose" style="margin:0 0 10px">A merkle root over the whole account→contracts index,
         published with a challenge window. An account's row in it is provable on-chain without trusting
         this server.</p>
+      <!-- How a dispute is settled is fixed when the registry is deployed and readable off it,
+           so it is said here once rather than left for a challenger to discover. -->
+      <div class="hint" id="dispute-line" style="margin:0 0 8px"></div>
+      <div class="hint" id="mirror-line" style="margin:0 0 16px">The committed rows can be kept and
+        re-verified without this server:
+        <a href="https://github.com/Skanislav/evm-scan/tree/HEAD/mirror" rel="noopener"><code>mirror/</code></a>
+        keeps them in the client’s own SQLite and rebuilds the keccak root to check it against
+        <code>latestFinalizedEpoch</code>
+        (<a href="https://github.com/Skanislav/evm-scan/blob/HEAD/docs/LOCALFIRST.md" rel="noopener">design</a>).
+        The <em>snapshot</em> column is the pointer such a mirror starts from; the <em>on-chain</em>
+        column is the registry’s own view of each row, read on your RPC.</div>
       <div class="row" id="op-token-row" hidden style="margin-bottom:10px">
         <input class="input" type="password" id="op-token" style="flex:0 1 280px" spellcheck="false" autocomplete="off" placeholder="operator token">
         <button class="btn btn-secondary" id="op-token-save">Save</button>
@@ -560,6 +571,7 @@
         <div class="tablehead cols-epochs">
           <span class="num">#</span><span>root</span><span class="num">accounts</span>
           <span class="num">range</span><span>status</span><span>tx</span>
+          <span>on-chain</span><span>snapshot</span>
         </div>
         <div id="epochs"></div>
       </div>
@@ -571,9 +583,20 @@
       <div class="addr" id="acct-addr" style="font-size:12px; word-break:break-all"></div>
       <div class="hint" id="acct-record" style="margin-top:8px"></div>
       <div id="acct-assets" style="display:grid; gap:11px; margin-top:26px"></div>
-      <div class="colhead" id="proof-head" hidden style="margin-top:30px">inclusion proof</div>
-      <pre id="proof" hidden></pre>
-      <div class="hint" id="proof-note" hidden style="margin-top:8px"></div>
+      <!-- evmscan-verify, in the browser: the proof this server hands out is recomputed from
+           the account and its asset list, replayed to the root, then put to HintRegistry on the
+           reader's RPC. The API's hashes are shown beside the recomputed ones, never trusted. -->
+      <div class="colhead" id="proof-head" hidden style="margin-top:30px">inclusion proof · checked in your browser</div>
+      <div id="proof-card" hidden style="margin-top:8px">
+        <div class="hint" id="proof-epoch"></div>
+        <div id="proof-steps" style="margin-top:10px; display:grid; gap:7px; font-size:13px; line-height:1.4"></div>
+        <div id="proof-verdict" style="margin-top:12px"></div>
+        <div class="hint" id="proof-how" style="margin-top:10px"></div>
+        <details style="margin-top:10px">
+          <summary class="hint" style="cursor:pointer">the proof as served</summary>
+          <pre id="proof"></pre>
+        </details>
+      </div>
     </div>
   </div>
 </section>
@@ -655,7 +678,7 @@ const COLS = {
   hold: 'minmax(0, 1.4fr) 120px 100px minmax(0, 0.9fr) 110px 150px',
   assets: 'minmax(0, 1.4fr) 90px 100px 110px 80px 130px',
   accounts: 'minmax(0, 1.5fr) 92px 88px 130px',
-  epochs: '46px minmax(0, 1fr) 90px 150px 110px 120px',
+  epochs: '46px minmax(0, 1fr) 90px 150px 110px 120px minmax(190px, 1.3fr) minmax(150px, 1fr)',
   queue: 'minmax(0, 1fr) 80px 80px auto',
 };
 for (const [k, v] of Object.entries(COLS)) {
@@ -836,10 +859,14 @@ async function loadStatus() {
     const want = activeChainID();
     const c = chains.find(x => x.chain_id === want) || chains[0];
     if (!c) return;
+    const firstStatus = !STATUS, hadReg = !!REG;
     STATUS = c;
     REG = s.registry || null;
     HEAD = c.head_block || 0;
     INDEXED_CHAIN = c.chain_id;
+    // The epochs table may have been drawn before this answered; give its on-chain
+    // column what it was waiting for, whether that is a registry or word of none.
+    if ((firstStatus || (!hadReg && REG)) && EPOCHS.length) fillOnchain(EPOCHS);
 
     $('masthead-meta').innerHTML = [
       `chain ${c.chain_id}${c.name ? ' · ' + esc(c.name) : ''}`,
@@ -888,6 +915,7 @@ async function loadStatus() {
       : `no price sources on this chain · history floor ${num(c.history_floor)}`;
 
     renderRequestSection();
+    renderDisputeLine();
   } catch (e) { showErr('cand-err', e); }
 }
 
@@ -2062,6 +2090,145 @@ function namesRpc() {
   return chainRpc() || PUBLIC_RPC[activeChainID()] || null;
 }
 
+// --------------------------------------------------------------------------
+// The registry, read in the browser
+//
+// Everything below asks HintRegistry on the reader's RPC and never this server:
+// which epoch is the latest finalized one, what an epoch looks like on chain, and
+// whether a proof this server produced actually verifies. The page puts the API's
+// view and the chain's view side by side; any daylight between them is the finding.
+// --------------------------------------------------------------------------
+// HintRegistry.Epoch, field for field and in order; the uint8 is EpochStatus.
+const EPOCH_TUPLE = { type: 'tuple', components: [
+  { name: 'chainId', type: 'uint64' }, { name: 'fromBlock', type: 'uint64' }, { name: 'toBlock', type: 'uint64' },
+  { name: 'root', type: 'bytes32' }, { name: 'coverageRoot', type: 'bytes32' }, { name: 'uri', type: 'string' },
+  { name: 'publisher', type: 'address' }, { name: 'challenger', type: 'address' }, { name: 'bond', type: 'uint256' },
+  { name: 'publishedAt', type: 'uint64' }, { name: 'challengeDeadline', type: 'uint64' },
+  { name: 'status', type: 'uint8' }, { name: 'assertionId', type: 'bytes32' },
+] };
+const HINT_REGISTRY_ABI = [
+  { type: 'function', name: 'getEpoch', stateMutability: 'view',
+    inputs: [{ name: 'epochId', type: 'uint256' }], outputs: [{ ...EPOCH_TUPLE, name: 'e' }] },
+  { type: 'function', name: 'latestFinalizedEpoch', stateMutability: 'view',
+    inputs: [{ name: 'chainId', type: 'uint64' }],
+    outputs: [{ name: 'found', type: 'bool' }, { name: 'epochId', type: 'uint256' }, { ...EPOCH_TUPLE, name: 'e' }] },
+  { type: 'function', name: 'verifyInclusion', stateMutability: 'view',
+    inputs: [{ name: 'epochId', type: 'uint256' }, { name: 'account', type: 'address' },
+      { name: 'assetsDigest', type: 'bytes32' }, { name: 'proof', type: 'bytes32[]' }],
+    outputs: [{ name: 'ok', type: 'bool' }] },
+  { type: 'error', name: 'UnknownEpoch', inputs: [] },
+];
+// HintRegistry.EpochStatus in declaration order — the same words hintreg.EpochStatus prints.
+const EPOCH_STATUS = ['none', 'proposed', 'challenged', 'finalized', 'rejected'];
+const ZERO_ADDR = /^0x0{40}$/, ZERO_HASH = /^0x0{64}$/;
+
+// The RPC the registry is read on. The reader's own endpoint is bound to the active
+// chain, so it only serves when the registry lives on that chain; otherwise a public
+// endpoint for the registry's chain, if this page knows one. Null: nobody to ask.
+function regRpc() {
+  if (!REG || !REG.address) return null;
+  return (REG.chain_id === activeChainID() ? chainRpc() : null) || PUBLIC_RPC[REG.chain_id] || null;
+}
+
+async function regCall(fn, args) {
+  const url = regRpc();
+  if (!url) throw Object.assign(new Error(`needs an RPC for chain ${REG ? REG.chain_id : '?'}`), { code: 'NO_RPC' });
+  const viem = await import(VIEM_MODULE);
+  const data = viem.encodeFunctionData({ abi: HINT_REGISTRY_ABI, functionName: fn, args });
+  const out = await rpc(url, 'eth_call', [{ to: REG.address, data }, 'latest']);
+  return viem.decodeFunctionResult({ abi: HINT_REGISTRY_ABI, functionName: fn, data: out });
+}
+
+// Revert data as the RPC reported it: a hex string, one level down on some
+// endpoints, or only quoted in the message on others.
+function revertHex(e) {
+  const d = e && e.data;
+  if (typeof d === 'string') return d;
+  if (d && typeof d.data === 'string') return d.data;
+  const m = /0x[0-9a-fA-F]{8,}/.exec((e && e.message) || '');
+  return m ? m[0] : '';
+}
+function revertIs(viem, e, name) {
+  return revertHex(e).toLowerCase().startsWith(viem.toFunctionSelector(`${name}()`).toLowerCase());
+}
+
+// The chain's copy of an epoch. Finalized and rejected are terminal, so those are
+// kept for the session; anything else is re-read each time the table is drawn.
+const ONCHAIN_EPOCHS = new Map();
+async function readOnchainEpoch(id) {
+  const key = `${REG.address}:${id}`;
+  const had = ONCHAIN_EPOCHS.get(key);
+  if (had && (Number(had.status) === 3 || Number(had.status) === 4)) return had;
+  const e = await regCall('getEpoch', [BigInt(id)]);
+  ONCHAIN_EPOCHS.set(key, e);
+  return e;
+}
+
+// Runs fn over items at most n at a time. A public RPC is a shared resource, and a
+// list of twenty epochs should not hit it with twenty calls at once.
+async function pool(items, n, fn) {
+  const queue = items.slice();
+  await Promise.all(Array.from({ length: Math.min(n, queue.length) }, async () => {
+    while (queue.length) await fn(queue.shift());
+  }));
+}
+
+// Whether the table an epoch's uri points at is still there. A HEAD, never the body:
+// the answer is a status code. The result is kept for the session, since it changes
+// only when the table is pruned.
+const SNAPSHOT_PROBES = new Map();
+async function probeSnapshot(uri) {
+  if (SNAPSHOT_PROBES.has(uri)) return SNAPSHOT_PROBES.get(uri);
+  let r;
+  try { r = { status: (await fetch(uri, { method: 'HEAD' })).status }; } catch { r = { status: 0 }; }
+  SNAPSHOT_PROBES.set(uri, r);
+  return r;
+}
+function probeVerdict(r) {
+  if (r.status === 200) return ['reachable', 'v-approved', 'the table behind this commitment answers'];
+  if (r.status === 410) return ['pruned', 'v-none', 'the table was pruned here; the root is still on chain, so a mirrored copy verifies'];
+  if (r.status === 404) return ['snapshot unreachable', 'v-spam', 'the pointer is on chain but nothing answers at it — an indexer that lost its database after publishing'];
+  if (r.status === 0) return ['not checkable', 'v-none', 'this browser could not ask; usually a host that does not allow cross-origin reads'];
+  return [`HTTP ${r.status}`, 'v-none', ''];
+}
+
+function fmtUnix(ts) { return new Date(Number(ts) * 1000).toLocaleString(); }
+function fmtSeconds(n) {
+  n = Number(n);
+  if (n % 86400 === 0) return `${n / 86400} d`;
+  if (n % 3600 === 0) return `${n / 3600} h`;
+  if (n % 60 === 0) return `${n / 60} min`;
+  return `${n} s`;
+}
+
+// How this registry settles a dispute: fixed at deployment, read off the contract by
+// the daemon once, and said here so nobody has to find out by challenging.
+function renderDisputeLine() {
+  const el = $('dispute-line');
+  if (!el) return;
+  if (!REG || !REG.address) {
+    el.innerHTML = STATUS
+      ? 'No registry is configured, so commitments here stay local: built and provable against this server, never posted.'
+      : '';
+    return;
+  }
+  const bond = REG.publisher_bond_wei;
+  const win = REG.challenge_window_seconds == null ? '' : fmtSeconds(REG.challenge_window_seconds);
+  let t;
+  if (REG.adjudication === 'optimistic-oracle') {
+    t = `Disputes go to UMA’s Optimistic Oracle V3 at <span class="addr">${esc(REG.oracle)}</span>: `
+      + `a challenge bonds ${esc(bond ?? '?')} of <span class="addr">${esc(REG.bond_currency || '')}</span> against the publisher’s, `
+      + `and the oracle’s verdict rejects the root or lets it finalize${win ? `; liveness ${win}` : ''}.`;
+  } else if (REG.adjudication === 'local-arbiter') {
+    t = `Disputes are settled by one key, the arbiter <span class="addr">${esc(REG.arbiter || '')}</span>. `
+      + `Publisher bond ${bond != null ? weiToEth(bond) + ' ETH' : '?'}${win ? ` · challenge window ${win}` : ''}.`;
+    if (bond === '0') t += ' A zero bond means a challenge is free here — fine for a demo, not for money.';
+  } else {
+    t = `Registry <span class="addr">${esc(REG.address)}</span> on chain ${esc(REG.chain_id)}; how it settles disputes could not be read yet.`;
+  }
+  el.innerHTML = t + ' None of this has a setter: changing it means a new deployment.';
+}
+
 // The mainnet library's endpoint, kept apart from the lens RPC because it must be
 // mainnet whatever chain is being indexed.
 function nameRpc() {
@@ -2608,28 +2775,143 @@ function renderAccountRail() {
   }[rev ? rev.state : 'resolving'] || 'resolving…';
 }
 
-// A commitment is only interesting if membership in it is provable, so the proof for
-// whoever is selected is fetched against the latest epoch that has one.
+// evmscan-verify, in the browser. The proof this server hands out is recomputed from
+// the account and its asset list, replayed to the root, then put to HintRegistry on
+// the reader's RPC. The API's hashes are shown beside the recomputed ones and never
+// trusted; where the two disagree, the chain wins and the page says so.
 async function loadProof(addr) {
-  $('proof').hidden = true;
-  $('proof-head').hidden = true;
-  $('proof-note').hidden = true;
-  const e = EPOCHS.find(x => x.status === 'finalized') || EPOCHS[0];
-  if (!e) return;
-  try {
-    const p = await api(`/v1/epochs/${e.id}/proof?account=${encodeURIComponent(addr)}`);
-    $('proof-head').hidden = false;
-    $('proof').hidden = false;
-    $('proof').textContent = JSON.stringify(p, null, 2);
-    $('proof-note').hidden = false;
-    $('proof-note').innerHTML = `Verify with <code>HintRegistry.verifyInclusion</code> against epoch
-      ${p.onchain_epoch_id ?? e.id} — no part of that needs this server.`;
-  } catch {
-    $('proof-head').hidden = false;
-    $('proof-note').hidden = false;
-    $('proof-note').textContent = 'This account is not in the latest commitment.';
+  $('proof-head').hidden = false;
+  $('proof-card').hidden = false;
+  $('proof').textContent = '';
+  const set = (id, html) => { $(id).innerHTML = html; };
+  set('proof-steps', ''); set('proof-verdict', ''); set('proof-how', '');
+  if (!EPOCHS.length) { set('proof-epoch', '<span class="empty">no commitments built yet</span>'); return; }
+  set('proof-epoch', '<span class="empty">choosing an epoch…</span>');
+
+  // 1. Which epoch. The registry's latest finalized one when it can be asked — that is
+  //    the one the gateway serves and the one a reader would check against.
+  let e = null, why = '';
+  if (regRpc() && STATUS) {
+    try {
+      const [found, id] = await regCall('latestFinalizedEpoch', [BigInt(STATUS.chain_id)]);
+      if (found) {
+        e = EPOCHS.find(x => x.onchain_epoch_id === Number(id)) || null;
+        why = e ? `the registry’s latest finalized commitment for chain ${STATUS.chain_id}`
+          : `the registry’s latest finalized epoch is on-chain #${id}, older than this list; the newest here instead`;
+      } else why = 'nothing is finalized on chain for this chain yet; the newest here instead';
+    } catch (err) { why = `the registry could not be asked (${err.message}); the newest here instead`; }
   }
+  if (!e) e = EPOCHS.find(x => x.status === 'finalized') || EPOCHS[0];
+  set('proof-epoch', `Epoch <strong>#${e.id}</strong>${e.onchain_epoch_id != null ? ` (on-chain #${e.onchain_epoch_id})` : ''}`
+    + `${why ? ' — ' + esc(why) : ''}`);
+
+  // 2. The proof, as served.
+  let p;
+  try {
+    p = await api(`/v1/epochs/${e.id}/proof?account=${encodeURIComponent(addr)}`);
+  } catch (err) {
+    if (err.status === 410) {
+      set('proof-verdict', proofVerdict('v-none', 'table pruned',
+        'this epoch’s leaves were pruned here; the root is still on chain, so a mirrored snapshot can prove it and this server no longer can'));
+    } else if (err.status === 404) {
+      set('proof-verdict', proofVerdict('v-none', 'not in this commitment', esc(err.message)));
+    } else {
+      set('proof-verdict', proofVerdict('v-spam', 'proof unavailable', esc(err.message)));
+    }
+    return;
+  }
+  $('proof').textContent = JSON.stringify(p, null, 2);
+
+  // 3. Recompute, never trust. Mirrors internal/merkle: the digest is over the sorted,
+  //    deduplicated 20-byte addresses; the leaf is abi.encode(account, uint64 chainId,
+  //    digest) hashed; the path is a sorted-pair tree with no direction bits.
+  const viem = await import(VIEM_MODULE);
+  const assets = [...new Set((p.assets || []).map(a => a.toLowerCase()))].sort();
+  const assetsHash = viem.keccak256(viem.concat(assets));
+  const chainId = BigInt(p.epoch.chain_id);
+  const account = viem.getAddress(p.account);
+  const leaf = viem.keccak256(viem.encodeAbiParameters(
+    [{ type: 'address' }, { type: 'uint64' }, { type: 'bytes32' }], [account, chainId, assetsHash]));
+  const hashPair = (a, b) => viem.keccak256(viem.concat(a <= b ? [a, b] : [b, a]));
+  let node = leaf.toLowerCase();
+  for (const sib of p.proof || []) node = hashPair(node, sib.toLowerCase());
+  const same = (a, b) => String(a || '').toLowerCase() === String(b || '').toLowerCase();
+  const steps = [
+    proofStep(same(assetsHash, p.assets_hash), `digest over ${assets.length} contract${assets.length === 1 ? '' : 's'}`, assetsHash, p.assets_hash),
+    proofStep(same(leaf, p.leaf), `leaf for chain ${chainId}`, leaf, p.leaf),
+    proofStep(same(node, p.epoch.merkle_root), `${(p.proof || []).length} sibling${(p.proof || []).length === 1 ? '' : 's'} replayed to the root`, node, p.epoch.merkle_root),
+  ];
+  const localOk = same(assetsHash, p.assets_hash) && same(leaf, p.leaf) && same(node, p.epoch.merkle_root);
+  set('proof-steps', steps.join(''));
+  if (!localOk) {
+    set('proof-verdict', proofVerdict('v-spam', 'does not recompute',
+      'a hash this server reported is not what its own inputs produce; nothing on chain needs to be asked to reject this proof'));
+    return;
+  }
+
+  // 4. Ask the contract. verifyInclusion takes the on-chain id and re-derives the leaf
+  //    from the epoch's own chain id, so a built-but-unposted epoch has nothing to ask.
+  const url = regRpc();
+  if (p.onchain_epoch_id == null) {
+    set('proof-verdict', proofVerdict('v-none', 'recomputes · not posted',
+      'the hashes hold, but this epoch is not on chain yet, so there is no contract to ask'));
+    return;
+  }
+  if (!url) {
+    set('proof-verdict', proofVerdict('v-none', 'recomputes · contract not asked',
+      `the hashes hold; add an RPC for chain ${esc(REG ? REG.chain_id : '?')} above to run <code>verifyInclusion</code> as well`));
+    set('proof-how', castLine(p, assetsHash, null));
+    return;
+  }
+  try {
+    const ok = await regCall('verifyInclusion', [BigInt(p.onchain_epoch_id), account, assetsHash, p.proof || []]);
+    let standing = '';
+    try {
+      const on = await readOnchainEpoch(p.onchain_epoch_id);
+      const st = EPOCH_STATUS[Number(on.status)] || `status ${on.status}`;
+      standing = same(on.root, p.epoch.merkle_root)
+        ? `The registry holds the same root and calls this epoch <strong>${esc(st)}</strong>.`
+        : `<span class="err" style="margin:0">The registry holds a different root (${esc(short(on.root, 8))}) for this epoch.</span>`;
+      if (st !== 'finalized') standing += ' This root is not final yet — it can still be disputed and rejected.';
+      if (on.assertionId && !ZERO_HASH.test(on.assertionId)) standing += ` Oracle assertion <span class="addr">${esc(on.assertionId)}</span>.`;
+    } catch (err) { standing = `The epoch itself could not be read back: ${esc(err.message)}.`; }
+    set('proof-verdict', ok
+      ? proofVerdict('v-approved', 'verified on chain',
+        `<code>HintRegistry.verifyInclusion</code> at <span class="addr">${esc(REG.address)}</span> on chain ${esc(REG.chain_id)} returned true, asked on <code>${esc(hostOf(url))}</code>. ${standing}`)
+      : proofVerdict('v-spam', 'rejected by the contract',
+        `the hashes recompute here, yet the registry says this leaf is not under on-chain epoch #${esc(p.onchain_epoch_id)}. ${standing}`));
+  } catch (err) {
+    set('proof-verdict', revertIs(viem, err, 'UnknownEpoch')
+      ? proofVerdict('v-spam', 'unknown epoch', `the registry at <span class="addr">${esc(REG.address)}</span> has no epoch #${esc(p.onchain_epoch_id)}; this server’s record of posting it does not match the chain`)
+      : proofVerdict('v-none', 'contract not asked', `${esc(hostOf(url))} could not answer: ${esc(err.message)}`));
+  }
+  set('proof-how', castLine(p, assetsHash, url));
 }
+
+function proofStep(ok, label, got, served) {
+  return `<div style="display:grid; grid-template-columns:16px minmax(0,1fr); gap:8px">
+      <span class="verdict ${ok ? 'v-approved' : 'v-spam'}">${ok ? '✓' : '✗'}</span>
+      <span>${esc(label)}<br><span class="addr" title="recomputed here: ${esc(got)}${ok ? '' : ' · served: ' + esc(served)}">${esc(short(got, 10))}</span>${ok ? '' : ` <span class="verdict v-spam">served ${esc(short(served, 10))}</span>`}</span>
+    </div>`;
+}
+function proofVerdict(cls, label, note) {
+  return `<span class="verdict ${cls}" style="font-size:12px">${esc(label)}</span>`
+    + (note ? `<div class="hint" style="margin-top:5px">${note}</div>` : '');
+}
+function hostOf(url) { try { return new URL(url).host; } catch { return url; } }
+// The same check from a shell, so nobody has to take the chip's word for it either.
+function castLine(p, digest, url) {
+  const proof = (p.proof || []).join(',');
+  return `Same check anywhere: <code>cast call ${esc(REG.address)} 'verifyInclusion(uint256,address,bytes32,bytes32[])(bool)' `
+    + `${esc(p.onchain_epoch_id)} ${esc(p.account)} ${esc(digest)} '[${esc(proof)}]'${url ? ` --rpc-url ${esc(url)}` : ''}</code>`;
+}
+
+// What a row's local status means when the registry has no copy of it yet.
+const LOCAL_STATUS_NOTE = {
+  built: 'local only — built, not posted',
+  submitted: 'in flight — sent, receipt not yet seen',
+  failed: 'submission failed',
+};
 
 async function loadEpochs() {
   try {
@@ -2643,10 +2925,77 @@ async function loadEpochs() {
         <span class="num mono">${num(e.from_block)}–${num(e.to_block)}</span>
         <span class="verdict ${e.status === 'finalized' ? 'v-approved' : 'v-none'}">${esc(e.status)}</span>
         <span class="addr" title="${esc(e.tx_hash || '')}">${e.tx_hash ? short(e.tx_hash) : '<span class="empty">local</span>'}</span>
+        <span id="ep-on-${e.id}" style="font-size:12.5px; line-height:1.45">${e.onchain_epoch_id == null
+          ? `<span class="empty">${esc(LOCAL_STATUS_NOTE[e.status] || 'not posted')}</span>`
+          : '<span class="empty">reading…</span>'}</span>
+        <span id="ep-snap-${e.id}" style="font-size:12.5px; line-height:1.45">${snapshotCell(e)}</span>
       </div>`).join('')
       : '<div class="empty" style="padding:14px 0">No commitments built yet.</div>';
+    renderDisputeLine();
+    fillOnchain(epochs);
+    fillProbes(epochs);
     if (ACCT_SELECTED) loadProof(ACCT_SELECTED);
   } catch (e) { showErr('epoch-err', e); }
+}
+
+function setCell(id, html) { const el = $(id); if (el) el.innerHTML = html; }
+
+// The registry's view of every posted row, filled in after the table is drawn so the
+// local view never waits on an RPC.
+async function fillOnchain(epochs) {
+  const posted = epochs.filter(e => e.onchain_epoch_id != null);
+  if (!posted.length) return;
+  if (!REG || !REG.address) {
+    const note = STATUS ? 'no registry configured' : 'waiting for status…';
+    for (const e of posted) setCell(`ep-on-${e.id}`, `<span class="empty">${note}</span>`);
+    return;
+  }
+  if (!regRpc()) {
+    for (const e of posted) setCell(`ep-on-${e.id}`, `<span class="empty">needs an RPC for chain ${esc(REG.chain_id)}</span>`);
+    return;
+  }
+  await pool(posted, 4, async e => {
+    try { setCell(`ep-on-${e.id}`, onchainCell(e, await readOnchainEpoch(e.onchain_epoch_id))); }
+    catch (err) { setCell(`ep-on-${e.id}`, `<span class="err" style="margin:0; font-size:12.5px">${esc(err.message)}</span>`); }
+  });
+}
+
+function onchainCell(local, on) {
+  const st = EPOCH_STATUS[Number(on.status)] || `status ${on.status}`;
+  const cls = st === 'finalized' ? 'v-approved' : (st === 'rejected' || st === 'challenged') ? 'v-spam' : 'v-none';
+  const bits = [`<span class="verdict ${cls}">${esc(st)}</span>`];
+  bits.push(String(on.root).toLowerCase() === String(local.merkle_root || '').toLowerCase()
+    ? '<span title="the root this server stores is the one the registry holds">root matches</span>'
+    : `<span class="verdict v-spam" title="on chain: ${esc(on.root)}">root differs from chain</span>`);
+  if (st === 'proposed') {
+    const open = Number(on.challengeDeadline) > Date.now() / 1000;
+    bits.push(open ? `challengeable until ${esc(fmtUnix(on.challengeDeadline))}` : 'window closed · finalizable');
+  }
+  if (on.challenger && !ZERO_ADDR.test(on.challenger)) bits.push(`<span class="addr" title="${esc(on.challenger)}">challenged by ${esc(short(on.challenger))}</span>`);
+  if (on.assertionId && !ZERO_HASH.test(on.assertionId)) bits.push(`<span class="addr" title="oracle assertion ${esc(on.assertionId)}">assertion ${esc(short(on.assertionId))}</span>`);
+  return bits.join('<br>');
+}
+
+// The pointer the chain carries to an epoch's table, and whether anything answers
+// there. '' is the honest state of an epoch published before the pointer existed;
+// ipfs:// would need a gateway this page will not pick for the reader.
+function snapshotCell(e) {
+  const uri = e.uri || '';
+  if (!uri) {
+    return '<span class="empty" title="published before commitment_uri existed; the table can still be dumped by id, but the chain does not say where">no pointer on chain</span>';
+  }
+  if (!/^https?:\/\//i.test(uri)) {
+    return `<span class="addr" title="${esc(uri)}">${esc(uri.slice(0, 24))}${uri.length > 24 ? '…' : ''}</span><br><span class="empty">not probed</span>`;
+  }
+  return `<a class="addr" href="${esc(uri)}" rel="noopener" title="${esc(uri)}">${esc(hostOf(uri))}</a><br><span class="probe empty">probing…</span>`;
+}
+
+async function fillProbes(epochs) {
+  await pool(epochs.filter(e => /^https?:\/\//i.test(e.uri || '')), 4, async e => {
+    const [text, cls, title] = probeVerdict(await probeSnapshot(e.uri));
+    const el = document.querySelector(`#ep-snap-${e.id} .probe`);
+    if (el) el.outerHTML = `<span class="verdict ${cls}" title="${esc(title)}">${esc(text)}</span>`;
+  });
 }
 
 async function buildEpoch() {

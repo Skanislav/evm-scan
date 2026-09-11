@@ -28,6 +28,10 @@ import (
 // It is deliberately open even when AuthToken is set. The token guards endpoints
 // that spend the deployment's money; this one exists to be fetched by strangers,
 // and a recovery path nobody can reach is not a recovery path.
+//
+// HEAD answers with the headers alone. It is how the page asks whether the table
+// behind an epoch's on-chain uri is still here, and that question should not cost
+// a scan of the table to answer.
 func (s *Server) epochSnapshot(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
@@ -43,6 +47,12 @@ func (s *Server) epochSnapshot(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "query failed", err)
+		return
+	}
+
+	if r.Method == http.MethodHead {
+		setSnapshotHeaders(w, id, e.ChainID)
+		w.WriteHeader(http.StatusOK)
 		return
 	}
 
@@ -71,9 +81,7 @@ func (s *Server) epochSnapshot(w http.ResponseWriter, r *http.Request) {
 	// stream. Headers are committed before the first row: once bytes are on the wire
 	// an error cannot become a status code, which is why the coverage read above
 	// happens first.
-	w.Header().Set("Content-Type", "application/x-ndjson")
-	w.Header().Set("Content-Disposition",
-		fmt.Sprintf("attachment; filename=\"evmscan-epoch-%d-chain-%d.ndjson\"", id, e.ChainID))
+	setSnapshotHeaders(w, id, e.ChainID)
 
 	var out io.Writer = w
 	var gz *gzip.Writer
@@ -115,4 +123,11 @@ func (s *Server) epochSnapshot(w http.ResponseWriter, r *http.Request) {
 			s.d.Log.Error("snapshot gzip close failed", "epoch", id, "err", err)
 		}
 	}
+}
+
+// setSnapshotHeaders names the document the same way for GET and HEAD.
+func setSnapshotHeaders(w http.ResponseWriter, id int64, chainID uint64) {
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.Header().Set("Content-Disposition",
+		fmt.Sprintf("attachment; filename=\"evmscan-epoch-%d-chain-%d.ndjson\"", id, chainID))
 }

@@ -166,6 +166,7 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 
 	var (
 		regClient *hintreg.Client
+		regMode   *hintreg.Mode
 		publisher *hintreg.Publisher
 		mirror    *hintreg.Mirror
 	)
@@ -209,11 +210,13 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 		// can be read off a running deployment.
 		adjudication := "unknown"
 		if mode, err := regClient.Mode(ctx); err != nil {
-			// Not fatal: the mirror retries, and a registry we cannot read yet is a
-			// node problem rather than a misconfiguration.
+			// Not fatal: the mirror retries, the API reads it on first ask, and a
+			// registry we cannot read yet is a node problem rather than a
+			// misconfiguration.
 			log.Warn("could not read registry adjudication mode", "err", err)
 		} else {
 			adjudication = mode.String()
+			regMode = &mode
 		}
 		log.Info("hint registry mirrored",
 			"address", addr.Hex(), "chain_id", cfg.Registry.ChainID, "adjudication", adjudication)
@@ -251,6 +254,7 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 			TokenAddresses:    tokenAddrs,
 			Registry:          regClient,
 			RegistryChainID:   cfg.Registry.ChainID,
+			RegistryMode:      regMode,
 			Publisher:         publisher,
 			AllowRegistration: cfg.API.AllowRegistration,
 			AuthToken:         cfg.API.AuthToken,

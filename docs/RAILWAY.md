@@ -43,6 +43,12 @@ Record the printed registry address. The choices above mean:
 | `reward-per-block` | 100 gwei | Paid to the publisher per newly covered block of a funded asset. 0.001 ETH buys 10,000 blocks, about a day of Sepolia; the ~8,000-block Helios window then pays ~0.0008 ETH on first coverage, many times Sepolia gas. |
 | `challenge-window` | 1 h | How long a commitment stays proposed before it can be finalized. |
 
+All of this is read back by `/v1/status` (`registry.adjudication`, `publisher_bond_wei`,
+`challenge_window_seconds`, …) and printed above the commitments table on the page, so a
+reader sees that a challenge is free here before deciding what a finalized root is worth.
+The first commitments this deployment posted predate `commitment_uri` and carry an empty
+`uri`; the page shows them as *no pointer on chain* rather than as a broken link.
+
 Seed it with something to index. Pick two or three active Sepolia tokens and a recent
 block, and pay for them:
 
