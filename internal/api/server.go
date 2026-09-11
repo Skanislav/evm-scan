@@ -417,6 +417,9 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 			// asset and minFunding for one that already exists, so a caller building
 			// that transaction needs both numbers.
 			AssetBondWei string `json:"asset_bond_wei,omitempty"`
+			// ENSParent is the name HintResolver serves the index under, when one is
+			// attached; the page builds <hex>.hints.<parent> from it client-side.
+			ENSParent string `json:"ens_parent,omitempty"`
 		} `json:"registry,omitempty"`
 		Publisher string `json:"publisher,omitempty"`
 	}{}
@@ -488,7 +491,8 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 			RewardPerBlockWei string `json:"reward_per_block_wei,omitempty"`
 			MinFundingWei     string `json:"min_funding_wei,omitempty"`
 			AssetBondWei      string `json:"asset_bond_wei,omitempty"`
-		}{ChainID: s.d.RegistryChainID, Address: s.d.Registry.Address().Hex()}
+			ENSParent         string `json:"ens_parent,omitempty"`
+		}{ChainID: s.d.RegistryChainID, Address: s.d.Registry.Address().Hex(), ENSParent: s.d.ENSParent}
 		if v, err := s.d.Registry.RewardPerBlock(ctx); err == nil {
 			out.Registry.RewardPerBlockWei = v.String()
 		}
