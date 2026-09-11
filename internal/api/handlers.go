@@ -621,9 +621,20 @@ func (s *Server) listEpochs(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "query failed", err)
 		return
 	}
+	// The registry's view rides along for epochs whose window may still be open, so
+	// a reader can see when a commitment stops being challengeable without asking
+	// for each one by id. Finalized rows are settled and need no eth_call; the
+	// whole pass shares one short deadline so a slow registry costs the list a
+	// few fields, never the response.
+	onctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
 	out := make([]epochJSON, 0, len(rows))
 	for _, e := range rows {
-		out = append(out, epochView(e))
+		v := epochView(e)
+		if e.OnchainID != nil && e.Status != store.EpochFinalized && e.Status != store.EpochRejected && onctx.Err() == nil {
+			v = s.withOnchain(onctx, v)
+		}
+		out = append(out, v)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"epochs": out})
 }

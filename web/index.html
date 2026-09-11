@@ -979,7 +979,7 @@ const COLS = {
   hold: 'minmax(0, 1fr) minmax(90px, 130px) minmax(80px, 110px) minmax(90px, 130px) 96px 160px',
   assets: 'minmax(0, 1fr) 64px minmax(96px, 150px) 92px',
   accounts: 'minmax(0, 1.5fr) 72px 80px 120px',
-  epochs: '40px minmax(0, 1fr) 84px 150px 96px 110px',
+  epochs: '40px minmax(0, 1fr) 84px 150px minmax(150px, 210px) 110px',
 };
 for (const [k, v] of Object.entries(COLS)) {
   document.querySelectorAll('.cols-' + k).forEach(el => { el.style.gridTemplateColumns = v; });
@@ -1305,12 +1305,51 @@ function renderClaims() {
     `evmscan-verify -epoch ${fromEpoch ? (fromEpoch.onchain_epoch_id ?? fromEpoch.id) : '<id>'} \\\n  -account ${acct}\n\n` +
     `evmscan-verify -ens \\\n  ${ens}`;
 
+  renderEpochWindow();
+}
+
+// Where a commitment is in its optimistic loop, as words and, while the window is
+// open, as a clock. `challenge_deadline` is the registry's own unix timestamp, read
+// live by the daemon, so the countdown is to the moment the contract stops accepting
+// a challenge — the publisher finalizes a little after that, and a challenge in
+// either mode stops the clock altogether, which is why `onchain_status` is checked
+// before the timer is.
+function hms(secs) {
+  const s = Math.max(0, Math.floor(secs));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
+  const pad = n => (n < 10 ? '0' : '') + n;
+  return h >= 48 ? `${Math.floor(h / 24)} d ${pad(h % 24)}:${pad(m)}:${pad(r)}` : `${h}:${pad(m)}:${pad(r)}`;
+}
+function windowState(e) {
+  if (e.status === 'finalized' || e.onchain_status === 'finalized') return { text: 'finalized', cls: 'v-approved', open: false };
+  if (e.onchain_status === 'challenged') return { text: 'under challenge · awaiting the arbiter', cls: 'v-spam', open: false };
+  if (e.onchain_status === 'rejected' || e.status === 'rejected') return { text: 'rejected', cls: 'v-spam', open: false };
+  if (e.challenge_deadline) {
+    const left = e.challenge_deadline - Date.now() / 1000;
+    if (left > 0) return { text: `challengeable ${hms(left)}`, cls: 'v-none', open: true };
+    return { text: 'window closed · awaiting finalize', cls: 'v-none', open: false };
+  }
+  return { text: e.status, cls: 'v-none', open: false };
+}
+function renderEpochWindow() {
   const pe = $('pill-epoch');
   if (!EPOCHS.length) { pe.hidden = true; return; }
   const latest = EPOCHS[0];
+  const w = windowState(latest);
   pe.hidden = false;
-  pe.textContent = `epoch ${latest.onchain_epoch_id ?? latest.id} · ${latest.status}`;
+  pe.textContent = `epoch ${latest.onchain_epoch_id ?? latest.id} · ${w.text}`;
+  pe.classList.toggle('amber', w.text !== 'finalized');
+  for (const el of document.querySelectorAll('#epochs [data-window]')) {
+    const e = EPOCHS[Number(el.dataset.window)];
+    if (!e) continue;
+    const s = windowState(e);
+    el.textContent = s.text;
+    el.className = `verdict ${s.cls}`;
+  }
 }
+// One tick a second is only worth paying for while a window is open; the check
+// itself is a handful of comparisons over a list that is rarely longer than twenty.
+setInterval(() => { if (EPOCHS.some(e => windowState(e).open)) renderEpochWindow(); }, 1000);
 
 // --------------------------------------------------------------------------
 // Networks
@@ -3621,13 +3660,15 @@ async function loadEpochs() {
   try {
     const { epochs = [] } = await api(onChain('/v1/epochs'));
     EPOCHS = epochs;
-    $('epochs').innerHTML = epochs.length ? epochs.map(e => `
+    $('epochs').innerHTML = epochs.length ? epochs.map((e, i) => `
       <div class="tablerow" style="grid-template-columns:${COLS.epochs}">
         <span class="num mono">${e.id}</span>
         <span class="addr" title="${esc(e.merkle_root)}">${short(e.merkle_root, 8)}</span>
         <span class="num mono">${num(e.leaf_count)}</span>
         <span class="num mono">${num(e.from_block)}–${num(e.to_block)}</span>
-        <span class="verdict ${e.status === 'finalized' ? 'v-approved' : 'v-none'}">${esc(e.status)}</span>
+        <span class="verdict v-none" data-window="${i}" title="${e.challenge_deadline
+          ? 'challenge window closes ' + esc(new Date(e.challenge_deadline * 1000).toISOString().replace('T', ' ').slice(0, 19)) + ' UTC'
+          : esc(e.status)}">${esc(e.status)}</span>
         <span class="addr" title="${esc(e.tx_hash || '')}">${e.tx_hash ? short(e.tx_hash) : '<span class="empty">local</span>'}</span>
       </div>`).join('')
       : '<div class="empty" style="padding:14px 0">No commitments built yet.</div>';
