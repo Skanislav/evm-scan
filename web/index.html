@@ -554,12 +554,21 @@
   .dispute-head { padding: 12px 16px 11px; border-bottom: 1px solid var(--line); font: 500 10px/1 var(--mono); letter-spacing: .09em; text-transform: uppercase; color: var(--ink-65); }
   .dispute-body { padding: 16px; }
   .phases { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 20px; }
-  .phase { flex: 1 1 150px; min-width: 0; padding: 12px 14px; border: 1px solid rgba(20,22,26,.12); border-radius: 8px; }
+  .phase { flex: 1 1 150px; min-width: 0; padding: 12px 14px; border: 1px solid rgba(20,22,26,.12); border-radius: 8px;
+    background: var(--surface); text-align: left; cursor: pointer; font-family: var(--sans); color: var(--ink); }
+  .phase:hover { border-color: rgba(20,22,26,.34); }
   .phase.past { background: var(--card); }
   .phase.now { border-color: var(--amber-line); background: var(--amber-wash); }
+  .phase.sel { box-shadow: 0 0 0 2px var(--ink); border-color: var(--ink); }
   .phase .ph-l { font: 500 10px/1 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--ink-65); margin-bottom: 6px; }
   .phase.now .ph-l { color: var(--amber-text); }
   .phase .ph-d { font: 400 11.5px/1.5 var(--mono); color: var(--ink-70); }
+  .phase-detail { border: 1px solid rgba(20,22,26,.12); border-left: 2px solid var(--ink); border-radius: 8px; background: var(--card); padding: 14px 16px; margin: -8px 0 20px; }
+  .phase-detail h4 { font: 600 13px/1.3 var(--sans); margin: 0 0 8px; }
+  .phase-detail p { font: 400 12.5px/1.6 var(--sans); color: var(--ink-70); margin: 0 0 8px; max-width: 78ch; text-wrap: pretty; }
+  .phase-detail p:last-child { margin-bottom: 0; }
+  .phase-detail .pd-k { font: 500 10px/1 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--ink-65); display: block; margin-bottom: 4px; }
+  .phase-detail .live { font: 400 11.5px/1.5 var(--mono); color: var(--amber-text); }
   .mode-badge { font: 500 9.5px/1 var(--mono); letter-spacing: .04em; text-transform: uppercase; color: #fff; background: var(--blue); border-radius: 3px; padding: 4px 6px; margin-left: 9px; vertical-align: middle; }
   .mode-badge.local { background: var(--amber); }
   .econ { font: 400 11px/1.8 var(--mono); color: var(--ink-70); margin-top: 12px; padding-top: 11px; border-top: 1px solid var(--line); }
@@ -1234,7 +1243,8 @@ evmscan-verify -ens \
         <p class="prose" style="margin:0 0 18px; max-width:700px">A commitment is <em>optimistic</em>: it finalizes on
           its own unless somebody bonds a challenge inside the window. Verifying a root is only worth something if
           disagreeing with it does something, so this is where the page has to be specific.</p>
-        <div class="phases" id="phases"></div>
+        <div class="phases" id="phases" role="tablist" aria-label="phases of a commitment"></div>
+        <div class="phase-detail" id="phase-detail" role="tabpanel"></div>
         <div class="grid2" style="gap:16px">
           <div class="card" id="settle-card">
             <h3>Who settles it here</h3>
@@ -1767,10 +1777,99 @@ function renderPhases() {
     ['04 settled', now === 3 ? `epoch ${id} · ${w.text} · ${w.text === 'finalized' ? 'the bond came back' : 'the publisher forfeited'}`
       : 'unchallenged, it finalizes by itself and the bond comes back'],
   ];
-  el.innerHTML = tiles.map(([l, d], i) => `<div class="phase ${i === now ? 'now' : i < now ? 'past' : ''}">
+  // The reader's pick sticks; before one, the detail follows wherever the epoch is,
+  // or starts at publication when nothing has been published.
+  const sel = PHASE_PICKED ?? (now >= 0 ? now : 0);
+  el.innerHTML = tiles.map(([l, d], i) => `<button class="phase ${i === now ? 'now' : i < now ? 'past' : ''} ${i === sel ? 'sel' : ''}"
+      data-phase="${i}" role="tab" aria-selected="${i === sel}" title="what happens in this step">
       <div class="ph-l">${esc(l)}${i === now ? ' · now' : ''}</div>
       <div class="ph-d">${esc(d)}</div>
-    </div>`).join('');
+    </button>`).join('');
+  el.querySelectorAll('[data-phase]').forEach(b => b.addEventListener('click', () => {
+    PHASE_PICKED = Number(b.dataset.phase);
+    renderPhases();
+  }));
+  renderPhaseDetail(sel, { e, id, now, w, left, oracle });
+}
+
+// Which step the reader clicked, or null to follow the epoch.
+let PHASE_PICKED = null;
+
+// What happens in one step, in this deployment's mode, with the live numbers in it.
+// The contract is the source: publishIndex, challengeIndex, resolveChallenge,
+// finalizeIndex, _resolve and claimCoverage, in that order of appearance.
+function renderPhaseDetail(i, ctx) {
+  const el = $('phase-detail');
+  if (!el) return;
+  const { e, id, now, w, left, oracle } = ctx;
+  const reg = REG || {};
+  const bond = reg.publisher_bond ? fmtBond() : 'the publisher bond';
+  const cur = reg.bond_currency_symbol || (reg.bond_currency ? short(reg.bond_currency, 4) : 'the bond currency');
+  const win = reg.challenge_window_seconds ? windowLabel(reg.challenge_window_seconds) : 'the challenge window';
+  const rpb = reg.reward_per_block_wei ? `${fmtGwei(reg.reward_per_block_wei)} gwei` : 'rewardPerBlock';
+  const arbiter = reg.arbiter ? `<code>${esc(short(reg.arbiter))}</code>` : 'the arbiter key';
+  const known = !!reg.mode;
+  const epoch = id !== null ? `epoch ${esc(String(id))}` : 'the epoch';
+  const modeNote = known ? '' : `<p class="live">This deployment has not said which mode it is in yet, so both readings are shown.</p>`;
+  const both = (o, l) => known ? (oracle ? o : l) : `${o} ${l}`;
+
+  let live = '';
+  if (e) {
+    if (i === now) {
+      live = now === 1 ? `${epoch} · ${hms(left)} left in the window`
+        : now === 2 ? `${epoch} · challenged · ${oracle ? "waiting on UMA's vote" : 'waiting on the arbiter'}`
+        : now === 3 ? `${epoch} · ${w.text}`
+        : `${epoch} · ${w.text}`;
+    } else if (i < now) live = `${epoch} has passed this step`;
+    else live = `${epoch} has not reached this step`;
+  } else live = 'no epoch has been published yet';
+
+  const body = [
+    // 01 published
+    `<h4>01 · Published — the publisher stakes a claim</h4>
+     <p>The publisher's daemon calls <code>publishIndex</code> with three things: the merkle root over every
+       account's set of contracts, the coverage root over the block ranges it stands behind per asset, and the URI of
+       the manifest naming the snapshot and its filter digest. The registry stores the epoch as <em>proposed</em> and
+       fixes its deadline at that moment plus ${esc(win)}.</p>
+     <p>${both(
+       `In oracle mode the same transaction asserts the root to UMA's Optimistic Oracle V3, pulling ${esc(bond)} from the publisher in ${esc(cur)} as the bond.`,
+       `In local-arbiter mode the bond of ${esc(bond)} rides along as the transaction's value.`)}</p>
+     <p>Nothing reads from it yet: the gateway, the ENS resolver and every mirror keep answering from the last
+       finalized epoch. Proofs against the new root can be fetched and checked from the first block, which is what the
+       window is for — <code>evmscan-verify -epoch</code> and <code>-filter</code> do exactly that.</p>`,
+    // 02 challengeable
+    `<h4>02 · Challengeable — anyone may dispute, for a price</h4>
+     <p>For ${esc(win)} after publication anyone may call <code>challengeIndex</code> on the epoch. ${both(
+       `In oracle mode the call carries no value; the registry pulls a bond equal to the publisher's, ${esc(bond)} in ${esc(cur)}, from the challenger and raises the dispute at the oracle.`,
+       `In local-arbiter mode the call must carry exactly the publisher's bond, ${esc(bond)}, as its value.`)}
+       The epoch becomes <em>challenged</em> and the deadline stops mattering.</p>
+     <p>The bond is what a challenge costs to lose, and it also prices stalling: disputing an honest epoch costs the
+       challenger the same amount a dishonest publisher would forfeit. A challenge with no bond would let anyone
+       hold every epoch hostage for free.</p>
+     <p>Once the deadline passes with no challenge, this step is over and nothing can dispute the epoch any more.
+       The "Challenge epoch" button below sends this call from your wallet while the window is open.</p>`,
+    // 03 challenged
+    `<h4>03 · Challenged — somebody else decides</h4>
+     <p>${both(
+       `In oracle mode the dispute goes to UMA's Data Verification Mechanism: token holders vote on whether the asserted root was truthful. When the vote resolves, the oracle calls the registry back and the epoch finalizes or is rejected accordingly; the bonds settle at the oracle under UMA's rules, the winner paid from the loser's stake. The registry has no arbiter and <code>resolveChallenge</code> reverts permanently, so no key here can shortcut the vote.`,
+       `In local-arbiter mode the arbiter, ${arbiter}, calls <code>resolveChallenge</code> with a verdict. Upheld: the epoch finalizes and the publisher receives both bonds. Not upheld: the epoch is rejected and the challenger receives both. That key is the whole adjudication, which is why this mode is called a trusted deployment.`)}</p>
+     <p>While a challenge is pending nothing else can move the epoch, and the previously finalized epoch stays the one
+       every reader is served. A disputed root is never served as latest, however long the decision takes.</p>`,
+    // 04 settled
+    `<h4>04 · Settled — the root becomes the answer, or never does</h4>
+     <p>Unchallenged past its deadline, the epoch is finalized by anyone calling <code>finalizeIndex</code> — the
+       publisher's daemon does it on its own. ${both(
+       `In oracle mode that settles the assertion at the oracle, which returns the publisher's bond.`,
+       `In local-arbiter mode the registry returns the publisher's bond directly.`)}
+       The epoch becomes <em>finalized</em> and <code>latestFinalizedEpoch</code> moves forward, so the gateway,
+       the ENS resolver and every mirror start answering from this root.</p>
+     <p>Then <code>claimCoverage</code> pays the publisher ${esc(rpb)} per newly covered block of each funded asset,
+       proven against the coverage root. That is how the gas was sponsored: the publisher fronted it and the people
+       who funded the assets pay it back, once and only once per block.</p>
+     <p>A rejected epoch settles the other way: its root never becomes latest and the publisher's bond went to the
+       challenger. Either way the rules that decided it were fixed at deployment and have no setters.</p>`,
+  ][i];
+  el.innerHTML = `${body}${modeNote}<p class="live" style="margin-top:8px"><span class="pd-k">right now</span>${esc(live)}</p>`;
 }
 
 // The bond as a person reads it: an amount of the bond currency in oracle mode, ETH
