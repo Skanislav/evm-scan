@@ -28,6 +28,7 @@ import (
 	"github.com/Skanislav/evm-scan/internal/chain"
 	"github.com/Skanislav/evm-scan/internal/chainset"
 	"github.com/Skanislav/evm-scan/internal/config"
+	"github.com/Skanislav/evm-scan/internal/hintfilter"
 	"github.com/Skanislav/evm-scan/internal/hintreg"
 	"github.com/Skanislav/evm-scan/internal/store"
 )
@@ -90,6 +91,12 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 	defer cancel()
 
 	sv := &supervisor{st: st, set: set, log: log, runCtx: runCtx, cancel: cancel, wg: &wg}
+	// Token lists come from config, so they are loaded once here alongside the
+	// chains that config names. A chain added over HTTP later has no configured
+	// list and simply gets no token filter, which is the same answer as a
+	// configured chain that named none.
+	tokenFilters := map[uint64]*hintfilter.Cache{}
+	tokenAddrs := map[uint64][]common.Address{}
 
 	for _, c := range cfg.Chains {
 		if err := sv.startConfigChain(ctx, c); err != nil {
@@ -117,6 +124,18 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 				"twap_window", p.TWAPWindow())
 		} else {
 			log.Info("price discovery off: no on-chain sources configured for this chain", "chain_id", c.ChainID)
+		}
+
+		// Token lists are fetched once, here, rather than on a request path. They
+		// are the one third-party HTTP dependency in this process, and a failure to
+		// reach one is logged and shrugged off: an optional hint should never be
+		// the reason a deployment will not start.
+		tf, addrs, err := api.LoadTokenLists(ctx, c.ChainID, c.TokenLists, log)
+		if err != nil {
+			log.Warn("no token filter for this chain", "chain_id", c.ChainID, "err", err)
+		} else if tf != nil {
+			tokenFilters[c.ChainID] = tf
+			tokenAddrs[c.ChainID] = addrs
 		}
 	}
 
@@ -228,6 +247,8 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 			StopChain:         sv.Stop,
 			ENS:               ensResolver,
 			ENSParent:         cfg.Registry.ENSParent,
+			TokenFilters:      tokenFilters,
+			TokenAddresses:    tokenAddrs,
 			Registry:          regClient,
 			RegistryChainID:   cfg.Registry.ChainID,
 			Publisher:         publisher,

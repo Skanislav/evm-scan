@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -26,6 +27,7 @@ import (
 	"github.com/Skanislav/evm-scan/internal/config"
 	"github.com/Skanislav/evm-scan/internal/ens"
 	"github.com/Skanislav/evm-scan/internal/evmlog"
+	"github.com/Skanislav/evm-scan/internal/hintfilter"
 	"github.com/Skanislav/evm-scan/internal/hintreg"
 	"github.com/Skanislav/evm-scan/internal/price"
 	"github.com/Skanislav/evm-scan/internal/store"
@@ -74,6 +76,12 @@ type Deps struct {
 	CORSOrigin string
 	WebDir     string
 	Log        *slog.Logger
+	// TokenFilters are the compiled token lists, keyed by chain id. Built by
+	// LoadTokenLists before the server starts, because fetching third-party URLs is
+	// startup work and does not belong on a request path.
+	TokenFilters map[uint64]*hintfilter.Cache
+	// TokenAddresses is the enumerable form of the same lists, keyed by chain id.
+	TokenAddresses map[uint64][]common.Address
 }
 
 // Server routes and serves the API.
@@ -86,12 +94,83 @@ type Server struct {
 	// contract's metadata does not change, and reading it costs a verified eth_call
 	// on a light client, so it is worth never asking twice.
 	meta tokenMetaCache
+	// hints are the published membership filters, keyed by the name in their URL.
+	// A fixed set of names, so the name in a request can never become a path.
+	//
+	// Token filters are put here at startup, because they come from lists fetched
+	// once. Index filters are made on first ask instead: chains come and go at
+	// runtime now, and anything built eagerly per chain would miss one added later
+	// and strand one removed.
+	hintsMu   sync.Mutex
+	hints     map[string]*hintfilter.Cache
+	hintLists map[string][]common.Address
+}
+
+// indexFilter returns the index filter cache for a chain, making it on first ask.
+func (s *Server) indexFilter(chainID uint64) *hintfilter.Cache {
+	name := indexFilterName(chainID)
+	s.hintsMu.Lock()
+	defer s.hintsMu.Unlock()
+	if c, ok := s.hints[name]; ok {
+		return c
+	}
+	if s.d.Store == nil {
+		return nil
+	}
+	c := hintfilter.NewCache(chainID,
+		func(ctx context.Context, toBlock uint64) ([]hintfilter.AccountAssetSet, error) {
+			sets, err := s.d.Store.SnapshotIndex(ctx, chainID, toBlock)
+			if err != nil {
+				return nil, err
+			}
+			out := make([]hintfilter.AccountAssetSet, len(sets))
+			for i, v := range sets {
+				out[i] = hintfilter.AccountAssetSet{Account: v.Account, Assets: v.Assets}
+			}
+			return out, nil
+		},
+		func(ctx context.Context) (uint64, uint64, error) {
+			return s.d.Store.CoverageRange(ctx, chainID)
+		})
+	s.hints[name] = c
+	return c
+}
+
+// lookupHint finds a filter by the name in its URL, making an index filter for a
+// chain this deployment runs if it has not been asked for yet. A name that is not
+// one of ours resolves to nothing — never to a path.
+func (s *Server) lookupHint(name string) (*hintfilter.Cache, bool) {
+	s.hintsMu.Lock()
+	c, ok := s.hints[name]
+	s.hintsMu.Unlock()
+	if ok {
+		return c, true
+	}
+	for _, e := range s.d.Chains.Entries() {
+		if name == indexFilterName(e.ID) {
+			if c := s.indexFilter(e.ID); c != nil {
+				return c, true
+			}
+		}
+	}
+	return nil, false
 }
 
 // New builds the router.
 func New(d Deps) *Server {
 	s := &Server{d: d, mux: http.NewServeMux(), started: time.Now()}
-
+	s.hints = map[string]*hintfilter.Cache{}
+	s.hintLists = map[string][]common.Address{}
+	for chainID, c := range d.TokenFilters {
+		if c != nil {
+			s.hints[tokenFilterName(chainID)] = c
+		}
+	}
+	for chainID, addrs := range d.TokenAddresses {
+		if len(addrs) > 0 {
+			s.hintLists[tokenFilterName(chainID)] = addrs
+		}
+	}
 	s.mux.HandleFunc("GET /v1/health", s.health)
 	s.mux.HandleFunc("GET /v1/status", s.status)
 	s.mux.HandleFunc("GET /v1/chains", s.listChains)
@@ -110,6 +189,8 @@ func New(d Deps) *Server {
 	s.mux.HandleFunc("GET /v1/graph", s.graph)
 	s.mux.HandleFunc("GET /v1/prices", s.listPrices)
 	s.mux.HandleFunc("GET /v1/lens", s.listLenses)
+	s.mux.HandleFunc("GET /v1/hints", s.listHints)
+	s.mux.HandleFunc("GET /v1/hints/{file}", s.serveHintFilter)
 	s.mux.HandleFunc("GET /v1/candidates", s.listCandidates)
 	s.mux.HandleFunc("POST /v1/candidates/{address}/promote", s.promoteCandidate)
 	s.mux.HandleFunc("POST /v1/candidates/{address}/spam", s.markCandidateSpam)

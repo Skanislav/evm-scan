@@ -1622,6 +1622,385 @@ async function lensBalances(addr, addrs) {
   return out;
 }
 
+
+
+// ---------------------------------------------------------------------------
+// Hint filters: membership tests the reader runs, so the daemon is never asked.
+//
+// Every other way this page answers "what does this account hold" puts the address
+// in a URL. That is unforgeable — the registry's callback re-derives the leaf and
+// checks it against the on-chain root — and not private: the operator learns who
+// asked, every time. A filter closes that. It is one static file, byte-identical
+// for every visitor, so fetching it says nothing about who is fetching, and the
+// test runs here.
+//
+// The Go writer is internal/hintfilter/codec.go. The two implementations must agree
+// byte for byte, which is the same discipline internal/merkle keeps against the
+// Solidity verifier; internal/hintfilter/testdata is the fixture that holds them
+// together, and hintSelfTest() below replays it.
+//
+// All of this is 64-bit, which JavaScript's Number is not. Every intermediate is a
+// BigInt masked back to 64 bits after each multiply, because BigInt otherwise grows
+// without bound and stops matching Go's wraparound.
+// ---------------------------------------------------------------------------
+const XORF_DOMAIN = 'evmscan/xorf/v1';
+const M64 = (1n << 64n) - 1n;
+const u64 = (x) => x & M64;
+
+// murmur64, from xorfilter/xorfilter.go.
+function murmur64(h) {
+  h = u64(h);
+  h ^= h >> 33n;
+  h = u64(h * 0xff51afd7ed558ccdn);
+  h ^= h >> 33n;
+  h = u64(h * 0xc4ceb9fe1a85ec53n);
+  h ^= h >> 33n;
+  return h;
+}
+
+// bits.Mul64 returns the high 64 bits of a 128-bit product. This is the one place
+// where a Number would silently drop everything that matters.
+const mulHigh64 = (a, b) => (a * b) >> 64n;
+
+function xorfDecode(buf) {
+  const b = new Uint8Array(buf);
+  const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  if (b.length < 34) throw new Error('xorf: too short');
+  if (String.fromCharCode(b[0], b[1], b[2], b[3]) !== 'XORF') throw new Error('xorf: bad magic');
+  if (b[4] !== 1) throw new Error(`xorf: version ${b[4]}, want 1`);
+
+  const f = {
+    blinded: (b[5] & 1) !== 0,
+    structure: b[6],
+    chainId: dv.getBigUint64(7),
+    kind: b[15],
+    epochId: dv.getBigInt64(16),
+    toBlock: dv.getBigUint64(24),
+  };
+  const descLen = dv.getUint16(32);
+  let off = 34;
+  f.desc = descLen ? JSON.parse(new TextDecoder().decode(b.subarray(off, off + descLen))) : null;
+  off += descLen;
+  f.count = dv.getBigUint64(off); off += 8;
+
+  if (f.structure === 2) {
+    if (b.length - off !== Number(f.count) * 8) throw new Error('xorf: key length mismatch');
+    f.keys = new BigUint64Array(Number(f.count));
+    for (let i = 0; i < f.keys.length; i++) { f.keys[i] = dv.getBigUint64(off); off += 8; }
+  } else if (f.structure === 1) {
+    f.seed = dv.getBigUint64(off);
+    f.segmentLength = dv.getUint32(off + 8);
+    f.segmentLengthMask = dv.getUint32(off + 12);
+    f.segmentCount = dv.getUint32(off + 16);
+    f.segmentCountLength = dv.getUint32(off + 20);
+    const fpLen = dv.getUint32(off + 24);
+    off += 28;
+    if (b.length - off !== fpLen) throw new Error('xorf: fingerprint length mismatch');
+    f.fingerprints = b.subarray(off, off + fpLen);
+  } else {
+    throw new Error(`xorf: unknown structure ${f.structure}`);
+  }
+  return f;
+}
+
+function xorfContains(f, key) {
+  key = BigInt.asUintN(64, key);
+  if (f.structure === 2) {
+    let lo = 0, hi = f.keys.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (f.keys[mid] < key) lo = mid + 1; else hi = mid;
+    }
+    return lo < f.keys.length && f.keys[lo] === key;
+  }
+  // getHashFromHash, from xorfilter/binaryfusefilter.go.
+  const hash = murmur64(u64(key + f.seed));
+  let fp = Number((hash ^ (hash >> 32n)) & 0xffn);
+  const h0 = Number(mulHigh64(hash, BigInt(f.segmentCountLength)) & 0xffffffffn);
+  let h1 = (h0 + f.segmentLength) >>> 0;
+  let h2 = (h1 + f.segmentLength) >>> 0;
+  h1 = (h1 ^ (Number((hash >> 18n) & 0xffffffffn) & f.segmentLengthMask)) >>> 0;
+  h2 = (h2 ^ (Number(hash & 0xffffffffn) & f.segmentLengthMask)) >>> 0;
+  fp ^= f.fingerprints[h0] ^ f.fingerprints[h1] ^ f.fingerprints[h2];
+  return (fp & 0xff) === 0;
+}
+
+// Key derivation. The subkey uses the reader's secret exactly once and is separated
+// by domain, chain and kind, so a filter built for one of those cannot be tested
+// with material minted for another.
+//
+//   subkey = keccak256(secret || "evmscan/xorf/v1" || uint64be(chainId) || uint8(kind))
+//   key    = uint64be(keccak256(subkey || part...)[0:8])
+const hexToBytes = (h) => {
+  const s = h.startsWith('0x') ? h.slice(2) : h;
+  const out = new Uint8Array(s.length / 2);
+  for (let i = 0; i < out.length; i++) out[i] = parseInt(s.substr(i * 2, 2), 16);
+  return out;
+};
+const bytesCat = (...arrs) => {
+  const n = arrs.reduce((s, a) => s + a.length, 0);
+  const o = new Uint8Array(n);
+  let i = 0;
+  for (const a of arrs) { o.set(a, i); i += a.length; }
+  return o;
+};
+const be64 = (v) => { const o = new Uint8Array(8); new DataView(o.buffer).setBigUint64(0, BigInt(v)); return o; };
+
+async function xorfSubkey(secret, chainId, kind) {
+  const viem = await import(VIEM_MODULE);
+  const buf = bytesCat(secret, new TextEncoder().encode(XORF_DOMAIN), be64(chainId), Uint8Array.of(kind));
+  return hexToBytes(viem.keccak256(buf));
+}
+async function xorfKey(subkey, ...parts) {
+  const viem = await import(VIEM_MODULE);
+  const digest = hexToBytes(viem.keccak256(bytesCat(subkey, ...parts)));
+  return new DataView(digest.buffer).getBigUint64(0);
+}
+const tokenKey = (sub, token) => xorfKey(sub, hexToBytes(token));
+const pairKey = (sub, account, token) => xorfKey(sub, hexToBytes(account), hexToBytes(token));
+
+// Filters are cached per name for the life of the page. They are content-addressed
+// and revalidate with an ETag, so a repeat visit usually costs a 304.
+const hintCache = new Map();
+async function hintFilter(name) {
+  if (!hintCache.has(name)) {
+    hintCache.set(name, (async () => {
+      const res = await fetch(`/v1/hints/${name}.xorf`);
+      if (!res.ok) throw new Error(`/v1/hints/${name}.xorf: ${res.status}`);
+      return xorfDecode(await res.arrayBuffer());
+    })().catch(e => { hintCache.delete(name); throw e; }));
+  }
+  return hintCache.get(name);
+}
+
+let hintIndex = null;
+async function hints() {
+  if (!hintIndex) hintIndex = api('/v1/hints').then(r => r.filters).catch(e => { hintIndex = null; throw e; });
+  return hintIndex;
+}
+
+// hintSelfTest replays internal/hintfilter/testdata through the reader above.
+//
+// It exists because a reader that is subtly wrong does not throw — it quietly
+// reports every token absent, which looks exactly like an empty wallet. Run it from
+// the console after touching any of the arithmetic above.
+//
+// The vectors are not served by this deployment; they live in the repo next to the
+// Go writer that produced them. Copy them where the page can reach them first:
+//
+//   cp -r internal/hintfilter/testdata web/testdata
+//   # then, in the console:
+//   await hintSelfTest()
+//
+// The authoritative run is `go test ./internal/hintfilter`, which checks the same
+// fixture from the other side. This is the browser half of that.
+async function hintSelfTest(base = '/testdata') {
+  const spec = await (await fetch(`${base}/vectors.json`)).json();
+  let pass = 0, fail = 0;
+  for (const c of spec.cases) {
+    const f = xorfDecode(await (await fetch(`${base}/${c.file}`)).arrayBuffer());
+    const sub = await xorfSubkey(hexToBytes(c.secret_hex), c.chain_id, c.kind);
+    const subHex = '0x' + [...sub].map(b => b.toString(16).padStart(2, '0')).join('');
+    subHex === c.subkey_hex ? pass++ : (fail++, console.error(`${c.name}: subkey ${subHex} != ${c.subkey_hex}`));
+    for (const p of c.members) {
+      const k = await xorfKey(sub, ...p.parts_hex.map(hexToBytes));
+      xorfContains(f, k) ? pass++ : (fail++, console.error(`${c.name}: FALSE NEGATIVE on ${p.parts_hex[0]}`));
+    }
+  }
+  console.log(`hint self-test: ${pass} passed, ${fail} failed`);
+  return fail === 0;
+}
+window.hintSelfTest = hintSelfTest;
+
+
+// ---------------------------------------------------------------------------
+// Where a blinding secret comes from.
+//
+// A filter built under a secret can be tested but not enumerated, and only by
+// whoever holds the secret. That inverts usefully: you read your own filter by
+// walking a public token list and testing each entry — the dictionary "attack" is
+// the read path — while anyone else holds the same file and the same list and
+// learns nothing. So a blinded .xorf is a private watchlist that a dumb, untrusted
+// host can store, and the thing that unlocks it never reaches that host.
+//
+// Three providers, one 32-byte answer. They are not equivalent, and the trade is
+// stated here rather than buried, because the reader is the one who lives with it.
+// ---------------------------------------------------------------------------
+
+// The message a wallet signs. Deliberately a bare constant: no origin, no nonce, no
+// timestamp.
+//
+// The usual advice is to bind a signed message to its origin, which would stop
+// another site harvesting the same secret. It would also mean a filter built on a
+// hosted UI is unreadable on your own daemon — and self-hosting is the point of
+// this project, so the trade goes the other way. What the reader is doing here is
+// deriving a key, not authenticating a session, so replay is not the threat; the
+// threat is a hostile site prompting the same string, and the mitigation is that
+// the prompt is visible and the string says what it is for.
+const XORF_SIGN_MESSAGE = 'evmscan/xorf/v1';
+
+// Secrets are cached for the page's lifetime and never persisted. Re-deriving costs
+// a wallet prompt or a passkey tap, and a wallet's determinism is a property to
+// lean on once rather than to keep testing.
+const secretCache = new Map();
+
+// Passkey. The WebAuthn prf extension is a random oracle bound to a credential:
+// same credential, same input, same 32 bytes, on any device that holds it. This is
+// the strongest of the three — nobody guesses 32 bytes of authenticator entropy.
+//
+// The catch, which has to be said where the reader chooses: passkeys are bound to
+// an origin. A filter blinded under a credential created here cannot be read on
+// localhost or on someone else's deployment. Strongest secret, least portable.
+//
+// Note the API is not symmetric. create() takes `eval`; get() takes
+// `evalByCredential`, keyed by base64url credential id, and rejects outright if
+// allowCredentials is empty.
+async function passkeySecret(credIdB64) {
+  if (!window.PublicKeyCredential) throw new Error('this browser has no WebAuthn');
+  const credId = b64urlToBytes(credIdB64);
+  const assn = await navigator.credentials.get({
+    publicKey: {
+      challenge: crypto.getRandomValues(new Uint8Array(32)),
+      allowCredentials: [{ id: credId, type: 'public-key' }],
+      userVerification: 'preferred',
+      extensions: { prf: { evalByCredential: { [credIdB64]: { first: new TextEncoder().encode(XORF_SIGN_MESSAGE) } } } },
+    },
+  });
+  const out = assn.getClientExtensionResults()?.prf?.results?.first;
+  // An authenticator without prf support returns nothing rather than failing. Say
+  // so loudly: silently falling through to a weaker mode is how a reader ends up
+  // believing a filter is protected by something it is not.
+  if (!out) throw new Error('this authenticator does not support the prf extension');
+  return new Uint8Array(out);
+}
+
+// Register a passkey for this purpose. Returns the credential id to keep.
+async function passkeyCreate(label) {
+  const cred = await navigator.credentials.create({
+    publicKey: {
+      challenge: crypto.getRandomValues(new Uint8Array(32)),
+      rp: { name: 'evm-scan' },
+      user: { id: crypto.getRandomValues(new Uint8Array(16)), name: label || 'watchlist', displayName: label || 'watchlist' },
+      pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
+      authenticatorSelection: { residentKey: 'preferred', userVerification: 'preferred' },
+      extensions: { prf: {} },
+    },
+  });
+  // enabled:false here means prf will not work at assertion time either, so refuse
+  // now rather than after the reader has built a filter they cannot reopen.
+  if (cred.getClientExtensionResults()?.prf?.enabled === false) {
+    throw new Error('this authenticator cannot do prf; try a platform passkey');
+  }
+  return bytesToB64url(new Uint8Array(cred.rawId));
+}
+
+// Hardware wallet. No wallet computes an arbitrary HMAC, but every one signs
+// deterministically — Ledger and Trezor both use RFC 6979 — so a fixed message
+// yields the same bytes every time and keccak of it is a stable secret.
+//
+// This is what makes BIP-39 passphrases work for free: a hidden wallet derives a
+// different seed, so a different address, so a different signature, so a different
+// filter. The passphrase partitions watchlists with no extra mechanism.
+//
+// The signature is key material. It is never sent anywhere, and it is cached rather
+// than re-derived, because determinism is a per-wallet property to rely on once
+// rather than to keep re-testing.
+async function walletSecret() {
+  if (!window.ethereum) throw new Error('no wallet is available in this browser');
+  const [account] = await window.ethereum.request({ method: 'eth_requestAccounts' });
+  const sig = await window.ethereum.request({ method: 'personal_sign', params: [XORF_SIGN_MESSAGE, account] });
+  const viem = await import(VIEM_MODULE);
+  return { secret: hexToBytes(viem.keccak256(sig)), account };
+}
+
+// Password. The fallback, and the one with teeth.
+//
+// A published blinded filter is its own offline oracle: an attacker guesses a
+// password, derives the subkey, tests a thousand popular tokens, and a hit rate far
+// above the filter's 0.4% confirms the guess. Against a fast hash that is instant,
+// which is why this must never be a bare keccak.
+//
+// PBKDF2 is used because it is native to WebCrypto and this page ships no vendored
+// code. It is markedly weaker against GPU attack than Argon2id would be, and that
+// is a real gap rather than a quibble — the UI says so at the moment of choice, and
+// the honest guidance is to use a passkey and treat this as compatibility.
+const XORF_PBKDF2_ITERATIONS = 600000;
+async function passwordSecret(password, saltB64) {
+  const salt = saltB64 ? b64urlToBytes(saltB64) : crypto.getRandomValues(new Uint8Array(16));
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', hash: 'SHA-256', salt, iterations: XORF_PBKDF2_ITERATIONS }, key, 256);
+  return { secret: new Uint8Array(bits), kdfSalt: bytesToB64url(salt) };
+}
+
+const b64urlToBytes = (s) => {
+  const b = atob(s.replace(/-/g, '+').replace(/_/g, '/'));
+  return Uint8Array.from(b, c => c.charCodeAt(0));
+};
+const bytesToB64url = (b) =>
+  btoa(String.fromCharCode(...b)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
+// Build a blinded watchlist in the browser.
+//
+// Only the sorted-u64 structure is built here. A binary-fuse filter needs a peeling
+// loop with retries, and a second implementation of that in a second language is a
+// bad trade at this size: a 500-token watchlist is 565 bytes as a fuse filter and
+// 4 KB as a sorted array. The reader implements both structures; the builder
+// implements the one that does not need an algorithm.
+async function buildWatchlist(tokens, chainId, secret, desc) {
+  const sub = await xorfSubkey(secret, chainId, 1 /* KindToken */);
+  const keys = [];
+  for (const t of tokens) keys.push(await tokenKey(sub, t));
+  keys.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  const uniq = keys.filter((k, i) => i === 0 || k !== keys[i - 1]);
+
+  const descBytes = desc ? new TextEncoder().encode(JSON.stringify(desc)) : new Uint8Array(0);
+  const out = new Uint8Array(34 + descBytes.length + 8 + uniq.length * 8);
+  const dv = new DataView(out.buffer);
+  out.set(new TextEncoder().encode('XORF'), 0);
+  out[4] = 1;
+  // Blinded is set exactly when the secret is non-empty. Nothing downstream can
+  // check this against the keys — by then they are opaque 64-bit values — so a file
+  // that gets it wrong is worse than corrupt: it reads as public and answers no to
+  // everything.
+  out[5] = secret.length > 0 ? 1 : 0;
+  out[6] = 2; // sorted-u64
+  dv.setBigUint64(7, BigInt(chainId));
+  out[15] = 1; // KindToken
+  dv.setBigInt64(16, -1n); // no epoch
+  dv.setBigUint64(24, 0n); // no toBlock
+  dv.setUint16(32, descBytes.length);
+  out.set(descBytes, 34);
+  let off = 34 + descBytes.length;
+  dv.setBigUint64(off, BigInt(uniq.length)); off += 8;
+  for (const k of uniq) { dv.setBigUint64(off, k); off += 8; }
+  return out;
+}
+window.buildWatchlist = buildWatchlist;
+
+// markUnlisted annotates rows with whether any configured token list vouches for
+// the contract. Absent filter, absent annotation: "nobody vouched" and "there was
+// nobody to ask" are different answers, and a page that showed the second as the
+// first would mark every token on a list-less deployment as junk.
+async function markUnlisted(rows, chainId) {
+  if (!rows.length || chainId === undefined || chainId === null) return;
+  let f;
+  try {
+    f = await hintFilter(`tokens-${chainId}`);
+  } catch {
+    return; // no list configured for this chain
+  }
+  const sub = await xorfSubkey(new Uint8Array(0), chainId, 1 /* KindToken */);
+  for (const a of rows) {
+    if (!a.address) continue;
+    // ERC-721 and ERC-1155 are deliberately not marked. Token lists are lists of
+    // fungible tokens, so every NFT would come back unlisted and the flag would
+    // stop meaning anything.
+    if (a.standard && a.standard !== 'erc20') continue;
+    a.unlisted = !xorfContains(f, await tokenKey(sub, a.address));
+  }
+}
+
 function showRpcNote(html, warn) {
   const n = $('rpc-note');
   n.innerHTML = (warn ? '<strong>Heads up:</strong> ' : '') + html
@@ -1986,6 +2365,17 @@ async function lookup() {
     const extra = ask.length ? await heldBalances(addr, ask) : [];
 
     HOLDINGS = indexed.concat(extra);
+
+    // Mark contracts no token list vouches for. The test runs here, against a
+    // filter this browser already holds, so flagging junk costs no request and
+    // tells the daemon nothing about what is being looked at.
+    //
+    // It marks and never hides: token lists are curated and therefore incomplete,
+    // so dropping what is not on one would hide real holdings of long-tail tokens
+    // — a false negative in front of a reader, which is the one failure this whole
+    // path exists to avoid.
+    await markUnlisted(HOLDINGS, r.chain_id);
+
     $('wallet-head').hidden = false;
     $('wallet-name').textContent = WALLET_NAME || short(addr, 8);
     $('wallet-addr').textContent = addr;
@@ -2092,6 +2482,7 @@ function renderHoldings() {
         <div class="row" style="gap:9px">
           <span class="sym">${h.symbol ? esc(h.symbol) : '<span class="empty">unknown</span>'}</span>
           <span class="nm">${esc(h.name || '')}</span>
+          ${h.unlisted ? '<span class="tag" title="no token list this deployment loaded vouches for this contract. Checked in your browser, against a filter already downloaded — the daemon was not asked.">unlisted</span>' : ''}
         </div>
         <div class="addr">${esc(h.address)}</div>
       </div>
