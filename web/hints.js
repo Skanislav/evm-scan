@@ -92,7 +92,16 @@ async function render() {
   // the answer is and is not worth. This part is the file's own numbers — which the
   // card cannot know, because they come from whatever this deployment publishes —
   // and the button.
+  // A filter is right about its own chain and silent about every other: the keys
+  // carry the chain id inside what gets hashed, so testing one chain's file against
+  // another's assets misses every probe. The card names the chain in hand so that a
+  // refusal below reads as a mismatch rather than as an empty wallet.
   body.innerHTML = `
+    <div class="bound" id="private-bound">
+      <div class="label" style="margin-bottom:9px">a filter is bound to its chain</div>
+      <div class="bound-ok">testing against ${H.esc(H.chainName())} · <code>${H.esc(name)}.xorf</code> is this
+        chain's filter, and the keys carry the chain inside what gets hashed</div>
+    </div>
     <div class="label" style="margin-bottom:10px">the filter this deployment publishes</div>
     <div class="kvgrid" id="private-facts" style="gap:22px; margin-bottom:16px"></div>
     <div class="row" style="gap:10px; margin:0; flex-wrap:wrap">
@@ -160,7 +169,15 @@ async function run(m) {
     // it, which is worse than an error. The filter is right about its own chain, so
     // the mismatch is the one thing to refuse.
     if (Number(f.chainId) !== Number(H.chainId())) {
-      throw new Error(`this filter is for chain ${f.chainId} and the page is now on chain ${H.chainId()}; reopen the panel`);
+      const msg = `refused: you asked for ${H.chainName()} (chain ${H.chainId()}) while holding chain `
+        + `${f.chainId}'s filter. Every probe would miss and it would report a confident `
+        + `"0 of ${(H.assets() || []).length}" — a false negative with a sentence around it, which is worse than an error.`;
+      const card = $('private-bound');
+      if (card) {
+        card.innerHTML = `<div class="label" style="margin-bottom:9px">a filter is bound to its chain</div>
+          <div class="bound-bad">${H.esc(msg)}</div>`;
+      }
+      throw new Error(msg);
     }
 
     // Every asset the index covers, tested locally. Eight keccaks and eight array
@@ -319,6 +336,10 @@ function paint(out, rows) {
 }
 
 render().catch(fail);
+// index.html calls this when the network chip moves while the panel is open, so the
+// card above names the filter the picked chain publishes rather than the one the
+// panel opened on.
+window.evmscanPrivateRender = () => render().catch(fail);
 
 // ---------------------------------------------------------------------------
 // The private watchlist
@@ -850,6 +871,7 @@ function renderPreserve(account, holdings, indexed, hint) {
   const rows = unkept(holdings, indexed);
   const reg = H.registry() || {};
   section.hidden = false;
+  $('preserve-count').textContent = rows.length ? ` · ${rows.length}` : '';
 
   const hintLine = hint ? `
     <p class="hint" style="margin:14px 0 0; max-width:74ch">
@@ -877,7 +899,6 @@ function renderPreserve(account, holdings, indexed, hint) {
     </p>` : '';
 
   if (!rows.length) {
-    $('preserve-count').textContent = '';
     body.innerHTML = `<p class="hint" style="max-width:74ch">Everything above is already an indexed
       asset, so it is committed to a root and served from the registry — this deployment could stop
       running and the answer would still be there.</p>${hintLine}`;
@@ -885,56 +906,60 @@ function renderPreserve(account, holdings, indexed, hint) {
     return;
   }
 
-  if (!reg.address) {
-    $('preserve-count').textContent = '';
-    body.innerHTML = `<p class="hint" style="max-width:74ch">${H.esc(String(rows.length))} of these were
-      found by reading the chain just now and are not in the index. This deployment names no registry,
-      so there is nowhere to make that permanent from here.</p>${hintLine}`;
-    wireCopy(hint);
-    return;
-  }
+  // A new asset costs the bond plus the least funding requestIndexing accepts; the
+  // bond comes back through revokeAsset, the funding never does. Both numbers are
+  // the registry's own, read by the daemon, and shown before the button rather than
+  // discovered in the wallet prompt.
+  const bondWei = BigInt(reg.asset_bond_wei || 0);
+  const fundWei = BigInt(reg.min_funding_wei || 0);
+  const cost = (bondWei > 0n ? `${H.weiToEth(bondWei)} ETH bond + ` : '')
+    + `${H.weiToEth(fundWei)} ETH funding`;
+  const paid = !!reg.address;
 
-  const minWei = BigInt(reg.min_funding_wei || 0);
-  $('preserve-count').textContent = `${rows.length} read live, not kept by the index`;
   body.innerHTML = `
-    <p class="prose" style="margin:0 0 6px; max-width:74ch">
-      These came from reading the chain at head a moment ago. Nothing stores them: close the tab and
-      the only way back is to read the chain again. Paying for one registers it in
-      <code>HintRegistry</code> on chain ${H.esc(String(reg.chain_id ?? '—'))}, which funds the backfill
-      and puts it in the next committed root — after which the registry answers for it directly, to any
-      ENS client, with this daemon out of the path.
-    </p>
-    <p class="hint" style="margin:0 0 14px; max-width:74ch">
-      The deposit is not refundable and the transaction is yours, from your own wallet — the daemon only
-      says where the registry is and what it costs. Minimum ${H.esc(H.weiToEth(reg.min_funding_wei))} ETH
-      each, which buys a fixed number of blocks of coverage rather than a subscription. Paying puts a
-      contract in the index; it does not put it at the top of anyone's list.
-    </p>
-    <div class="scroll"><div id="preserve-rows"></div></div>
-    <div class="err" id="preserve-err" hidden></div>${hintLine}`;
-
-  $('preserve-rows').innerHTML = rows.map(h => `
-    <div class="tablerow" data-token="${H.esc(h.address)}" style="grid-template-columns: 2fr 1.2fr 1fr">
-      <span>
-        <strong>${H.esc(h.symbol || '—')}</strong>
-        <span class="hint" style="margin-left:8px">${H.esc(h.name || '')}</span>
-        <div class="addr">${H.esc(h.address)}</div>
-      </span>
-      <span class="hint num" data-state>${H.esc(h.standard || 'erc20')}</span>
-      <span class="num">
-        <button class="btn btn-secondary btn-sm" data-keep="${H.esc(h.address)}"
-                data-kind="${KIND_BY_STANDARD[h.standard] || 20}">Keep it</button>
-      </span>
-    </div>`).join('');
+    <p class="hint" style="margin:0 0 14px; max-width:680px; text-wrap:pretty">Nobody has registered or promoted
+      these, so no per-account index exists for them and the next reader starts from nothing. ${paid
+        ? 'You can change that from your own wallet — whatever you pay above the bond becomes that asset\'s funding, and funding buys blocks of coverage for that asset only.'
+        : 'This deployment names no registry, so there is nowhere to make that permanent from here.'}</p>
+    ${rows.map(h => `
+    <div class="unkept-row" data-token="${H.esc(h.address)}">
+      <div class="who">
+        <div class="sym">${H.esc(h.symbol || h.name || H.short(h.address, 4))}<span class="std">${H.esc(STD_LABEL[h.standard] || h.standard || 'ERC-20')}</span></div>
+        <div style="font:400 11px/1.5 var(--mono); color:var(--ink-65)" data-state>${H.esc(H.short(h.address, 4))} · ${H.esc(whyUnkept(h))}</div>
+      </div>
+      ${paid ? `<div class="act">
+        <span class="cost">${H.esc(cost)}</span>
+        <button class="btn btn-primary btn-sm" data-keep="${H.esc(h.address)}"
+                data-kind="${KIND_BY_STANDARD[h.standard] || 20}">Pay to index it</button>
+      </div>` : ''}
+    </div>`).join('')}
+    <div class="err" id="preserve-err" hidden></div>
+    <div class="unkept-foot">Whether an asset is kept comes from what the index actually returned, never from the
+      membership filter. A filter says where to look and is allowed to be wrong about one pair in 256; this decides
+      whether to spend money, so it does not get to guess.${paid
+        ? ' The deposit is not refundable and the transaction is yours, from your own wallet — the daemon only says where the registry on chain ' + H.esc(String(reg.chain_id ?? '—')) + ' is and what it costs. Paying puts a contract in the index; it does not put it at the top of anyone\'s list.'
+        : ''}</div>${hintLine}`;
 
   for (const btn of body.querySelectorAll('[data-keep]')) {
-    btn.addEventListener('click', () => keep(btn, minWei).catch(e => {
+    btn.addEventListener('click', () => keep(btn, bondWei + fundWei).catch(e => {
       const el = $('preserve-err');
       el.hidden = false;
       el.textContent = e.message || String(e);
     }));
   }
   wireCopy(hint);
+}
+
+const STD_LABEL = { erc20: 'ERC-20', erc721: 'ERC-721', erc1155: 'ERC-1155' };
+
+// Why the index has nothing for a contract this account holds. Three different
+// reasons, and a reader deciding whether to pay should know which one it is.
+function whyUnkept(h) {
+  if (h.standard === 'erc1155') return 'per-id balances · the index tracks contracts, not ids';
+  const c = (H.candidates() || []).find(x => x.address && x.address.toLowerCase() === h.address.toLowerCase());
+  if (c && c.verdict === 'spam') return 'marked spam by the curator · discovery still counts it';
+  if (c) return `discovery found it · ${fmtInt(c.event_count || 0)} events · nobody registered it, no verdict yet`;
+  return 'read live at head · no hint registered, not seen by discovery';
 }
 
 // 128 bytes is 258 hex characters, which is a wall rather than a value. Show enough

@@ -365,6 +365,23 @@
   .chip .trust.verified { color: var(--blue-deep); }
   .chip.on .trust.verified { color: oklch(0.8 0.08 250); }
   .block { margin-top: 36px; }
+  /* Holdings the lens found and the index does not keep: amber, because paying is the
+     one thing on the answer page that costs money. */
+  .unkept { margin-top: 26px; border: 1px solid var(--amber-line); border-radius: var(--r-xl); background: var(--amber-wash); overflow: hidden; }
+  .unkept-head { padding: 12px 16px 11px; border-bottom: 1px solid oklch(0.88 0.05 75); font: 500 10px/1 var(--mono); letter-spacing: .09em; text-transform: uppercase; color: var(--amber-text); }
+  .unkept-body { padding: 14px 16px 16px; }
+  .unkept-row { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; justify-content: space-between; padding: 12px 0; border-top: 1px solid var(--line); }
+  .unkept-row .who { min-width: 200px; flex: 1 1 260px; }
+  .unkept-row .act { display: flex; gap: 9px; align-items: center; flex: none; }
+  .unkept-row .cost { font: 400 11px/1.5 var(--mono); color: var(--ink-65); text-align: right; }
+  .unkept-foot { font: 400 11.5px/1.6 var(--sans); color: var(--ink-70); margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); max-width: 680px; text-wrap: pretty; }
+  /* The private panel's first card: which chain's filter is in hand. */
+  .bound { border: 1px solid rgba(20,22,26,.13); border-radius: 9px; background: var(--surface); padding: 13px 14px; margin-bottom: 14px; }
+  .bound-ok { font: 400 11.5px/1.6 var(--mono); color: oklch(0.36 0.09 155); }
+  .bound-bad { font: 400 11.5px/1.6 var(--mono); color: var(--amber-text); border-left: 2px solid var(--amber); padding-left: 10px; }
+  /* The asset row's last column: where it came from, what was vouched, and the one verdict a reader may cast. */
+  .src-cell { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; }
+  .linkbtn.rep { font: 400 10.5px/1 var(--mono); color: var(--amber-text); text-decoration: underline; text-underline-offset: 2px; }
   .block h3 { font: 600 15px/1.3 var(--sans); }
   .total {
     display: flex; justify-content: space-between; align-items: baseline; gap: 16px; flex-wrap: wrap;
@@ -498,6 +515,22 @@
   .cmd .label { font-size: 9.5px; color: rgba(255,255,255,.55); margin-bottom: 13px; }
   /* A Solidity identifier inside an uppercase label keeps its own case: VERIFYINCLUSION is not a function anyone can call. */
   .label .ident { text-transform: none; }
+  /* The optimistic loop, stated: four phases, the live one lit. */
+  .dispute { margin-top: 30px; border: 1px solid rgba(20,22,26,.13); border-radius: var(--r-xl); background: var(--surface); overflow: hidden; }
+  .dispute-head { padding: 12px 16px 11px; border-bottom: 1px solid var(--line); font: 500 10px/1 var(--mono); letter-spacing: .09em; text-transform: uppercase; color: var(--ink-65); }
+  .dispute-body { padding: 16px; }
+  .phases { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 20px; }
+  .phase { flex: 1 1 150px; min-width: 0; padding: 12px 14px; border: 1px solid rgba(20,22,26,.12); border-radius: 8px; }
+  .phase.past { background: var(--card); }
+  .phase.now { border-color: var(--amber-line); background: var(--amber-wash); }
+  .phase .ph-l { font: 500 10px/1 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--ink-65); margin-bottom: 6px; }
+  .phase.now .ph-l { color: var(--amber-text); }
+  .phase .ph-d { font: 400 11.5px/1.5 var(--mono); color: var(--ink-70); }
+  .mode-badge { font: 500 9.5px/1 var(--mono); letter-spacing: .04em; text-transform: uppercase; color: #fff; background: var(--blue); border-radius: 3px; padding: 4px 6px; margin-left: 9px; vertical-align: middle; }
+  .mode-badge.local { background: var(--amber); }
+  .econ { font: 400 11px/1.8 var(--mono); color: var(--ink-70); margin-top: 12px; padding-top: 11px; border-top: 1px solid var(--line); }
+  #rules-card p + p { margin-top: 10px; }
+  #rules-card .ceiling { color: var(--amber-text); padding-top: 11px; border-top: 1px solid var(--line); }
   .cmd .code { font: 400 11.5px/1.9 var(--mono); color: var(--dark-ink); word-break: break-all; white-space: pre-wrap; }
   .split-rail { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 22px; align-items: start; }
   .rail .label { margin-bottom: 10px; }
@@ -839,12 +872,9 @@
       <!-- What discovery found that the index does not keep. A balance read at head is
            gone the moment the tab closes; an indexed asset is committed to a root and
            served from the registry. This is where one becomes the other. -->
-      <div id="preserve" hidden class="block">
-        <div class="subrow">
-          <h3>Keep these on-chain</h3>
-          <span class="colnote" id="preserve-count"></span>
-        </div>
-        <div id="preserve-body"></div>
+      <div id="preserve" hidden class="unkept">
+        <div class="unkept-head">held, but not kept by the index<span id="preserve-count"></span></div>
+        <div class="unkept-body" id="preserve-body"></div>
       </div>
     </div>
 
@@ -978,6 +1008,11 @@
         <div class="row" style="margin-top:12px">
           <button class="btn btn-secondary btn-sm" id="assets-more" hidden>Show more</button>
         </div>
+        <p class="hint" style="margin:13px 0 0; max-width:520px; font-size:11.5px">Scan order is <em>vouched</em>, which
+          only ever rises — not the funding balance, which drains as coverage is claimed. One report outranks money
+          outright: the registry is open, so if funding alone decided the order, buying the most funding would buy the
+          top of somebody's wallet. One report is enough, because ordering is not adjudication — and it can never
+          revoke, un-index or refund, since the funding already bought a backfill that ran. Undo is one call.</p>
       </div>
 
       <div class="dark triage" id="triage">
@@ -1101,9 +1136,42 @@ evmscan-verify -ens \
         </div>
         <div class="card">
           <h3>What we do <em>not</em> claim</h3>
-          <p>A dispute is settled by UMA's voters, not a fraud proof. Prices from a DEX TWAP are manipulable
-            with capital and time. Candidate ranking is event count and distinct blocks — crude on purpose,
-            which is why auto-promote is off by default.</p>
+          <p>Prices from a DEX TWAP are manipulable with capital and time, and a spot price is manipulable
+            within a block — the tier says which one you are looking at. Candidate ranking is event count and
+            distinct blocks, crude on purpose, which is why auto-promote is off by default. ERC-1155 balances
+            are per token id, so the index-driven views report none rather than a misleading zero.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Verifying a root is only worth something if disagreeing with it does something.
+         The four phases follow the latest commitment; the cards say who settles a
+         dispute on this deployment and on what terms, read from the registry itself. -->
+    <div class="dispute" id="dispute">
+      <div class="dispute-head">and if you find it wrong</div>
+      <div class="dispute-body">
+        <p class="prose" style="margin:0 0 18px; max-width:700px">A commitment is <em>optimistic</em>: it finalizes on
+          its own unless somebody bonds a challenge inside the window. Verifying a root is only worth something if
+          disagreeing with it does something, so this is where the page has to be specific.</p>
+        <div class="phases" id="phases"></div>
+        <div class="grid2" style="gap:16px">
+          <div class="card" id="settle-card">
+            <h3>Who settles it here</h3>
+            <p class="hint">reading the registry…</p>
+          </div>
+          <div class="card" id="rules-card">
+            <h3>What the rules can and cannot become</h3>
+            <p>Bonds, window, minimum funding and reward per block are fixed at deployment and have no setters; the
+              arbiter cannot be reassigned. Changing any of them means deploying a new registry, so a deployment's
+              rules are fully stated by one event and you can read the mode yourself from <code>oracle()</code> and
+              <code>arbiter()</code>.</p>
+            <p id="rules-mode">On a chain with no oracle deployment the fallback is <strong>local-arbiter mode</strong>:
+              bonds in wei and one key settling disputes. That is a trusted deployment wearing a permissionless write
+              path — the deploy tool says so in capitals, and this page would say so here.</p>
+            <p class="ceiling">Be clear about the ceiling: UMA's DVM is a human vote, not a fraud proof. What it buys is
+              that no single key decides and the deployment has no admin path at all. A real fraud proof would mean
+              proving a log's existence on the source chain from another chain, which is out of scope here.</p>
+          </div>
         </div>
       </div>
     </div>
@@ -1541,6 +1609,7 @@ function renderClaims() {
     `evmscan-verify -ens \\\n  ${ens}`;
 
   renderEpochWindow();
+  renderDispute();
 }
 
 // Where a commitment is in its optimistic loop, as words and, while the window is
@@ -1580,6 +1649,179 @@ function renderEpochWindow() {
     const s = windowState(e);
     el.textContent = s.text;
     el.className = `verdict ${s.cls}`;
+  }
+  renderPhases();
+}
+
+// --------------------------------------------------------------------------
+// Disputes: the four states a commitment passes through, and who settles one here
+// --------------------------------------------------------------------------
+
+// The latest commitment is the one a reader could still do something about, so the
+// phases follow it: -1 with nothing published, else the index of the phase it is in.
+function phaseOf(e) {
+  if (!e) return -1;
+  const w = windowState(e);
+  if (w.text === 'finalized' || w.text === 'rejected') return 3;
+  if (e.onchain_status === 'challenged') return 2;
+  if (w.open) return 1;
+  return 0; // published and not yet disputable here, or past the window and awaiting finalize
+}
+
+function renderPhases() {
+  const el = $('phases');
+  if (!el) return;
+  const e = EPOCHS[0];
+  const id = e ? (e.onchain_epoch_id ?? e.id) : null;
+  const now = phaseOf(e);
+  const w = e ? windowState(e) : null;
+  const left = e && e.challenge_deadline ? e.challenge_deadline - Date.now() / 1000 : 0;
+  const oracle = REG && REG.mode === 'oracle';
+  const tiles = [
+    ['01 published', now === 0 && e ? `epoch ${id} · ${w.text}` : 'root asserted, publisher bond posted'],
+    ['02 challengeable', now === 1 ? `epoch ${id} · ${hms(left)} left · anyone may dispute`
+      : e ? 'the window a challenge has to land in' : 'no epoch published yet'],
+    ['03 challenged', now === 2 ? `epoch ${id} · the challenger matched the bond · ${oracle ? 'UMA\'s vote decides' : 'awaiting the arbiter'}`
+      : 'the challenger matches the bond, which also prices stalling an honest epoch'],
+    ['04 settled', now === 3 ? `epoch ${id} · ${w.text} · ${w.text === 'finalized' ? 'the bond came back' : 'the publisher forfeited'}`
+      : 'unchallenged, it finalizes by itself and the bond comes back'],
+  ];
+  el.innerHTML = tiles.map(([l, d], i) => `<div class="phase ${i === now ? 'now' : i < now ? 'past' : ''}">
+      <div class="ph-l">${esc(l)}${i === now ? ' · now' : ''}</div>
+      <div class="ph-d">${esc(d)}</div>
+    </div>`).join('');
+}
+
+// The bond as a person reads it: an amount of the bond currency in oracle mode, ETH
+// in local-arbiter mode. Units of an address when the currency would not say.
+function fmtBond() {
+  if (!REG || !REG.publisher_bond) return '—';
+  if (REG.mode === 'oracle') {
+    const d = REG.bond_currency_decimals;
+    const amt = Number.isInteger(d) ? formatUnits(REG.publisher_bond, d) : `${num(REG.publisher_bond)} units of`;
+    return `${amt} ${REG.bond_currency_symbol || short(REG.bond_currency || '', 4)}`.trim();
+  }
+  return `${weiToEth(REG.publisher_bond)} ETH`;
+}
+function fmtGwei(wei) {
+  const v = BigInt(wei), whole = v / 10n ** 9n, frac = (v % 10n ** 9n).toString().padStart(9, '0').replace(/0+$/, '');
+  return frac ? `${whole}.${frac}` : `${whole}`;
+}
+function windowLabel(s) {
+  if (!s) return '—';
+  if (s % 86400 === 0) return `${s / 86400} d`;
+  if (s % 3600 === 0) return `${s / 3600} h`;
+  if (s % 60 === 0) return `${s / 60} min`;
+  return `${s} s`;
+}
+
+// challengeIndex(uint256) and approve(address,uint256).
+const CHALLENGE_SELECTOR = '0x53e02942';
+const APPROVE_SELECTOR = '0x095ea7b3';
+// A challenge is armed by one click and sent by the next, so a status poll landing
+// between them must not redraw the card under the reader's finger.
+let CHALLENGE_ARMED = null, CHALLENGING = false, CHALLENGE_TX = '';
+
+const RULES_DEFAULT = `On a chain with no oracle deployment the fallback is <strong>local-arbiter mode</strong>:
+  bonds in wei and one key settling disputes. That is a trusted deployment wearing a permissionless write
+  path — the deploy tool says so in capitals, and this page would say so here.`;
+
+function renderDispute() {
+  renderPhases();
+  const card = $('settle-card');
+  if (!card || CHALLENGING || CHALLENGE_ARMED !== null) return;
+  if (!REG || !REG.address) {
+    card.innerHTML = `<h3>Who settles it here</h3>
+      <p>This deployment names no registry, so nothing here is committed on-chain and there is nothing to
+        dispute. The commitments below are the daemon's own table, and should be read that way.</p>`;
+    $('rules-mode').innerHTML = RULES_DEFAULT;
+    return;
+  }
+  if (!REG.mode) {
+    card.innerHTML = `<h3>Who settles it here</h3>
+      <p class="hint">The registry at <code>${esc(REG.address)}</code> has not answered about its mode yet; the
+        next status poll asks again.</p>`;
+    $('rules-mode').innerHTML = RULES_DEFAULT;
+    return;
+  }
+  const oracle = REG.mode === 'oracle';
+  const e = EPOCHS[0];
+  const id = e ? (e.onchain_epoch_id ?? e.id) : null;
+  const open = !!(e && windowState(e).open);
+  const econ = [
+    `publisher bond ${fmtBond()} · challenger matches`,
+    `window ${windowLabel(REG.challenge_window_seconds)} · reward ${REG.reward_per_block_wei ? fmtGwei(REG.reward_per_block_wei) : '—'} gwei per block`,
+    'all constructor args, getters, no setters',
+  ];
+  const who = oracle
+    ? `Publishing asserts the root to UMA's Optimistic Oracle V3 at <code>${esc(short(REG.oracle))}</code>. A dispute —
+       at the oracle, or through <code>challengeIndex</code>, which is a thin wrapper over it — goes to UMA's vote. The
+       registry only reacts to the oracle's callbacks: there is no arbiter, and <code>resolveChallenge</code> reverts
+       permanently. Nobody administers this.`
+    : `This registry is in <strong>local-arbiter mode</strong>: bonds are in wei and one key,
+       <code>${esc(REG.arbiter)}</code>, settles a challenge through <code>resolveChallenge</code>. Anyone can still
+       challenge; what the bond buys is that key's ruling, not a vote.`;
+  let status = '';
+  if (CHALLENGE_TX && e && e.onchain_status === 'challenged') status = `submitted <code>${esc(CHALLENGE_TX)}</code>`;
+  else if (e && !open) status = `epoch ${id} is past its window`;
+  card.innerHTML = `
+    <h3>Who settles it here<span class="mode-badge ${oracle ? '' : 'local'}">${oracle ? 'oracle mode' : 'local-arbiter mode'}</span></h3>
+    <p>${who}</p>
+    <div class="econ">${econ.map(esc).join('<br>')}</div>
+    <div class="row" style="margin-top:13px; gap:10px">
+      <button class="btn btn-secondary btn-sm" id="challenge" ${open ? '' : 'disabled'}>${e ? `Challenge epoch ${id}` : 'Nothing to challenge yet'}</button>
+      <span class="hint" id="challenge-status">${status}</span>
+    </div>
+    <div class="err" id="challenge-err" hidden></div>`;
+  $('rules-mode').innerHTML = oracle ? RULES_DEFAULT
+    : `<strong>This deployment is that fallback.</strong> On a chain with no oracle deployment the registry runs in
+       local-arbiter mode: bonds in wei and one key settling disputes — here <code>${esc(REG.arbiter)}</code>. That is
+       a trusted deployment wearing a permissionless write path; the deploy tool says so in capitals, and so does
+       this page.`;
+  if (e && open) $('challenge').addEventListener('click', () => challengeEpoch(e, $('challenge')));
+}
+
+// The challenge itself, from the reader's own wallet. Two clicks, because the first
+// one only names the bond: it is the reader's money, and a button that spends it on
+// one click is a button that spends it by accident.
+async function challengeEpoch(e, btn) {
+  const id = e.onchain_epoch_id ?? e.id;
+  const status = $('challenge-status');
+  showErr('challenge-err', null);
+  if (CHALLENGE_ARMED !== id) {
+    CHALLENGE_ARMED = id;
+    btn.textContent = `Confirm · bond ${fmtBond()}`;
+    status.textContent = REG.mode === 'oracle'
+      ? `two wallet prompts: approve the registry to pull the bond, then challengeIndex(${id}). The bond goes to UMA's vote against the publisher's, and the loser forfeits.`
+      : `one wallet prompt: challengeIndex(${id}) carrying the bond. The arbiter's ruling decides who forfeits.`;
+    return;
+  }
+  CHALLENGING = true;
+  btn.disabled = true;
+  try {
+    if (!WALLET) await ensureWallet();
+    const bond = BigInt(REG.publisher_bond);
+    if (REG.mode === 'oracle') {
+      status.textContent = 'approve the bond in your wallet…';
+      const data = APPROVE_SELECTOR + REG.address.toLowerCase().replace(/^0x/, '').padStart(64, '0') + word(bond);
+      await window.ethereum.request({ method: 'eth_sendTransaction', params: [{ from: WALLET, to: REG.bond_currency, data }] });
+    }
+    status.textContent = 'confirm the challenge in your wallet…';
+    CHALLENGE_TX = await window.ethereum.request({
+      method: 'eth_sendTransaction',
+      params: [{ from: WALLET, to: REG.address, data: CHALLENGE_SELECTOR + word(id),
+                 value: REG.mode === 'oracle' ? '0x0' : '0x' + bond.toString(16) }],
+    });
+    status.innerHTML = `submitted <code>${esc(CHALLENGE_TX)}</code> · the registry marks epoch ${id} challenged once it lands`;
+    btn.textContent = `Challenged epoch ${id}`;
+    setTimeout(loadEpochs, 4000);
+  } catch (err) {
+    showErr('challenge-err', err);
+    btn.disabled = false;
+    btn.textContent = `Challenge epoch ${id}`;
+  } finally {
+    CHALLENGING = false;
+    CHALLENGE_ARMED = null;
   }
 }
 // One tick a second is only worth paying for while a window is open; the check
@@ -1651,6 +1893,7 @@ function renderChains() {
       loadStatus(); loadAssets(); loadCandidates(); loadDecisions(); loadEpochs();
       if (ACCOUNTS_STARTED) loadAccounts();
       if (graphLoaded && window.evmscanGraphReload) window.evmscanGraphReload();
+      if (MODE === 'private') setMode('private');
       if (WALLET_ADDR) lookup();
     });
   });
@@ -1899,7 +2142,8 @@ function renderAssets() {
       <div class="tablerow" style="grid-template-columns:${COLS.assets}">
         <div style="min-width:0">
           <div class="sym" style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap">${a.symbol ? esc(a.symbol) : '<span class="empty">unknown</span>'}${
-            a.name ? ` <span class="nm">${esc(a.name)}</span>` : ''}<span class="std">${esc(stdLabel(a.standard))}</span></div>
+            a.name ? ` <span class="nm">${esc(a.name)}</span>` : ''}<span class="std">${esc(stdLabel(a.standard))}</span>${
+            a.reports ? ' <span class="tag tag-flag" title="one report is enough: it orders the scan and decides nothing else">reported</span>' : ''}</div>
           <div class="addr">${esc(a.address)}</div>
         </div>
         <span class="num mono">${num(a.logs_seen ?? 0)}</span>
@@ -1907,10 +2151,36 @@ function renderAssets() {
           <div class="b"><div class="${a.backfill_done ? '' : 'amber'}" style="width:${pct}%"></div></div>
           <div class="n">${note}</div>
         </div>
-        <span class="quiet" style="font-size:11px; font-family:var(--mono)">${esc(a.source)}${a.status && a.status !== 'active' ? ' · ' + esc(a.status) : ''}</span>
+        <div class="src-cell">
+          <span class="quiet" style="font-size:11px; font-family:var(--mono)">${esc(a.source)}${a.status && a.status !== 'active' ? ' · ' + esc(a.status) : ''}</span>${
+          a.vouched_wei && BigInt(a.vouched_wei) > 0n ? `<span class="quiet" style="font:400 11px/1 var(--mono)">${esc(weiToEth(a.vouched_wei))} ETH vouched</span>` : ''}
+          <button class="linkbtn rep" data-report="${esc(a.address)}" data-on="${a.reports ? 1 : 0}" title="${a.reports
+            ? esc(a.report_reason || 'reported') + ' — undo puts it back in funding order'
+            : 'sink this contract below every unreported one, regardless of funding'}">${a.reports ? 'undo report' : 'report'}</button>
+        </div>
       </div>`;
     }).join('')
       : '<div class="empty" style="padding:14px 0">No assets indexed yet.</div>';
+  $('assets').querySelectorAll('[data-report]').forEach(b => b.addEventListener('click', () => toggleReport(b)));
+}
+
+// A report orders the list and decides nothing else, so it goes through without a
+// form: one click sinks the contract below every unreported one, and undo is the
+// same click. The reason is fixed because the page has no adjudication to write —
+// what it records is that somebody looking at this list objected.
+async function toggleReport(btn) {
+  const addr = btn.dataset.report, on = btn.dataset.on === '1';
+  btn.disabled = true;
+  try {
+    await api(onChain(`/v1/assets/${addr}/${on ? 'unreport' : 'report'}`), {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ reason: on ? '' : 'reported from the page' }),
+    });
+    await loadAssets();
+  } catch (e) {
+    showErr('assets-err', e);
+    btn.disabled = false;
+  }
 }
 
 async function register() {
@@ -2005,25 +2275,29 @@ function renderRequestSection() {
   if (!$('req-from').value && HEAD) $('req-from').value = String(Math.max(0, HEAD - 6000));
 }
 
+// A wallet on the registry's chain, or an error saying why not. Shared by every
+// action here that spends: registering, funding, challenging.
+async function ensureWallet() {
+  if (!window.ethereum) throw new Error('no injected wallet found — this needs MetaMask or another EIP-1193 wallet');
+  const [acct] = await window.ethereum.request({ method: 'eth_requestAccounts' });
+  WALLET = acct;
+  const want = '0x' + Number(REG.chain_id).toString(16);
+  const have = await window.ethereum.request({ method: 'eth_chainId' });
+  if (have !== want) {
+    try {
+      await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: want }] });
+    } catch {
+      throw new Error(`wallet is on chain ${parseInt(have, 16)}; the registry is on ${REG.chain_id}`);
+    }
+  }
+  return acct;
+}
+
 async function connectWallet() {
   showErr('req-err', null);
-  if (!window.ethereum) {
-    showErr('req-err', new Error('no injected wallet found — this needs MetaMask or another EIP-1193 wallet'));
-    return;
-  }
   $('req-connect').disabled = true;
   try {
-    const [acct] = await window.ethereum.request({ method: 'eth_requestAccounts' });
-    WALLET = acct;
-    const want = '0x' + Number(REG.chain_id).toString(16);
-    const have = await window.ethereum.request({ method: 'eth_chainId' });
-    if (have !== want) {
-      try {
-        await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: want }] });
-      } catch {
-        throw new Error(`wallet is on chain ${parseInt(have, 16)}; the registry is on ${REG.chain_id}`);
-      }
-    }
+    const acct = await ensureWallet();
     $('req-connect').textContent = short(acct);
     $('req-send').disabled = false;
   } catch (e) { showErr('req-err', e); }
@@ -2055,9 +2329,7 @@ async function sendRequest() {
 // are the ones that cost real money to get wrong, and a second call site that skipped
 // them would be a second way to fund an asset key nothing can ever cover.
 async function requestIndexing(token, kind, from, value) {
-  if (!window.ethereum) throw new Error('no injected wallet found — this needs MetaMask or another EIP-1193 wallet');
-  if (!WALLET) await connectWallet();
-  if (!WALLET) throw new Error('connect a wallet first');
+  if (!WALLET) await ensureWallet();
 
   if (value < BigInt(REG.min_funding_wei || 0)) {
     throw new Error(`deposit is below the registry's minimum funding of ${weiToEth(REG.min_funding_wei)} ETH`);
@@ -2902,7 +3174,7 @@ window.evmscanHints = {
   buildWatchlist, hexToBytes, bytesToB64url, b64urlToBytes,
   passkeyCreate, passkeySecret, walletSecret, passwordSecret,
   api, onChain, esc, short, chainRpc, lensBalances, resolveAccount,
-  chainId: activeChainID, assets: () => ASSETS,
+  chainId: activeChainID, chainName, assets: () => ASSETS, candidates: () => CANDIDATES,
 };
 
 // markUnlisted annotates rows with whether any configured token list vouches for
@@ -3969,6 +4241,14 @@ async function loadExamples() {
       $('account').value = b.dataset.example;
       runLookup();
     }));
+    // The daemon holds no names, so these are addresses until a reverse record
+    // resolved in this browser says otherwise — and only a record the forward lookup
+    // agrees with gets to stand in for the address.
+    for (const b of el.querySelectorAll('[data-example]')) {
+      reverseName(b.dataset.example)
+        .then(r => { if (r && r.state === 'cached' && r.name) b.textContent = r.name; })
+        .catch(() => {});
+    }
   } catch {
     el.hidden = true; // the box works without examples
   }
@@ -4010,7 +4290,8 @@ function setMode(mode) {
   $('step-filter-name').textContent = `index-${activeChainID()}`;
   $('step-pairs').textContent = num((ASSETS || []).length);
   $('chain-rpc').value = chainRpc();
-  if (hintsLoaded) return;
+  // Already drawn: redraw, because the filter it names is the picked chain's.
+  if (hintsLoaded) { if (window.evmscanPrivateRender) window.evmscanPrivateRender(); return; }
   hintsLoaded = true;
   loadHints().catch(e => {
     hintsLoaded = false;
