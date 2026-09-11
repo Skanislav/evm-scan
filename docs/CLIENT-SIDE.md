@@ -37,6 +37,15 @@ and the bytecode came from an endpoint they can diff against this repo.
 **Why this is safe:** nothing is written. A reader who supplies a lying RPC lies
 only to themselves.
 
+Names take the same road. A typed `vitalik.eth` becomes an address in the browser:
+one `eth_call` to ENS's Universal Resolver — the same contract at the same address on
+mainnet and on Sepolia's ENSv2 — on the RPC the reader named for the lens, else a
+public one for the active chain. The daemon has no endpoint that takes a name and never
+sees one; the mirror does the same through its injected `eth_call` (`resolveName` in
+`mirror/src/names.ts`). Only a name behind a CCIP-Read gateway falls back to the mainnet
+library, and the result line says so. Reverse records follow the same path, and stand in
+for an address only once the forward record agrees.
+
 ## Tier 2 — hints: mostly already here
 
 A client can say *what to look at* without saying *what is true*. That is what

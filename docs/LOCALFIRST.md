@@ -193,6 +193,7 @@ run under plain `go test ./...`, so the guard needs no Node toolchain.
 | version rows, resolve, diff | `mirror/src/state.ts` | **yes** |
 | verification + its wording | `mirror/src/verify.ts` | **yes** |
 | registry ABI both ways | `mirror/src/registry.ts` | **yes** — blobs packed by go-ethereum |
+| ENS names → address, and back | `mirror/src/names.ts` | **yes** — blobs packed by go-ethereum from the Universal Resolver ABI |
 | ingest, idempotence, ordering | `mirror/src/ingest.ts` | **yes** — against `MemoryStore` |
 | the whole flow (`syncLatest`) | `mirror/src/ingest.ts` | **yes** — fixture `eth_call`, injected fetch |
 | Evolu adapter logic | `mirror/src/evolu.ts` | **partly** — against a fake Evolu |
@@ -258,6 +259,23 @@ const commitment = await readCommitment(call, REGISTRY, INDEXED_CHAIN);
 const result = verifyAsOf(await store.rows(), await store.coverage(commitment.epochId), commitment);
 console.log(result.reason);
 ```
+
+A wallet that lets someone type a name resolves it through the same `call`, before it
+touches a row:
+
+```ts
+import { resolveName, reverseName, OffchainNameError } from "@evm-scan/mirror";
+
+const { address, name } = await resolveName(call, "vitalik.eth"); // one eth_call to the Universal Resolver
+const primary = await reverseName(call, address, INDEXED_CHAIN);  // null when nothing is claimed
+```
+
+`resolveName` throws `OffchainNameError` with the gateway URLs for a CCIP-Read name and
+does not follow them; whether to trust a third-party gateway is the wallet's decision.
+Nothing a name says reaches the mirror's rows: it becomes an address and that is what
+is looked up. Normalization is NFC + lowercase, the same transform as the daemon's
+`internal/ens.Normalize` and the page, and the normalized form comes back with the
+answer so a name the ENS app would render differently is visible.
 
 The publisher holds a `SharedOwner` (it has the write key); wallets get the
 `SharedReadonlyOwner` derived from it with `createSharedReadonlyOwner`, which carries
