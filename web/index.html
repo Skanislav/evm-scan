@@ -762,6 +762,9 @@
           </div>
           <div id="assets"><span class="empty">loading…</span></div>
         </div>
+        <div class="row" style="margin-top:12px">
+          <button class="btn btn-secondary btn-sm" id="assets-more" hidden>Show more</button>
+        </div>
       </div>
 
       <div class="dark triage" id="triage">
@@ -1416,6 +1419,7 @@ function renderChains() {
       renderChains();
       // Every panel on the page is about one chain, so re-ask for all of it.
       CANDIDATES = []; ACCOUNTS = []; ACCT_OFFSET = 0; ACCT_SELECTED = null; EPOCHS = [];
+      ASSETS_SHOWN = ASSETS_PAGE; // a different chain is a different list
       loadStatus(); loadAssets(); loadCandidates(); loadDecisions(); loadEpochs();
       if (ACCOUNTS_STARTED) loadAccounts();
       if (graphLoaded && window.evmscanGraphReload) window.evmscanGraphReload();
@@ -1629,10 +1633,30 @@ async function loadAssets() {
     const { assets = [] } = await api(onChain('/v1/assets'));
     showErr('assets-err', null);
     ASSETS = assets;
-    $('asset-count').textContent = num(assets.length);
-    const floor = STATUS ? STATUS.history_floor : 0;
-    const head = HEAD || (STATUS && STATUS.head_block) || 0;
-    $('assets').innerHTML = assets.length ? assets.map(a => {
+    renderAssets();
+    renderClaims();
+  } catch (e) {
+    showErr('assets-err', new Error(`the asset list did not load (${e.message || e}); the wallet and the private lookup need it, and the next poll retries`));
+  }
+}
+
+// The table shows the list a page at a time. ASSETS itself stays whole — the wallet
+// and the private lookup read all of it — and how far the reader has opened the
+// table survives the five-second poll, so the rows do not fold back up under them.
+const ASSETS_PAGE = 5;
+let ASSETS_SHOWN = ASSETS_PAGE;
+
+function renderAssets() {
+  const assets = ASSETS;
+  $('asset-count').textContent = num(assets.length);
+  const floor = STATUS ? STATUS.history_floor : 0;
+  const head = HEAD || (STATUS && STATUS.head_block) || 0;
+  const shown = assets.slice(0, ASSETS_SHOWN);
+  const left = assets.length - shown.length;
+  const more = $('assets-more');
+  more.hidden = left <= 0;
+  more.textContent = `Show ${num(Math.min(ASSETS_PAGE, left))} more · ${num(left)} left`;
+  $('assets').innerHTML = shown.length ? shown.map(a => {
       // How far back the walk has got, against the range it has to cover: from the
       // floor (or the hint's own start) up to the head it was anchored at.
       const start = Math.max(floor || 0, a.hint_from_block || 0);
@@ -1658,10 +1682,6 @@ async function loadAssets() {
       </div>`;
     }).join('')
       : '<div class="empty" style="padding:14px 0">No assets indexed yet.</div>';
-    renderClaims();
-  } catch (e) {
-    showErr('assets-err', new Error(`the asset list did not load (${e.message || e}); the wallet and the private lookup need it, and the next poll retries`));
-  }
 }
 
 async function register() {
@@ -3778,6 +3798,7 @@ function openHintPanel() {
   $('new-asset').focus({ preventScroll: true });
 }
 $('hint-open').addEventListener('click', openHintPanel);
+$('assets-more').addEventListener('click', () => { ASSETS_SHOWN += ASSETS_PAGE; renderAssets(); });
 $('hint-close').addEventListener('click', () => { $('hint-panel').hidden = true; $('hint-open').hidden = false; });
 $('empty-register').addEventListener('click', () => { openHintPanel(); });
 $('graph-open').addEventListener('click', openGraph);
