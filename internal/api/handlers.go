@@ -489,6 +489,9 @@ type epochJSON struct {
 	ExpectedRewardWei string `json:"expected_reward_wei,omitempty"`
 	RewardWei         string `json:"reward_wei,omitempty"`
 	ClaimTx           string `json:"claim_tx,omitempty"`
+	// FilterKeccak is the digest of the .xorf membership filter over the same index
+	// at the same block. Absent for epochs built before migration 0008.
+	FilterKeccak string `json:"filter_keccak,omitempty"`
 	// SubmissionRef is what the submitter handed back when the commitment was sent,
 	// present from the moment it left this process.
 	SubmissionRef string `json:"submission_ref,omitempty"`
@@ -513,6 +516,9 @@ func epochView(e store.Epoch) epochJSON {
 		MerkleRoot: e.MerkleRoot.Hex(), LeafCount: e.LeafCount, URI: e.URI,
 		OnchainID: e.OnchainID, Status: e.Status,
 		ExpectedRewardWei: e.ExpectedRewardWei, RewardWei: e.RewardWei,
+	}
+	if e.FilterKeccak != (common.Hash{}) {
+		v.FilterKeccak = e.FilterKeccak.Hex()
 	}
 	if e.CoverageRoot != (common.Hash{}) {
 		v.CoverageRoot = e.CoverageRoot.Hex()

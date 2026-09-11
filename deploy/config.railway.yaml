@@ -24,7 +24,7 @@ registry:
   # Post a commitment on a timer. Identical roots are skipped, so this is an upper
   # bound on how often gas is spent, not a guarantee that it is.
   auto_publish_interval: 30m
-  commitment_uri: "https://evm-scan-sepolia.up.railway.app/v1/epochs/{id}/snapshot"
+  commitment_uri: "https://evm-scan-sepolia.up.railway.app/v1/epochs/{id}/manifest"
   ens_parent: "evm-scan.eth"
   publisher:
     mode: eoa

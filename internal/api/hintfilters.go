@@ -1,7 +1,9 @@
 package api
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
@@ -10,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 
 	"github.com/Skanislav/evm-scan/internal/hintfilter"
+	"github.com/Skanislav/evm-scan/internal/store"
 )
 
 // Hint filters are the private half of the read path.
@@ -110,7 +113,7 @@ func (s *Server) serveHintFilter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, enc, m, err := c.Get(r.Context())
+	_, enc, m, err := s.filterBytes(r.Context(), name, c)
 	if errors.Is(err, hintfilter.ErrEmpty) {
 		writeErr(w, http.StatusNotFound, "nothing is indexed on this chain yet", nil)
 		return
@@ -127,6 +130,11 @@ func (s *Server) serveHintFilter(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("ETag", etag)
 	w.Header().Set("Cache-Control", "public, max-age=300")
 	w.Header().Set("X-Filter-To-Block", strconv.FormatUint(m.ToBlock, 10))
+	if m.EpochID >= 0 {
+		// The epoch whose bonded commitment names this digest. A reader checks it
+		// against the chain rather than against us; see cmd/evmscan-verify -filter.
+		w.Header().Set("X-Filter-Epoch", strconv.FormatInt(m.EpochID, 10))
+	}
 	if match := r.Header.Get("If-None-Match"); match == etag {
 		w.WriteHeader(http.StatusNotModified)
 		return
@@ -158,6 +166,60 @@ func (s *Server) serveHintList(w http.ResponseWriter, r *http.Request, name stri
 	writeJSON(w, http.StatusOK, map[string]any{"name": name, "count": len(out), "tokens": out})
 }
 
+// filterBytes serves an index filter from the latest finalized epoch when there is
+// one, and from the rolling cache otherwise.
+//
+// The difference matters to a reader. A cache-built filter is current but vouched
+// for by nobody: the daemon serving the file also states its digest, so a lying one
+// is consistent with itself. An epoch-built filter's digest was fixed inside a
+// bonded transaction, which a reader can check against the chain without asking us.
+//
+// The bytes are rebuilt here rather than stored, and the digest is asserted against
+// what the epoch recorded. A mismatch means the rows behind a finalized epoch moved,
+// which is a bug in this deployment and not a file to hand out: refuse it rather
+// than serve a filter that disagrees with a commitment somebody bonded.
+func (s *Server) filterBytes(ctx context.Context, name string, c *hintfilter.Cache) (*hintfilter.Filter, []byte, hintfilter.Manifest, error) {
+	chainID, ok := indexFilterChain(name)
+	if !ok || s.d.Store == nil {
+		return c.Get(ctx)
+	}
+	e, err := s.d.Store.LatestFinalizedEpoch(ctx, chainID)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		// No finalized epoch yet. The rolling filter is the honest answer, and its
+		// epochId of -1 says so.
+		return c.Get(ctx)
+	case err != nil:
+		// Anything else is this deployment failing, not an absent commitment.
+		// Degrading quietly here would tell a reader their filter is merely
+		// unvouched-for when the truth is that the database is down.
+		return nil, nil, hintfilter.Manifest{}, err
+	case e.FilterKeccak == (common.Hash{}):
+		// Published before filters were committed (migration 0008).
+		return c.Get(ctx)
+	}
+
+	sets, err := s.d.Store.SnapshotIndex(ctx, chainID, e.ToBlock)
+	if err != nil {
+		return nil, nil, hintfilter.Manifest{}, err
+	}
+	rows := make([]hintfilter.AccountAssetSet, len(sets))
+	for i, v := range sets {
+		rows[i] = hintfilter.AccountAssetSet{Account: v.Account, Assets: v.Assets}
+	}
+	f, enc, m, err := hintfilter.FromIndex(chainID, rows, e.ToBlock)
+	if err != nil {
+		return nil, nil, hintfilter.Manifest{}, err
+	}
+	if m.Keccak256 != e.FilterKeccak.Hex() {
+		return nil, nil, hintfilter.Manifest{}, fmt.Errorf(
+			"rebuilt filter for epoch %d is %s, but the epoch committed %s",
+			e.ID, m.Keccak256, e.FilterKeccak.Hex())
+	}
+	m.EpochID = e.ID
+	return f, enc, m, nil
+}
+
 // hintNames lists the served filters in a stable order, so the listing does not
 // reshuffle between requests for no reason.
 func (s *Server) hintNames() []string {
@@ -169,6 +231,19 @@ func (s *Server) hintNames() []string {
 	return names
 }
 
+// indexFilterChain reads the chain id back out of an index filter's name.
+func indexFilterChain(name string) (uint64, bool) {
+	rest, ok := strings.CutPrefix(name, "index-")
+	if !ok {
+		return 0, false
+	}
+	id, err := strconv.ParseUint(rest, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return id, true
+}
+
 func listURL(lists map[string][]common.Address, name string) string {
 	if _, ok := lists[name]; !ok {
 		return ""
@@ -178,7 +253,7 @@ func listURL(lists map[string][]common.Address, name string) string {
 
 func (s *Server) hintView(r *http.Request, name string) (hintFilterJSON, error) {
 	c := s.hints[name]
-	f, enc, m, err := c.Get(r.Context())
+	f, enc, m, err := s.filterBytes(r.Context(), name, c)
 	if err != nil {
 		return hintFilterJSON{}, err
 	}
@@ -191,4 +266,98 @@ func (s *Server) hintView(r *http.Request, name string) (hintFilterJSON, error) 
 		Keccak: m.Keccak256, SHA256: m.SHA256,
 		Derivation: derivation(),
 	}, nil
+}
+
+// epochManifest is the document an epoch's URI points at.
+//
+// A root proves a leaf to whoever already holds it and recovers nothing on its own
+// (docs/RECOVERY.md), so the URI has always pointed at the table. This adds the
+// filter's digest beside it, which is what lets a reader check the .xorf they
+// downloaded against a commitment the publisher bonded rather than against the
+// daemon that handed them the file.
+//
+// The honesty limit is the scheme. Over ipfs:// the URI *is* the content, so the
+// bonded transaction fixes this document. Over https:// it fixes only the address:
+// the publisher committed to naming that URL, not to what it serves, and a
+// deployment vouching for itself is what the digest was meant to get away from.
+// docs/PRIVACY.md says so in those words.
+//
+// One deployment detail matters here: the digest is over the filter's bytes exactly
+// as served. A proxy that adds Content-Encoding in front of this daemon changes what
+// a reader hashes and every check fails for a reason that looks nothing like the
+// cause, so the filter endpoint must not be transparently compressed.
+func (s *Server) epochManifest(w http.ResponseWriter, r *http.Request) {
+	if s.d.Store == nil {
+		writeErr(w, http.StatusServiceUnavailable, "no index", nil)
+		return
+	}
+
+	// A committed URI normally names its own epoch: Publisher.Build expands {id}
+	// once the row exists and before it is published. "latest" is here for the
+	// reader who has a name and no epoch number — the ENS record and
+	// evmscan-verify both work from the newest finalized epoch — and it is not what
+	// commitment_uri should be set to, because a pointer that follows the head
+	// stops describing the commitment that carries it.
+	var (
+		e   store.Epoch
+		err error
+	)
+	raw := r.PathValue("id")
+	if raw == "latest" {
+		chainID, _, cerr := s.chainOf(r)
+		if cerr != nil {
+			writeErr(w, http.StatusBadRequest, "bad chain", cerr)
+			return
+		}
+		e, err = s.d.Store.LatestFinalizedEpoch(r.Context(), chainID)
+	} else {
+		var id int64
+		id, err = strconv.ParseInt(raw, 10, 64)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "bad epoch id", err)
+			return
+		}
+		e, err = s.d.Store.GetEpoch(r.Context(), id)
+	}
+	if errors.Is(err, store.ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "no such epoch", nil)
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "query failed", err)
+		return
+	}
+
+	w.Header().Set("Cache-Control", "public, max-age=60")
+	writeJSON(w, http.StatusOK, manifestBody(e))
+}
+
+// manifestBody is the manifest document. Split from the handler so a test can assert
+// the exact keys another program parses.
+func manifestBody(e store.Epoch) map[string]any {
+	out := map[string]any{
+		"epoch":        e.ID,
+		"chain_id":     e.ChainID,
+		"from_block":   e.FromBlock,
+		"to_block":     e.ToBlock,
+		"merkle_root":  e.MerkleRoot.Hex(),
+		"leaf_count":   e.LeafCount,
+		"status":       e.Status,
+		"snapshot_url": fmt.Sprintf("/v1/epochs/%d/snapshot", e.ID),
+	}
+	if e.OnchainID != nil {
+		out["onchain_epoch_id"] = *e.OnchainID
+	}
+	if e.CoverageRoot != (common.Hash{}) {
+		out["coverage_root"] = e.CoverageRoot.Hex()
+	}
+	if e.FilterKeccak != (common.Hash{}) {
+		out["index_filter"] = map[string]any{
+			"keccak256": e.FilterKeccak.Hex(),
+			"to_block":  e.ToBlock,
+			"url":       "/v1/hints/" + indexFilterName(e.ChainID) + ".xorf",
+			"kind":      "account-token",
+		}
+	}
+	return out
 }

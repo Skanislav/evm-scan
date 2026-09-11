@@ -51,11 +51,26 @@ Two numbers, and only one of them is measured.
 **7,750 bytes** — 1.33 bytes per token, built from the live list and byte-identical
 across two independent fetches.
 
-**Index filter, estimated:** `docs/RECOVERY.md` records epoch 1 as 540,059 accounts;
-at roughly three assets each that is ~1.6M pairs, or about 2 MB. **This has not been
-built against a real index yet** — the figure is arithmetic, not a measurement, and
-the comparison against `GET /v1/epochs/{id}/snapshot` ("tens of megabytes on a real
-chain") should be treated as a design expectation until someone runs it.
+**Index filter, measured** against the hosted mainnet index, epoch 7 (on-chain epoch
+4), built from its published snapshot:
+
+| | |
+| --- | --- |
+| accounts | 773,948 |
+| (account, contract) pairs | 857,417 |
+| filter | **974,918 bytes** — 1.14 bytes per key |
+| the snapshot it was built from | 50,102,272 bytes gzipped |
+| ratio | **51× smaller** |
+
+That ratio is the argument. `GET /v1/epochs/{id}/snapshot` is already a private
+client-side path — download the whole table, match locally, check both roots against
+the chain — and it costs 50 MB. The filter answers the one question a portfolio read
+actually asks for under a megabyte, and a reader can rebuild it from the same
+snapshot to check that the served one matches:
+
+```bash
+evmscan-hint build -index -snapshot https://<host>/v1/epochs/7/snapshot -o index.xorf
+```
 
 **Why this is safe:** nothing is written and nothing is trusted. A filter says where
 to look; the live read through the lens says what is there. A stale or lying filter
@@ -118,7 +133,12 @@ where a reader would otherwise assume a protection they do not have:
 |---|---|
 | filter format, both structures | shipped, cross-verified Go ↔ JS |
 | token filters from config, served and cached | shipped |
-| `index-{chain}.xorf` | wired and unit-tested; **never built against a real index** |
+| `index-{chain}.xorf` | shipped; built and cross-checked against the hosted mainnet index |
+| epoch-bound digest (`epochs.filter_keccak`, `Publisher.Build`) | shipped |
+| `GET /v1/epochs/{id}/manifest` | shipped |
+| `evmscan-verify -filter` | shipped; needs a node, a registry and a finalized epoch to say anything |
+| `text(node, "evmscan.uri")` on HintResolver | shipped; **no deployment to read it from yet** |
+| cross-chain sweep over viem's chain registry | shipped; measured below |
 | unlisted-contract marking in the account table | shipped |
 | `passkeySecret` / `walletSecret` / `passwordSecret` / `buildWatchlist` | implemented and
   round-tripped against Go, but **console-only — there is no UI to reach them** |
@@ -146,6 +166,15 @@ this document describes a capability rather than a feature.
   be one — a recoverable blinding is not blinding. Passkeys sync through their
   platform keychain; a wallet-derived secret lives as long as the seed does.
 
+- **The digest is only as good as the URI's scheme.** An epoch commits a digest of
+  its filter into a manifest, and names that manifest's URI inside the same bonded
+  `publishIndex` transaction as the root. Over `ipfs://` the URI *is* the content, so
+  the commitment fixes the document. Over `https://` it fixes only the address: the
+  publisher committed to naming that URL, not to what it serves, and a deployment
+  answering for its own artifact is the circularity the digest existed to break.
+  `evmscan-verify -filter` prints which one it followed, every time. Only the IPFS
+  form actually closes the loop, and nothing here publishes to IPFS yet.
+
 - **Omission, unchanged from `docs/CLIENT-SIDE.md`.** A publisher can under-populate a
   filter and no client can detect it locally: `Contains` returning false is
   indistinguishable from "was never inserted". `index-{chain}.xorf` is exactly as
@@ -155,12 +184,36 @@ this document describes a capability rather than a feature.
   *verifiable* drift across from the merkle path, where it is earned.
 
 - **Staleness is a false negative.** A pair indexed after a filter was built is a
-  holding the filter will hide. The header carries `toBlock` and the cache rebuilds
-  when coverage advances, but a reader that does not show "as of block N" cannot tell
-  "you hold nothing" from "nothing was indexed yet".
+  holding the filter will hide. Two filters exist for this reason and they answer
+  different questions. The epoch-bound one is fixed at the block a publisher bonded,
+  so it is checkable and behind; the rolling one is current and vouched for by
+  nobody. `/v1/hints/index-{chain}.xorf` serves the first when a finalized epoch
+  exists and the second otherwise, and the header says which (`epochId` is `-1` for
+  the rolling one). A reader that does not show "as of block N" cannot tell "you hold
+  nothing" from "nothing was indexed yet".
 
 - **It is not an authorization boundary.** It hides a set from a host. It does not
   stop anyone who already knows an address from watching that address on chain.
+
+- **A filter answers about its own set, and nothing else.** The index filter was
+  briefly used to narrow the cross-chain sweep, which looked obviously right and was
+  badly wrong: the index is bounded by the promoted asset set, so a miss means "not
+  indexed", not "no balance". On the hosted mainnet deployment — eight promoted
+  assets — that turned 65 real holdings into 1, silently, because a skipped read is
+  indistinguishable from a zero. A filter cannot have a false negative about the set
+  it was built over; it can only be asked about the wrong set. Narrowing is sound
+  where the index is authoritative for the question asked, which is the wallet
+  lookup, not a token-list sweep.
+
+- **A cross-chain sweep leaks to every endpoint it touches.** "Elsewhere" reads one
+  RPC per chain, and each one sees the address being asked about. Selecting every
+  available chain sends it to around twenty endpoints this deployment has no
+  relationship with — viem's public defaults. That is a `docs/CLIENT-SIDE.md` Tier 1
+  trade, the reader's own read against a node of their choosing, and it is legitimate
+  as long as it is not a surprise: the panel states it before the sweep runs, counts
+  how many of the selected endpoints are not the reader's, offers a per-chain
+  override, and names the host that answered on every row. Nothing about the sweep
+  reaches this daemon.
 
 - **The rest of the page still leaks.** Name resolution goes to a public mainnet RPC,
   disclosed inline. `/v1/accounts/{address}` is still the default path. Filters are

@@ -30,6 +30,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 
 	"github.com/Skanislav/evm-scan/internal/hintfilter"
+	"github.com/Skanislav/evm-scan/internal/snapshot"
 	"github.com/Skanislav/evm-scan/internal/store"
 )
 
@@ -68,6 +69,7 @@ func usage() {
 
   evmscan-hint build -tokenlist <url|path> -chain <id> -o tokens.xorf
   evmscan-hint build -index -dsn <dsn> -chain <id> [-shard] -o index.xorf
+  evmscan-hint build -index -snapshot <url|path> -o index.xorf
   evmscan-hint test -f <file> <token> [account]
   evmscan-hint inspect -f <file>
 
@@ -79,6 +81,7 @@ func build(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("build", flag.ExitOnError)
 	list := fs.String("tokenlist", "", "tokenlists.org document, as a URL or a path")
 	fromIndex := fs.Bool("index", false, "build over the indexed (account, token) pairs")
+	fromSnap := fs.String("snapshot", "", "build the index filter from a published snapshot (path or URL) instead of a database")
 	dsn := fs.String("dsn", os.Getenv("EVMSCAN_DATABASE_DSN"), "PostgreSQL DSN (or EVMSCAN_DATABASE_DSN)")
 	chainID := fs.Uint64("chain", 1, "chain id")
 	toBlock := fs.Uint64("to-block", 0, "index filters only: build as of this block (0 = everything indexed)")
@@ -97,6 +100,9 @@ func build(ctx context.Context, args []string) error {
 
 	if *list != "" {
 		return buildTokens(ctx, *list, *chainID, *out)
+	}
+	if *fromSnap != "" {
+		return buildIndexFromSnapshot(ctx, *fromSnap, *out)
 	}
 	return buildIndex(ctx, *dsn, *chainID, *toBlock, *epochID, *shard, *out)
 }
@@ -215,6 +221,59 @@ func buildIndex(ctx context.Context, dsn string, chainID, toBlock uint64, epochI
 	return nil
 }
 
+// buildIndexFromSnapshot builds the index filter out of a published snapshot.
+//
+// A snapshot already carries exactly what the filter is over — one leaf per account
+// with the contracts it touched — and it names the chain, the block and the epoch it
+// was taken at. So the filter can be rebuilt by anyone holding the published table,
+// with no database and no node, which is the point: a reader who wants to check that
+// a deployment is serving the filter it committed should not have to run that
+// deployment to find out.
+//
+// The digest printed here is the one to compare against the epoch's manifest. If
+// they differ, either the snapshot or the served filter is not what was committed.
+func buildIndexFromSnapshot(ctx context.Context, source, out string) error {
+	rc, err := snapshot.Open(ctx, source)
+	if err != nil {
+		return err
+	}
+	defer rc.Close()
+
+	h, _, leaves, err := snapshot.Read(rc)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", source, err)
+	}
+	if len(leaves) == 0 {
+		return fmt.Errorf("%s has no leaves", source)
+	}
+
+	sets := make([]hintfilter.AccountAssetSet, len(leaves))
+	for i, l := range leaves {
+		sets[i] = hintfilter.AccountAssetSet{Account: l.Account, Assets: l.Assets}
+	}
+
+	f, enc, m, err := hintfilter.FromIndex(h.ChainID, sets, h.ToBlock)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(out, enc, 0o644); err != nil {
+		return err
+	}
+
+	pairs := 0
+	for _, l := range leaves {
+		pairs += len(l.Assets)
+	}
+	fmt.Printf("%s: %d accounts, %d pairs, %s, %d bytes (%.2f bytes/key)\n",
+		out, len(leaves), pairs, m.Structure, len(enc), float64(len(enc))/float64(f.Count()))
+	fmt.Printf("  chain %d as of block %d (snapshot root %s)\n", h.ChainID, h.ToBlock, h.Root)
+	fmt.Printf("  keccak256 %s\n", m.Keccak256)
+	if h.OnchainEpochID != nil {
+		fmt.Printf("  compare against the manifest for on-chain epoch %d\n", *h.OnchainEpochID)
+	}
+	return writeManifest(m, out)
+}
+
 func write(f *hintfilter.Filter, path, source, sourceVersion string) error {
 	enc, err := f.Encode()
 	if err != nil {
@@ -225,12 +284,7 @@ func write(f *hintfilter.Filter, path, source, sourceVersion string) error {
 	}
 
 	m := hintfilter.BuildManifest(f, enc, source, sourceVersion)
-	mj, err := m.JSON()
-	if err != nil {
-		return err
-	}
-	mp := strings.TrimSuffix(path, filepath.Ext(path)) + ".manifest.json"
-	if err := os.WriteFile(mp, mj, 0o644); err != nil {
+	if err := writeManifest(m, path); err != nil {
 		return err
 	}
 
@@ -241,6 +295,14 @@ func write(f *hintfilter.Filter, path, source, sourceVersion string) error {
 		fmt.Printf("  as of block %d\n", m.ToBlock)
 	}
 	return nil
+}
+
+func writeManifest(m hintfilter.Manifest, path string) error {
+	mj, err := m.JSON()
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(strings.TrimSuffix(path, filepath.Ext(path))+".manifest.json", mj, 0o644)
 }
 
 func testKey(args []string) error {

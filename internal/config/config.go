@@ -97,7 +97,24 @@ type Registry struct {
 	SyncInterval Duration `yaml:"sync_interval"`
 	// AutoPublishInterval > 0 builds and posts a commitment on a timer.
 	AutoPublishInterval Duration `yaml:"auto_publish_interval"`
-	// CommitmentURI is recorded alongside a published root, pointing at the full table.
+	// CommitmentURI is recorded alongside a published root, pointing at the full
+	// table. It is named inside the same bonded transaction as the root, which is
+	// what makes it worth anything: a reader can ask the chain where the publisher
+	// said to look, rather than asking the deployment to vouch for itself.
+	//
+	// Point it at this daemon's epoch manifest —
+	// `https://<host>/v1/epochs/{id}/manifest` — if you want
+	// `evmscan-verify -filter` to work. The manifest carries the snapshot's
+	// location and the membership filter's digest; a URI aimed straight at the
+	// snapshot leaves the verifier a gzip stream it cannot parse as JSON.
+	//
+	// `{id}` and `{chain}` are expanded once the epoch's row exists and before it
+	// is published, so the committed URI names its own epoch rather than whichever
+	// one happens to be latest when somebody reads it.
+	//
+	// An https URI fixes the address and not the bytes. Only a content-addressed
+	// one (ipfs://) makes the commitment cover what is actually served; see
+	// docs/PRIVACY.md.
 	CommitmentURI string `yaml:"commitment_uri"`
 	// ENSParent is the ENS name a HintResolver is bound under (e.g. "evmscan.eth"),
 	// so the API and the page can print each account's hint name

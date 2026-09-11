@@ -67,6 +67,7 @@ func main() {
 		ensName  = flag.String("ens", "", "resolve a hint name (<hex>.hints.<name>.eth) through ENS and verify its contracts record on-chain")
 		ur       = flag.String("universal-resolver", "0xeEeEEEeE14D718C2B47D9923Deab1335E144EeEe", "Universal Resolver to ask with -ens")
 		textKey  = flag.String("key", "evmscan.contracts", "text record to read with -ens")
+		filter   = flag.String("filter", "", "check a .xorf hint filter (path or URL) against the digest its epoch committed")
 	)
 	flag.Parse()
 
@@ -78,6 +79,16 @@ func main() {
 			os.Exit(2)
 		}
 		if err := runENS(*nodeURL, *ensName, *ur, *textKey, *registry, *gateway); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+
+	// -filter checks one artifact against the chain and proves nothing about an
+	// account, so like -snapshot it wants neither -account nor, strictly, a node:
+	// without one it still reports what the file is.
+	if *filter != "" {
+		if err := runFilter(context.Background(), *filter, *nodeURL, *registry, *chainID); err != nil {
 			log.Fatal(err)
 		}
 		return

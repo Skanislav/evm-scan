@@ -82,8 +82,19 @@ is not an optimisation, it is the only way back.
 before `publishIndex` is called, because the contract takes the uri as an argument
 and has no setter. An epoch published with the wrong string carries it forever.
 
-- `{id}` — the publisher's own epoch id, which `GET /v1/epochs/{id}/snapshot` takes.
+- `{id}` — the publisher's own epoch id, which `GET /v1/epochs/{id}/snapshot` and
+  `GET /v1/epochs/{id}/manifest` both take.
 - `{chain}` — the indexed chain.
+
+**Point it at the manifest, not the snapshot.** `…/v1/epochs/{id}/manifest` is a
+small JSON document naming both roots, the snapshot's location, and the digest of
+the membership filter the epoch committed (docs/PRIVACY.md). The snapshot is one
+field inside it, so nothing is lost, and `evmscan-verify -filter` has something it
+can parse — a URI aimed straight at the snapshot hands a verifier a gzip stream.
+
+The hosted configs in `deploy/` were changed to the manifest form. Epochs already
+published keep whatever URI they carried; each is self-identifying, since one is
+JSON and the other is gzip.
 
 Neither is the on-chain epoch id: the registry assigns that during `publishIndex`,
 which is after the uri has already been handed to it. A reader never needs it, since

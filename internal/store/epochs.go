@@ -47,6 +47,13 @@ type Epoch struct {
 	ClaimTx   *common.Hash
 	ClaimedAt *time.Time
 	RewardWei string
+	// FilterKeccak is the digest of the .xorf membership filter built from the same
+	// index snapshot as MerkleRoot, at the same ToBlock. Zero for epochs built
+	// before migration 0008, and for a publisher that built none.
+	//
+	// The filter is not stored: it rebuilds deterministically from interactions as
+	// of ToBlock, so a second copy here could only ever disagree with the first.
+	FilterKeccak common.Hash
 }
 
 // EpochCoverage is one asset's entry in a commitment's coverage tree: the block
@@ -76,7 +83,7 @@ type EpochLeaf struct {
 const epochColumns = `id, chain_id, from_block, to_block, merkle_root, leaf_count, uri,
 	onchain_id, tx_hash, status, submission_ref, submitted_at,
 	COALESCE(coverage_root, ''::bytea), COALESCE(expected_reward_wei, ''), claim_tx, claimed_at,
-	COALESCE(reward_wei, '')`
+	COALESCE(reward_wei, ''), COALESCE(filter_keccak, ''::bytea)`
 
 // CreateEpoch stores a commitment, its leaves and its coverage atomically.
 func (s *Store) CreateEpoch(ctx context.Context, e Epoch, leaves []EpochLeaf, coverage []EpochCoverage) (int64, error) {
@@ -84,10 +91,11 @@ func (s *Store) CreateEpoch(ctx context.Context, e Epoch, leaves []EpochLeaf, co
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `
 			INSERT INTO epochs (chain_id, from_block, to_block, merkle_root, leaf_count, uri, status,
-			                    coverage_root, expected_reward_wei)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NULLIF($9,'')) RETURNING id`,
+			                    coverage_root, expected_reward_wei, filter_keccak)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NULLIF($9,''),NULLIF($10,''::bytea)) RETURNING id`,
 			int64(e.ChainID), int64(e.FromBlock), int64(e.ToBlock), e.MerkleRoot.Bytes(),
-			int64(len(leaves)), e.URI, EpochBuilt, e.CoverageRoot.Bytes(), e.ExpectedRewardWei).Scan(&id); err != nil {
+			int64(len(leaves)), e.URI, EpochBuilt, e.CoverageRoot.Bytes(), e.ExpectedRewardWei,
+			hashBytesOrNil(e.FilterKeccak)).Scan(&id); err != nil {
 			return err
 		}
 
@@ -305,10 +313,11 @@ func scanEpoch(r scannable) (Epoch, error) {
 		covRoot     []byte
 		claimTx     []byte
 		claimedAt   *time.Time
+		filterHash  []byte
 	)
 	if err := r.Scan(&e.ID, &cid, &fb, &tb, &root, &e.LeafCount, &e.URI,
 		&e.OnchainID, &txHash, &e.Status, &ref, &submittedAt,
-		&covRoot, &e.ExpectedRewardWei, &claimTx, &claimedAt, &e.RewardWei); err != nil {
+		&covRoot, &e.ExpectedRewardWei, &claimTx, &claimedAt, &e.RewardWei, &filterHash); err != nil {
 		return Epoch{}, err
 	}
 	e.ChainID = uint64(cid)
@@ -330,8 +339,20 @@ func scanEpoch(r scannable) (Epoch, error) {
 		h := common.BytesToHash(ref)
 		e.SubmissionRef = &h
 	}
+	if len(filterHash) > 0 {
+		e.FilterKeccak = common.BytesToHash(filterHash)
+	}
 	e.SubmittedAt = submittedAt
 	return e, nil
+}
+
+// hashBytesOrNil keeps a zero hash out of the column, so "no filter was built" and
+// "a filter hashing to zero" stay distinguishable.
+func hashBytesOrNil(h common.Hash) []byte {
+	if h == (common.Hash{}) {
+		return nil
+	}
+	return h.Bytes()
 }
 
 // EpochLeaves returns every leaf of a commitment in tree order, which is what the

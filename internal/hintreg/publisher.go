@@ -12,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 
+	"github.com/Skanislav/evm-scan/internal/hintfilter"
 	"github.com/Skanislav/evm-scan/internal/merkle"
 	"github.com/Skanislav/evm-scan/internal/snapshot"
 	"github.com/Skanislav/evm-scan/internal/store"
@@ -166,6 +167,16 @@ func (p *Publisher) Build(ctx context.Context, chainID uint64, uri string, force
 	}
 	root := merkle.Build(leaves).Root()
 
+	// The membership filter commits to the same index, at the same block, from the
+	// same snapshot. Building it here rather than on a timer is what makes it
+	// checkable: a reader who downloads a .xorf can compare its digest against what
+	// this epoch published, and a filter built at some other moment answers a
+	// different question than the root does.
+	filterHash, err := indexFilterDigest(chainID, sets, to)
+	if err != nil {
+		return store.Epoch{}, err
+	}
+
 	cursors, err := p.st.ListCursors(ctx, chainID)
 	if err != nil {
 		return store.Epoch{}, err
@@ -208,6 +219,7 @@ func (p *Publisher) Build(ctx context.Context, chainID uint64, uri string, force
 		CoverageRoot:      covRoot,
 		LeafCount:         int64(len(leaves)),
 		URI:               uri,
+		FilterKeccak:      filterHash,
 		Status:            store.EpochBuilt,
 		ExpectedRewardWei: expected.String(),
 	}
@@ -727,4 +739,29 @@ func (p *Publisher) checkTrusted(ctx context.Context, chainID uint64) error {
 		return nil
 	}
 	return fmt.Errorf("%w: chain %d is %s", ErrUntrusted, chainID, prof.Trust)
+}
+
+// indexFilterDigest is the keccak of the membership filter over this epoch's index.
+//
+// It is computed from the snapshot the root was built from, so the two describe the
+// same rows at the same block. A reader who downloads a .xorf compares its digest
+// against this one and learns whether they were handed the file the publisher
+// bonded, which is not something the daemon serving the file can tell them about
+// itself.
+//
+// An empty index is not an error here: Build has already refused that case, and a
+// chain with nothing indexed has no filter to commit rather than a broken one.
+func indexFilterDigest(chainID uint64, sets []store.AccountAssetSet, toBlock uint64) (common.Hash, error) {
+	rows := make([]hintfilter.AccountAssetSet, len(sets))
+	for i, s := range sets {
+		rows[i] = hintfilter.AccountAssetSet{Account: s.Account, Assets: s.Assets}
+	}
+	_, _, m, err := hintfilter.FromIndex(chainID, rows, toBlock)
+	if errors.Is(err, hintfilter.ErrEmpty) {
+		return common.Hash{}, nil
+	}
+	if err != nil {
+		return common.Hash{}, fmt.Errorf("hintreg: build index filter: %w", err)
+	}
+	return common.HexToHash(m.Keccak256), nil
 }

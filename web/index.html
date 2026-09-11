@@ -378,6 +378,24 @@
       </div>
       <div id="holdings"></div>
     </div>
+    <div id="xchain" style="margin-top:40px">
+      <div style="display:flex; align-items:baseline; justify-content:space-between; gap:25px; flex-wrap:wrap">
+        <h3 style="font-size:26px; margin:0">Elsewhere</h3>
+        <button class="linkbtn" id="xchain-open">look on other chains</button>
+      </div>
+      <div id="xchain-panel" hidden style="margin-top:14px">
+        <p class="hint" id="xchain-disclosure"></p>
+        <div class="row" style="gap:10px; margin:12px 0; flex-wrap:wrap">
+          <button class="btn btn-secondary btn-sm" id="xchain-all">select all</button>
+          <button class="btn btn-secondary btn-sm" id="xchain-none">clear</button>
+          <button class="btn btn-primary btn-sm" id="xchain-go">Look</button>
+          <span class="hint" id="xchain-status"></span>
+        </div>
+        <div id="xchain-list" class="scroll" style="max-height:240px"></div>
+        <div id="xchain-results" style="margin-top:18px"></div>
+      </div>
+    </div>
+
     <div class="row" style="margin-top:18px">
       <button class="linkbtn" id="spam-toggle" hidden></button>
       <span class="hint" id="spam-note"></span>
@@ -1561,6 +1579,28 @@ function setChainRpc(v) {
   lensArtifacts = null;
 }
 
+// Cross-chain reads need one endpoint per chain, not one for the deployment. The
+// key above stays the override for the chain this daemon indexes; these are for the
+// rest, and a chain with neither falls back to whatever viem ships as its public
+// default — which is a third party who will see the address being asked about, so
+// the sweep says so before it runs and names the host it used afterwards.
+const chainRpcKeyFor = (id) => `evmscan.chain-rpc.${id}`;
+function rpcForChain(id, viemChain) {
+  try {
+    const own = localStorage.getItem(chainRpcKeyFor(id));
+    if (own) return { url: own, mine: true };
+  } catch { /* private window */ }
+  const active = chainRpc();
+  if (active && String(id) === String(activeChainID())) return { url: active, mine: true };
+  const pub = viemChain?.rpcUrls?.default?.http?.[0] || '';
+  return { url: pub, mine: false };
+}
+function setRpcForChain(id, v) {
+  try {
+    v ? localStorage.setItem(chainRpcKeyFor(id), v) : localStorage.removeItem(chainRpcKeyFor(id));
+  } catch { /* private window */ }
+}
+
 let lensArtifacts = null;
 async function lenses() {
   if (!lensArtifacts) {
@@ -1588,8 +1628,8 @@ async function rpc(url, method, params) {
 // Runs one lens against the reader's own endpoint. `req` is the constructor tuple as
 // an object; viem encodes it by component name, so its keys have to match the Solidity
 // field names exactly.
-async function lensCall(which, req) {
-  const url = chainRpc();
+async function lensCall(which, req, endpoint) {
+  const url = endpoint || chainRpc();
   if (!url) throw new Error('no RPC configured');
   const art = (await lenses())[which];
   if (!art) throw new Error(`this build does not serve the ${which} lens`);
@@ -1998,6 +2038,312 @@ async function markUnlisted(rows, chainId) {
     // stop meaning anything.
     if (a.standard && a.standard !== 'erc20') continue;
     a.unlisted = !xorfContains(f, await tokenKey(sub, a.address));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Cross-chain discovery: what does this address hold, everywhere we can look?
+//
+// The read is the same deployless AssetLens call the single-chain path already
+// makes, pointed at one endpoint per chain. What is new is deciding *which*
+// contracts to ask about on a chain nobody has indexed.
+//
+// The answer is: read all of them, and keep the list small enough that this is
+// affordable. Measured, the lens returns about 920 bytes per token, so EIP-170's
+// 24,576-byte reply ceiling lands the batch at 24 — the existing constant is a
+// near-optimum rather than a conservative guess, which means batching harder is not
+// a lever. Curation is the lever instead: the Uniswap default list is 1,516
+// contracts across 22 chains and sweeps in about seven seconds, where CoinGecko's
+// 5,828 mainnet contracts alone would be 243 calls against a public endpoint.
+//
+// The index filter is deliberately not used to narrow this; see below for why.
+// ---------------------------------------------------------------------------
+
+// Bundled rather than the barrel: esm.sh serves viem/chains as ~800 separate
+// imports, and importing that in a browser is ~800 requests. This is one file,
+// about 49 KB over the wire, and it is only fetched when someone opens the picker.
+const VIEM_CHAINS_MODULE = 'https://esm.sh/viem@2.56.3/es2022/chains.mjs';
+
+// The Uniswap Labs default list: curated, CORS-open, and multichain — 1,708 tokens
+// across 25 chains at the time of writing, with no chain over ~405. Curation is the
+// point; this is a list of contracts worth a balance read, not every contract.
+const DEFAULT_TOKEN_LIST = 'https://tokens.uniswap.org';
+
+// The lens reply is ~920 bytes per token and must fit EIP-170's 24,576. Measured
+// against mainnet: 24 tokens returns 22,080 bytes, 50 exceeds the limit.
+const LENS_BATCH = 24;
+// One dead public RPC must not hold up the others, and a dozen chains at once is
+// how you get rate-limited by all of them.
+const CHAIN_CONCURRENCY = 4;
+const CHAIN_TIMEOUT_MS = 20000;
+
+let viemChains = null;
+async function allChains() {
+  if (!viemChains) {
+    viemChains = import(VIEM_CHAINS_MODULE).then(m =>
+      Object.values(m).filter(c => c && typeof c === 'object' && c.id && c.rpcUrls)
+    ).catch(e => { viemChains = null; throw e; });
+  }
+  return viemChains;
+}
+
+let tokenListCache = null;
+async function tokenList(url = DEFAULT_TOKEN_LIST) {
+  if (!tokenListCache) {
+    tokenListCache = (async () => {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`${url}: ${res.status}`);
+      const doc = await res.json();
+      const byChain = new Map();
+      for (const t of (doc.tokens || [])) {
+        if (!/^0x[0-9a-fA-F]{40}$/.test(t.address || '')) continue;
+        if (!byChain.has(t.chainId)) byChain.set(t.chainId, []);
+        byChain.get(t.chainId).push(t);
+      }
+      return { name: doc.name, version: doc.version, byChain };
+    })().catch(e => { tokenListCache = null; throw e; });
+  }
+  return tokenListCache;
+}
+
+// sweepableChains is what "all available" means, and it needs a definition that
+// does not hang: a chain the list has tokens for, that viem knows, and that has
+// somewhere to ask. Busiest first, because that is the order a reader cares about
+// and the order in which partial results are worth showing.
+async function sweepableChains() {
+  const [chains, list] = await Promise.all([allChains(), tokenList()]);
+  const byId = new Map(chains.map(c => [c.id, c]));
+  const out = [];
+  for (const [chainId, tokens] of list.byChain) {
+    const c = byId.get(chainId);
+    if (!c) continue;
+    const { url, mine } = rpcForChain(chainId, c);
+    if (!url) continue;
+    out.push({
+      id: chainId, name: c.name, native: c.nativeCurrency?.symbol || '',
+      testnet: !!c.testnet,
+      tokens, rpc: url, mine, host: hostOf(url),
+    });
+  }
+  // Mainnets first, busiest first within each. Token lists carry testnet entries
+  // long after the testnet dies — Goerli and Mumbai are both still in the Uniswap
+  // list and both refuse eth_call — so they are listed but never swept by default.
+  out.sort((a, b) => (a.testnet - b.testnet) || (b.tokens.length - a.tokens.length));
+  return out;
+}
+
+const hostOf = (u) => { try { return new URL(u).host; } catch { return u; } };
+
+// The index filter deliberately does NOT narrow this sweep, and the reason is worth
+// writing down because the opposite looks obviously right.
+//
+// The filter answers "is this (account, contract) pair in the index". The index is
+// bounded by the promoted asset set — eight contracts on the hosted mainnet
+// deployment — not by the chain. So a miss means "we do not index that contract",
+// which is nothing like "you hold none of it". Narrowing a 405-contract list by it
+// took a real account from 65 holdings to 1, silently: every token outside the
+// promoted set vanished, and a filter miss is indistinguishable from a zero balance
+// once the read has been skipped.
+//
+// That is the one failure this whole path exists to avoid — a false negative in
+// front of a reader — and it is not a bug in the filter. A filter cannot have a
+// false negative about the set it was built over; the mistake was asking it about a
+// different set. Narrowing is sound only where the index is authoritative for the
+// question, which is the wallet lookup, not a list sweep.
+
+// sweepChain reads one chain and reports what is held there.
+async function sweepChain(chain, account, onProgress) {
+  const tokens = chain.tokens;
+  if (!tokens.length) return { chain, held: [], calls: 0, scanned: 0 };
+
+  const held = [];
+  let calls = 0;
+  for (let i = 0; i < tokens.length; i += LENS_BATCH) {
+    const slice = tokens.slice(i, i + LENS_BATCH);
+    const reply = await withTimeout(lensCall('asset', {
+      account, spenders: [],
+      tokens: slice.map(t => ({ token: t.address, ids: [] })),
+      includeUri: false, includeCode: false,
+      enumerateLimit: 0n, gasPerCall: 0n, maxStringBytes: 32n,
+    }, chain.rpc), CHAIN_TIMEOUT_MS, `${chain.name} (${chain.host})`);
+    calls++;
+
+    const meta = new Map(slice.map(t => [t.address.toLowerCase(), t]));
+    for (const t of (reply.tokens || [])) {
+      if (!t.hasBalance || t.balance === 0n) continue;
+      const m = meta.get((t.token || '').toLowerCase()) || {};
+      held.push({
+        chainId: chain.id, chainName: chain.name, host: chain.host, mine: chain.mine,
+        address: t.token,
+        // Metadata comes from the list, which already has it — the lens returns it
+        // too, but a curated name beats whatever a contract claims about itself.
+        symbol: m.symbol || t.symbol, name: m.name || t.name,
+        decimals: m.decimals ?? (t.hasDecimals ? Number(t.decimals) : undefined),
+        balance: String(t.balance),
+      });
+    }
+    if (onProgress) onProgress({ chain, done: Math.min(i + LENS_BATCH, tokens.length), total: tokens.length, held });
+  }
+  return { chain, held, calls, scanned: tokens.length };
+}
+
+function withTimeout(p, ms, what) {
+  return Promise.race([
+    p,
+    new Promise((_, rej) => setTimeout(() => rej(new Error(`no answer from ${what} in ${ms / 1000}s`)), ms)),
+  ]);
+}
+
+// sweep runs the selected chains with a concurrency cap, reporting each as it
+// lands. A chain that fails is reported and skipped: one unreachable public
+// endpoint should cost its own row, not the whole answer.
+async function sweep(chains, account, onChainDone, onProgress) {
+  const queue = [...chains];
+  const results = [];
+  const workers = Array.from({ length: Math.min(CHAIN_CONCURRENCY, queue.length) }, async () => {
+    for (;;) {
+      const chain = queue.shift();
+      if (!chain) return;
+      try {
+        const r = await sweepChain(chain, account, onProgress);
+        results.push(r);
+        onChainDone(r);
+      } catch (e) {
+        const r = { chain, held: [], error: e.message, calls: 0 };
+        results.push(r);
+        onChainDone(r);
+      }
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+// The cross-chain panel. Nothing here runs until someone opens it: viem's chain
+// registry and the token list are both fetched on demand, because a reader who
+// never looks elsewhere should not pay for the ability to.
+let XCHAIN = null;        // [{id, name, tokens, rpc, mine, host}], busiest first
+const XSELECTED = new Set();
+
+async function openXChain() {
+  const panel = $('xchain-panel');
+  panel.hidden = false;
+  $('xchain-open').hidden = true;
+  if (XCHAIN) return;
+
+  $('xchain-status').textContent = 'loading chain definitions and the token list…';
+  try {
+    XCHAIN = await sweepableChains();
+  } catch (e) {
+    $('xchain-status').textContent = `could not load: ${e.message}`;
+    return;
+  }
+  const list = await tokenList();
+  const third = XCHAIN.filter(c => !c.mine).length;
+
+  // The disclosure belongs here, at the moment of choice, not after the sweep.
+  // Selecting every chain sends this address to every one of those endpoints.
+  $('xchain-disclosure').innerHTML =
+    `Reads run in this browser against one endpoint per chain, using `
+    + `<code>${esc(list.name)}</code> (${XCHAIN.reduce((n, c) => n + c.tokens.length, 0)} contracts `
+    + `across ${XCHAIN.length} chains). <strong>Each endpoint you select sees the address `
+    + `you are asking about.</strong> ${third} of them are public defaults from viem that this `
+    + `deployment has no relationship with; set your own below to avoid that. Nothing is sent `
+    + `to this daemon.`;
+
+  $('xchain-status').textContent = '';
+  renderXChainList();
+}
+
+function renderXChainList() {
+  $('xchain-list').innerHTML = XCHAIN.map(c => `
+    <label class="tablerow" style="grid-template-columns:28px 1fr 90px 1fr; align-items:center; cursor:pointer">
+      <input type="checkbox" data-xchain="${c.id}" ${XSELECTED.has(c.id) ? 'checked' : ''}>
+      <span><strong>${esc(c.name)}</strong> <span class="empty">${c.id}</span>${c.testnet ? ' <span class="tag">testnet</span>' : ''}</span>
+      <span class="num">${c.tokens.length}</span>
+      <span style="min-width:0">
+        <span class="hint" title="${esc(c.rpc)}">${c.mine ? 'your endpoint' : esc(c.host)}</span>
+        <button class="linkbtn" data-xrpc="${c.id}" style="margin-left:8px">set</button>
+      </span>
+    </label>`).join('');
+
+  for (const el of $('xchain-list').querySelectorAll('[data-xchain]')) {
+    el.addEventListener('change', () => {
+      const id = Number(el.dataset.xchain);
+      el.checked ? XSELECTED.add(id) : XSELECTED.delete(id);
+      updateXChainStatus();
+    });
+  }
+  for (const el of $('xchain-list').querySelectorAll('[data-xrpc]')) {
+    el.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      const id = Number(el.dataset.xrpc);
+      const c = XCHAIN.find(x => x.id === id);
+      const v = prompt(`RPC endpoint for ${c.name} (${id}).\n\nIt will see the address you look up. Leave empty to use ${c.host}.`, c.mine ? c.rpc : '');
+      if (v === null) return;
+      setRpcForChain(id, v.trim());
+      c.rpc = v.trim() || (c.rpc);
+      c.mine = !!v.trim();
+      c.host = hostOf(c.rpc);
+      renderXChainList();
+    });
+  }
+  updateXChainStatus();
+}
+
+// The cost is worth showing before it is spent: a reader picking twelve chains
+// should know it is a few hundred requests to a dozen strangers.
+function updateXChainStatus() {
+  const picked = XCHAIN.filter(c => XSELECTED.has(c.id));
+  if (!picked.length) { $('xchain-status').textContent = 'nothing selected'; return; }
+  const contracts = picked.reduce((n, c) => n + c.tokens.length, 0);
+  const calls = picked.reduce((n, c) => n + Math.ceil(c.tokens.length / LENS_BATCH), 0);
+  const third = picked.filter(c => !c.mine).length;
+  $('xchain-status').textContent =
+    `${picked.length} chains, ${contracts} contracts, up to ${calls} calls`
+    + (third ? ` — ${third} to endpoints that are not yours` : '');
+}
+
+async function runXChain() {
+  const addr = WALLET_ADDR;
+  if (!addr) return;
+  const picked = XCHAIN.filter(c => XSELECTED.has(c.id));
+  if (!picked.length) return;
+
+  $('xchain-go').disabled = true;
+  $('xchain-results').innerHTML = '';
+  const rows = [];
+  const done = [];
+
+  const render = () => {
+    $('xchain-results').innerHTML = `
+      <div class="tablehead" style="grid-template-columns:1fr 1fr 140px 1fr">
+        <span>chain</span><span>asset</span><span class="num">balance</span><span>read from</span>
+      </div>`
+      + (rows.length
+        ? rows.map(h => `
+          <div class="tablerow" style="grid-template-columns:1fr 1fr 140px 1fr">
+            <span>${esc(h.chainName)}</span>
+            <span><strong>${esc(h.symbol || '')}</strong> <span class="empty">${esc(h.name || '')}</span></span>
+            <span class="num mono">${formatUnits(h.balance, h.decimals)}</span>
+            <span class="hint">${h.mine ? 'your endpoint' : esc(h.host)}</span>
+          </div>`).join('')
+        : '<div class="empty" style="padding:12px">nothing held yet</div>')
+      + done.map(r => r.error
+          ? `<div class="hint" style="padding:6px 0">${esc(r.chain.name)}: ${esc(r.error)}</div>`
+          : `<div class="hint" style="padding:6px 0">${esc(r.chain.name)}: ${r.held.length} held, `
+            + `${r.scanned} contracts read in ${r.calls} call${r.calls === 1 ? '' : 's'}</div>`).join('');
+  };
+  render();
+
+  try {
+    await sweep(picked, addr,
+      (r) => { done.push(r); rows.push(...r.held); rows.sort((a, b) => a.chainName.localeCompare(b.chainName)); render(); },
+      () => render());
+    $('xchain-status').textContent =
+      `${rows.length} holdings across ${done.filter(r => r.held.length).length} of ${picked.length} chains`;
+  } finally {
+    $('xchain-go').disabled = false;
   }
 }
 
@@ -2670,6 +3016,17 @@ $('lookup').addEventListener('click', lookup);
 $('account').addEventListener('keydown', e => { if (e.key === 'Enter') lookup(); });
 $('to-triage').addEventListener('click', () => show('triage'));
 $('spam-toggle').addEventListener('click', () => { SHOW_SPAM = !SHOW_SPAM; renderHoldings(); });
+$('xchain-open').addEventListener('click', openXChain);
+$('xchain-all').addEventListener('click', () => {
+  // "All available" is every mainnet the list has tokens for that viem knows and
+  // that has somewhere to ask — not viem's whole registry, which is ~800 chains
+  // this would otherwise hang on, and not the testnets, which are in the list
+  // because nobody removed them rather than because anybody holds anything there.
+  for (const c of (XCHAIN || [])) if (!c.testnet) XSELECTED.add(c.id);
+  renderXChainList();
+});
+$('xchain-none').addEventListener('click', () => { XSELECTED.clear(); renderXChainList(); });
+$('xchain-go').addEventListener('click', runXChain);
 $('register').addEventListener('click', register);
 $('new-asset').addEventListener('keydown', e => { if (e.key === 'Enter') register(); });
 $('req-connect').addEventListener('click', connectWallet);

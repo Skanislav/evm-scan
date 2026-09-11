@@ -5,12 +5,14 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
 
 	"github.com/Skanislav/evm-scan/internal/chainset"
 	"github.com/Skanislav/evm-scan/internal/hintfilter"
+	"github.com/Skanislav/evm-scan/internal/store"
 )
 
 var (
@@ -177,5 +179,61 @@ func TestNoTokenFilterServesNoHints(t *testing.T) {
 	}
 	if len(body.Filters) != 0 {
 		t.Errorf("a deployment with no lists served %d filters", len(body.Filters))
+	}
+}
+
+// TestEpochManifestNamesTheFilterDigest pins the one JSON key that the verifier
+// reads back out (cmd/evmscan-verify/filter.go, manifestDigest).
+//
+// This is a contract between two programs that never call each other: the daemon
+// writes index_filter.keccak256, evmscan-verify parses it, and a rename on either
+// side turns "the file does not match the chain" into the error a reader sees for a
+// tampered download. There is nothing in the type system holding them together, so
+// there is a test.
+func TestEpochManifestNamesTheFilterDigest(t *testing.T) {
+	s := hintServer(t)
+
+	// The handler needs a store; without one it must say so rather than panic.
+	rec := httptest.NewRecorder()
+	s.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/epochs/1/manifest", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("store-less manifest returned %d, want 503", rec.Code)
+	}
+
+	// The shape the verifier expects, asserted against the literal keys it parses.
+	digest := common.HexToHash("0xabc123")
+	body := manifestBody(store.Epoch{
+		ID: 7, ChainID: 1, FromBlock: 10, ToBlock: 99,
+		MerkleRoot: common.HexToHash("0xdead"), FilterKeccak: digest,
+	})
+	var parsed struct {
+		IndexFilter struct {
+			Keccak256 string `json:"keccak256"`
+			ToBlock   uint64 `json:"to_block"`
+		} `json:"index_filter"`
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if parsed.IndexFilter.Keccak256 != digest.Hex() {
+		t.Errorf("index_filter.keccak256 = %q, want %q", parsed.IndexFilter.Keccak256, digest.Hex())
+	}
+	if parsed.IndexFilter.ToBlock != 99 {
+		t.Errorf("index_filter.to_block = %d, want 99", parsed.IndexFilter.ToBlock)
+	}
+
+	// An epoch built before migration 0008 names no filter, and must not claim an
+	// all-zero digest: a reader would check a real file against it and be told the
+	// file is wrong.
+	bare, err := json.Marshal(manifestBody(store.Epoch{ID: 1, ChainID: 1}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(bare), "index_filter") {
+		t.Errorf("an epoch with no filter still advertised one: %s", bare)
 	}
 }

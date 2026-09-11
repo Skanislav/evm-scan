@@ -232,3 +232,20 @@ shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module 
 - A filter is never trusted. It says where to look; the live lens read says what is
   there. A false positive costs one `balanceOf`; there are no false negatives except
   from staleness, which is why an index filter carries the block it is true as of.
+- The cross-chain sweep in `web/index.html` is client-only: viem's bundled chain
+  registry (lazily imported — the barrel is ~800 separate requests) intersected with
+  a CORS-open token list, then the same deployless `AssetLens` call per chain. The
+  lens returns ~920 bytes per token against EIP-170's 24,576-byte ceiling, so 24 per
+  call is a measured near-optimum rather than a conservative guess, so batching is
+  not a lever and curation of the list is. **The index filter must never narrow that
+  sweep**: it answers "is this pair in the index", the index is bounded by the
+  promoted asset set, and a miss therefore means "not indexed" rather than "no
+  balance" — narrowing by it took a real account from 65 holdings to 1. Every
+  endpoint the sweep reaches sees the account, which is why the disclosure sits on
+  the button and not in a footnote.
+- An index filter's digest is fixed inside `Publisher.Build`, from the same
+  `SnapshotIndex` call as the merkle root, and stored on `epochs.filter_keccak`. The
+  bytes are never stored: they rebuild deterministically, and the serving path
+  asserts the rebuilt digest against what the epoch committed rather than trusting
+  either. The filter's own `epochId` header stays `-1`, because the digest has to be
+  fixed before the epoch has an id — the epoch names the filter, not the reverse.
