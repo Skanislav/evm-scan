@@ -891,8 +891,8 @@
           <p class="hint" style="margin:0 0 14px; max-width:680px; text-wrap:pretty">A sweep reads balances on every chain
             it can reach, in your browser, one endpoint per chain, rendering rows as they land. "Every chain it can
             reach" has to mean something that cannot hang: a chain the token list has contracts for, that has somewhere
-            to ask, and that is not a dead testnet — the lists still carry Goerli and Mumbai years on, so they are
-            listed and never swept by default.</p>
+            to ask, and that still answers — retired testnets are dropped from the list, and the live ones are listed
+            and never swept by default.</p>
           <div class="row" id="xchain-openrow">
             <button class="btn btn-secondary btn-sm" id="xchain-open">Load the chain list</button>
             <span class="hint" id="xchain-load">viem's chain registry and the token list are fetched only when asked</span>
@@ -3351,7 +3351,7 @@ async function sweepableChains() {
   const out = [];
   for (const [chainId, tokens] of list.byChain) {
     const c = byId.get(chainId);
-    if (!c) continue;
+    if (!c || RETIRED_CHAINS.has(chainId)) continue;
     const { url, mine } = rpcForChain(chainId, c);
     if (!url) continue;
     out.push({
@@ -3360,14 +3360,24 @@ async function sweepableChains() {
       tokens, rpc: url, mine, host: hostOf(url),
     });
   }
-  // Mainnets first, busiest first within each. Token lists carry testnet entries
-  // long after the testnet dies — Goerli and Mumbai are both still in the Uniswap
-  // list and both refuse eth_call — so they are listed but never swept by default.
+  // Mainnets first, busiest first within each. The testnets that are left are live
+  // ones, listed but never swept by default: nobody holds anything there by accident.
   out.sort((a, b) => (a.testnet - b.testnet) || (b.tokens.length - a.tokens.length));
   return out;
 }
 
 const hostOf = (u) => { try { return new URL(u).host; } catch { return u; } };
+
+// Testnets that were shut down and still appear in token lists because nobody removed
+// them. Their public endpoints refuse eth_call, so listing them would list something a
+// sweep can only wait on. Dropped rather than shown, by chain id.
+const RETIRED_CHAINS = new Set([
+  5,      // Goerli, retired 2024
+  80001,  // Polygon Mumbai, retired 2024
+  420,    // Optimism Goerli
+  421613, // Arbitrum Goerli
+  84531,  // Base Goerli
+]);
 
 // The index filter deliberately does NOT narrow this sweep, and the reason is worth
 // writing down because the opposite looks obviously right.
@@ -3527,8 +3537,7 @@ function renderXChainList() {
   const dead = XCHAIN.filter(c => c.testnet);
   $('xchain-skipped').textContent = dead.length
     ? `${num(dead.length)} testnet${dead.length === 1 ? ' is' : 's are'} listed and not swept by default: `
-      + `${dead.map(c => c.name).join(', ')}. The dead ones stopped answering years ago, and a sweep that waits on `
-      + `them is a sweep that hangs — pick one by hand if you mean it.`
+      + `${dead.map(c => c.name).join(', ')}. Nobody holds anything there by accident — pick one by hand if you mean it.`
     : 'every chain on the list is a mainnet.';
   updateXChainStatus();
 }
