@@ -6,610 +6,906 @@
 <title>The Asset Index</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,300..700;1,8..60,400&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <style>
-  /* Broadsheet: printed ink on paper. One palette, deliberately — the grammar here is
-     process inks on newsprint, and there is no dark version of that. Cyan is the
-     approving colour and magenta the doubting one, which is why a verdict rarely needs
-     a word beside its mark. */
+  /* One page, five beats, read top to bottom: the question, the answer, where it came
+     from, the machine that produced it, and how to check it. Warm paper, ink, one
+     blue for "trust this" and one amber for "be careful here" — the same two colours
+     do all the judging, so a badge rarely needs a sentence beside it. */
   :root {
-    --color-bg: #f3f2f2;
-    --color-surface: #eae9e9;
-    --color-text: #201e1d;
-    --color-accent: #0088b0;
-    --color-accent-2: #d6006c;
-    --color-divider: color-mix(in srgb, #201e1d 16%, transparent);
+    --bg: #fbfaf8; --bg-2: #f6f5f2; --surface: #fff; --card: #faf9f7;
+    --ink: #14161a;
+    --ink-80: rgba(20,22,26,.8); --ink-70: rgba(20,22,26,.7); --ink-65: rgba(20,22,26,.65);
+    --ink-62: rgba(20,22,26,.62); --ink-45: rgba(20,22,26,.45);
+    --line: rgba(20,22,26,.09); --line-2: rgba(20,22,26,.14); --line-3: rgba(20,22,26,.22);
+    --fill: rgba(20,22,26,.055); --fill-2: rgba(20,22,26,.12);
 
-    --color-neutral-100: #f8f4f4; --color-neutral-200: #eae7e7;
-    --color-neutral-300: #d7d3d3; --color-neutral-400: #bab6b6;
-    --color-neutral-500: #9b9797; --color-neutral-600: #7d7979;
-    --color-neutral-700: #605d5d; --color-neutral-800: #444141;
-    --color-neutral-900: #2d2b2b;
+    --blue: oklch(0.55 0.13 250); --blue-text: oklch(0.50 0.13 250);
+    --blue-deep: oklch(0.46 0.13 250); --blue-hover: oklch(0.42 0.13 250);
+    --blue-tint: oklch(0.88 0.06 250); --blue-wash: oklch(0.96 0.02 250);
+    --amber: oklch(0.62 0.13 66); --amber-text: oklch(0.40 0.10 66);
+    --amber-bg: oklch(0.93 0.05 80); --amber-line: oklch(0.80 0.08 75); --amber-wash: oklch(0.985 0.012 80);
+    --green: oklch(0.80 0.12 155);
 
-    --color-accent-100: #e9f8ff; --color-accent-200: #cbeeff;
-    --color-accent-600: #1186ac; --color-accent-700: #006786;
+    --dark: #101216; --dark-2: #14161a; --dark-ink: #e6e7ea;
+    --dark-ink-82: rgba(230,231,234,.82); --dark-ink-72: rgba(230,231,234,.72);
+    --dark-ink-68: rgba(230,231,234,.68); --dark-ink-55: rgba(230,231,234,.55);
+    --dark-line: rgba(255,255,255,.1); --dark-line-2: rgba(255,255,255,.22);
 
-    --color-accent-2-100: #fff1f4; --color-accent-2-600: #d82071;
-    --color-accent-2-700: #aa0b56; --color-accent-2-800: #790e3d;
+    --sans: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+    --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --r-sm: 3px; --r-md: 6px; --r-lg: 9px; --r-xl: 11px;
 
-    --font-heading: "Source Serif 4", Georgia, "Times New Roman", serif;
-    --font-body: "Source Serif 4", Georgia, "Times New Roman", serif;
-    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    --radius-sm: 1px; --radius-md: 2px;
-
-    /* The graph module reads these. A scene wants a ground a shade off the page, so
-       its depth cueing has somewhere to fade to; the rest are names it inherited from
-       the page it used to live on. */
-    --scene: #eae9e9; --scene-fog: #eae9e9;
-    --ink: #201e1d; --muted: #605d5d; --line: #d7d3d3;
-    --panel: #f8f4f4; --accent: #006786;
+    /* The graph module reads these for its scene: a ground a shade off the page so
+       depth cueing has somewhere to fade to. */
+    --scene: #f6f5f2; --scene-fog: #f6f5f2;
+    --muted: rgba(20,22,26,.65); --panel: #fff; --accent: oklch(0.55 0.13 250);
   }
 
   * { box-sizing: border-box; }
-  /* Half the panels here are toggled with the hidden attribute while also carrying a
-     class that sets display — .row, .split, .btn, .tag. Author rules beat the user
-     agent's [hidden]{display:none}, so without this the "hidden" ones are on screen.
-     One line, and every toggle on the page means what it says. */
+  /* Panels are toggled with the hidden attribute while also carrying a class that sets
+     display. Author rules beat the user agent's [hidden]{display:none}, so without this
+     the "hidden" ones are on screen. */
   [hidden] { display: none !important; }
+  html { scroll-behavior: smooth; }
   body {
-    margin: 0; background: var(--color-bg); color: var(--color-text);
-    font-family: var(--font-body); font-size: 15px; line-height: 1.55;
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: var(--sans); font-size: 14px; line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
   }
-  a { color: var(--color-accent-700); text-underline-offset: 3px; }
-  a:hover { color: var(--color-accent-2-700); }
-  button:focus-visible, input:focus-visible, select:focus-visible {
-    outline: 2px solid var(--color-accent); outline-offset: 2px;
+  a { color: var(--blue-text); text-decoration: none; }
+  a:hover { color: var(--blue-hover); }
+  em { font-style: italic; }
+  code { font-family: var(--mono); font-size: 0.92em; }
+  ::selection { background: var(--blue-tint); }
+  button, input, select { font-family: inherit; }
+  button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible {
+    outline: 2px solid var(--blue); outline-offset: 1px;
   }
-  h1, h2, h3 { font-family: var(--font-heading); font-weight: 600; letter-spacing: -0.015em; }
+  h1, h2, h3 { margin: 0; font-weight: 600; letter-spacing: -0.02em; }
+  h3 { font-size: 15px; letter-spacing: -0.01em; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+  .pulse { animation: pulse 1s ease-in-out infinite; }
 
-  .page { min-height: 100vh; padding: 40px 40px 60px; max-width: 1480px; margin: 0 auto; }
-  .masthead { display: flex; align-items: baseline; justify-content: space-between; gap: 30px; flex-wrap: wrap; }
-  .masthead h1 { font-size: 44px; line-height: 1; margin: 0; }
-  .meta {
-    font-size: 11.5px; letter-spacing: 0.07em; text-transform: uppercase;
-    color: var(--color-neutral-700); display: flex; gap: 20px; flex-wrap: wrap;
-  }
-  /* Thick over thin: the one piece of pure typography on the page, and the thing that
-     says "newspaper" before a word of it is read. */
-  .rule-thick { height: 3px; background: var(--color-text); margin-top: 14px; }
-  .rule-thin { height: 1px; background: var(--color-text); margin-top: 3px; }
-  .rule { height: 1px; background: var(--color-divider); }
+  .wrap { max-width: 1180px; margin: 0 auto; padding-inline: 24px; }
 
-  .tabbar {
-    display: flex; gap: 28px; align-items: flex-end; margin-top: 18px;
-    flex-wrap: wrap; justify-content: space-between;
+  /* ── Sticky header: brand, live pills, the beat strip ─────────────────── */
+  .top {
+    position: sticky; top: 0; z-index: 30;
+    background: rgba(251,250,248,.93); backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--line);
   }
-  .tabs { display: flex; gap: 28px; flex-wrap: wrap; }
-  .tab {
-    background: none; border: 0; padding: 0 0 7px; cursor: pointer;
-    font-family: var(--font-heading); font-weight: 600; font-size: 23px;
-    color: var(--color-neutral-600); border-bottom: 2px solid transparent;
+  .bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding-block: 11px; }
+  .brand { font: 600 14px/1 var(--mono); letter-spacing: -0.01em; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 7px;
+    font: 400 11.5px/1 var(--mono); background: var(--fill);
+    border-radius: 20px; padding: 6px 11px; white-space: nowrap;
   }
-  .tab[aria-selected="true"] { color: var(--color-text); border-bottom-color: var(--color-accent); }
-  .tab .count { font-size: 13px; color: var(--color-neutral-600); }
-  .statusline { font-size: 11.5px; color: var(--color-neutral-600); letter-spacing: 0.05em; }
+  .pill.amber { color: var(--amber-text); background: oklch(0.94 0.045 80); }
+  .pill .dot {
+    width: 5px; height: 5px; border-radius: 50%; background: var(--blue);
+    animation: pulse 2s ease-in-out infinite;
+  }
+  .pill .dot.off { background: var(--amber); animation: none; }
+  .toplinks { margin-left: auto; display: flex; gap: 16px; font: 400 12px/1 var(--sans); color: var(--ink-65); }
+  .toplinks a { color: inherit; }
+  .toplinks a:hover { color: var(--ink); }
+  .beats { border-top: 1px solid rgba(20,22,26,.07); background: var(--bg-2); }
+  .beatrow { display: flex; flex-wrap: wrap; padding-inline: 24px; }
+  .beat {
+    flex: 1 1 0; min-width: 0; padding: 10px 14px 9px; position: relative; color: inherit;
+    border-right: 1px solid rgba(20,22,26,.07);
+  }
+  .beat:last-child { border-right: 0; }
+  .beat .n { display: block; font: 500 10px/1 var(--mono); color: var(--ink-65); margin-bottom: 5px; }
+  .beat .t { display: block; font: 500 12px/1.2 var(--sans); }
+  .beat.on::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--ink); }
 
-  .kicker, .colhead {
-    font-size: 10.5px; letter-spacing: 0.09em; text-transform: uppercase;
-    color: var(--color-neutral-700);
+  /* ── Sections ─────────────────────────────────────────────────────────── */
+  .beat-sec { border-top: 1px solid var(--line); scroll-margin-top: 112px; }
+  .beat-sec .wrap { padding-block: 44px 48px; }
+  .beat-sec.alt { background: var(--surface); }
+  #beat1 { border-top: 0; }
+  #beat1 .wrap { padding-block: 64px 52px; }
+  .kicker {
+    font: 500 10px/1 var(--mono); letter-spacing: .09em; text-transform: uppercase;
+    color: var(--blue-text);
   }
-  .figure { font-family: var(--font-heading); font-weight: 600; letter-spacing: -0.02em; line-height: 1; }
-  .mono { font-family: var(--mono); font-size: 12.5px; }
-  /* A full address is 42 characters; let it be selected in one go for pasting. */
-  .addr { font-family: var(--mono); font-size: 11.5px; color: var(--color-neutral-600); user-select: all; }
-  .num { font-variant-numeric: tabular-nums; text-align: right; }
-  .prose { font-size: 16px; line-height: 1.55; color: var(--color-neutral-800); max-width: 74ch; text-wrap: pretty; }
-  .quiet { color: var(--color-neutral-700); }
-  .empty { color: var(--color-neutral-600); font-style: italic; }
-  .err { color: var(--color-accent-2-700); font-size: 14px; margin-top: 10px; }
-  .hint { color: var(--color-neutral-700); font-size: 14px; line-height: 1.5; }
+  .kicker.sec { margin-bottom: 16px; }
+  .kicker-row { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 8px; }
+  .kicker-row .kicker { margin: 0; }
+  .kicker-row .sub { font: 400 11.5px/1.3 var(--sans); color: var(--ink-65); }
+  .lede { font: 400 14.5px/1.55 var(--sans); color: var(--ink-70); margin: 0 0 24px; max-width: 680px; text-wrap: pretty; }
+  .label {
+    font: 500 10px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-65);
+  }
+  .subrow { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+  .colnote { font: 400 11px/1.4 var(--mono); color: var(--ink-65); }
 
+  /* ── 01 The question ──────────────────────────────────────────────────── */
+  .narrow { max-width: 760px; }
+  h1 { font: 600 46px/1.08 var(--sans); letter-spacing: -0.026em; margin: 0 0 16px; text-wrap: pretty; }
+  #beat1 .lede { font-size: 16.5px; margin-bottom: 28px; max-width: 640px; }
+  .lookup { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+  .try { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; min-height: 26px; }
+  .try > span:first-child { font: 400 12px/1 var(--sans); color: var(--ink-62); }
+  .try .ex {
+    border: 1px solid rgba(20,22,26,.16); background: var(--surface); border-radius: 20px;
+    padding: 6px 12px; font: 400 11.5px/1 var(--mono); color: var(--blue-deep); cursor: pointer;
+  }
+  .try .ex:hover { border-color: rgba(20,22,26,.4); }
+  .quietrow { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 18px; font-size: 12.5px; color: var(--ink-62); }
+
+  /* ── Controls shared by every panel, including the ones hints.js draws ─── */
   .btn {
     display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-    cursor: pointer; text-decoration: none; font-family: var(--font-heading);
-    font-weight: 600; font-size: 14px; line-height: 1.2; color: var(--color-text);
-    background: transparent; border: 1px solid transparent; padding: 8px 18px;
-    border-radius: var(--radius-md);
+    cursor: pointer; text-decoration: none; font: 500 12.5px/1 var(--sans); color: var(--ink);
+    background: var(--surface); border: 1px solid var(--line-3); padding: 9px 15px;
+    border-radius: var(--r-md); white-space: nowrap;
   }
-  .btn:disabled { opacity: 0.45; cursor: not-allowed; }
-  .btn-primary { background: var(--color-accent); color: var(--color-bg); }
-  .btn-primary:hover:not(:disabled) { background: var(--color-accent-600); }
-  .btn-secondary { border-color: var(--color-divider); }
-  .btn-secondary:hover:not(:disabled) { background: color-mix(in srgb, var(--color-text) 7%, transparent); }
-  .btn-spam { border-color: var(--color-accent-2-600); color: var(--color-accent-2-700); }
-  .btn-spam:hover:not(:disabled) { background: var(--color-accent-2-100); }
-  .btn-ghost { color: var(--color-accent-700); padding-inline: 8px; }
-  .btn-ghost:hover:not(:disabled) { background: color-mix(in srgb, var(--color-accent) 10%, transparent); }
-  .btn-sm { font-size: 12px; padding: 4px 12px; }
-  .btn .key { opacity: 0.75; font-family: var(--mono); font-size: 11px; }
+  .btn:hover:not(:disabled) { border-color: rgba(20,22,26,.4); }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .btn-primary { background: var(--ink); color: #fff; border-color: var(--ink); }
+  .btn-primary:hover:not(:disabled) { background: #000; border-color: #000; }
+  .btn-secondary { background: var(--surface); }
+  .btn-spam { color: var(--amber-text); border-color: var(--amber-line); }
+  .btn-spam:hover:not(:disabled) { background: var(--amber-wash); border-color: var(--amber); }
+  .btn-ghost { border-color: transparent; background: transparent; color: var(--blue-text); padding-inline: 8px; }
+  .btn-ghost:hover:not(:disabled) { background: var(--fill); border-color: transparent; }
+  .btn-sm { font-size: 11.5px; padding: 7px 12px; }
+  .btn.big { height: 52px; padding: 0 26px; font-size: 14px; border-radius: var(--r-lg); }
+  .btn .key, .btn kbd {
+    font: 400 9.5px/1 var(--mono); border: 1px solid rgba(20,22,26,.3); border-radius: 3px; padding: 2px 5px;
+  }
+  .btn-primary .key, .btn-primary kbd { border-color: rgba(255,255,255,.4); }
   .linkbtn {
-    background: none; border: 0; padding: 0; cursor: pointer; font-family: var(--font-body);
-    font-size: 16px; color: var(--color-accent-700); text-decoration: underline;
-    text-underline-offset: 3px;
+    background: none; border: 0; padding: 0; cursor: pointer; font: 400 12.5px/1.4 var(--sans);
+    color: var(--blue-text);
   }
-
+  .linkbtn:hover { color: var(--blue-hover); }
   .input {
-    min-height: 36px; padding: 7px 10px; font: inherit; font-size: 14px;
-    color: var(--color-text); caret-color: var(--color-accent);
-    background: var(--color-surface); border: 1px solid var(--color-divider);
-    border-radius: var(--radius-md);
+    min-height: 38px; padding: 8px 12px; font: 400 13px/1.3 var(--mono);
+    color: var(--ink); caret-color: var(--blue);
+    background: var(--surface); border: 1px solid var(--line-3); border-radius: var(--r-md);
   }
-  /* Measured, not guessed: the browser default grey misses the 4.5:1 bar on this
-     surface, and 65% ink clears it while staying a step quieter than typed text. */
-  .input::placeholder { color: color-mix(in srgb, var(--color-text) 65%, transparent); opacity: 1; }
-  .input:hover { border-color: color-mix(in srgb, var(--color-text) 45%, transparent); }
+  .input::placeholder { color: var(--ink-45); opacity: 1; }
+  .input:hover { border-color: rgba(20,22,26,.4); }
+  .input:focus { outline: 2px solid var(--blue); outline-offset: 1px; border-color: var(--line-3); }
+  .input.big { height: 52px; padding: 0 15px; font-size: 14.5px; border-radius: var(--r-lg); }
+  select.input { font-family: var(--sans); }
   .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 
   .tag {
-    display: inline-flex; align-items: center; font-size: 10.5px; letter-spacing: 0.02em;
-    padding: 3px 10px; border-radius: var(--radius-sm);
-    background: var(--color-neutral-100); color: var(--color-neutral-800);
+    display: inline-flex; align-items: center; font: 500 9.5px/1 var(--mono); letter-spacing: .04em;
+    text-transform: uppercase; padding: 3px 6px; border-radius: var(--r-sm);
+    background: var(--fill); color: var(--ink-70);
   }
-  .tag-flag { background: var(--color-accent-2-100); color: var(--color-accent-2-800); }
-  .verdict { font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; }
-  .v-approved { color: var(--color-accent-700); }
-  .v-spam { color: var(--color-accent-2-700); }
-  .v-none { color: var(--color-neutral-600); }
+  .tag-flag { background: var(--amber-bg); color: var(--amber-text); }
+  .std { font: 400 11px/1 var(--mono); color: var(--ink-65); margin-left: 5px; }
+  .verdict { font: 500 10px/1 var(--mono); letter-spacing: .06em; text-transform: uppercase; }
+  .v-approved { color: var(--blue-deep); }
+  .v-spam { color: var(--amber-text); }
+  .v-none { color: var(--ink-62); }
 
-  /* The confidence dot: how far to trust a price at a glance, before reading where it
-     came from. Cyan a fresh feed, ink a DEX average, magenta a spot read. */
+  /* Confidence, as the design draws it: filled blue is a fresh feed, outlined blue a
+     DEX average, amber a spot read, dashed grey no price at all. */
+  .badge {
+    display: inline-block; font: 500 10px/1 var(--mono); letter-spacing: .02em; text-transform: uppercase;
+    border-radius: 3px; padding: 4px 6px; white-space: nowrap;
+  }
+  .badge.high { color: #fff; background: var(--blue); }
+  .badge.medium { color: var(--blue-deep); border: 1px solid var(--blue); padding: 3px 6px; }
+  .badge.low { color: var(--amber-text); background: var(--amber-bg); }
+  .badge.none { color: var(--ink-62); border: 1px dashed rgba(20,22,26,.3); padding: 3px 6px; }
+  .badge.new { color: #fff; background: var(--blue); font-size: 9.5px; padding: 3px 5px; }
   .conf { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
-  .conf.high { background: var(--color-accent-700); }
-  .conf.medium { background: var(--color-neutral-700); }
-  .conf.low { background: var(--color-accent-2-700); }
-  .conf.none { background: var(--color-neutral-400); }
+  .conf.high { background: var(--blue); } .conf.medium { background: var(--blue-deep); }
+  .conf.low { background: var(--amber); } .conf.none { background: var(--fill-2); }
 
-  .grid-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 30px; max-width: 1000px; }
-  .stat .figure { font-size: 42px; }
-  .stat .kicker { margin-top: 8px; }
-  .stat .note { font-size: 15px; color: var(--color-neutral-700); margin-top: 5px; max-width: 24ch; }
+  .mono { font-family: var(--mono); font-size: 12.5px; }
+  .addr { font: 400 11px/1.45 var(--mono); color: var(--ink-65); user-select: all; }
+  .num { font-variant-numeric: tabular-nums; text-align: right; }
+  .prose { font: 400 13px/1.6 var(--sans); color: var(--ink-70); max-width: 74ch; text-wrap: pretty; }
+  .quiet { color: var(--ink-65); }
+  .empty { color: var(--ink-62); }
+  .err { color: var(--amber-text); font-size: 12.5px; line-height: 1.5; margin-top: 10px; }
+  .hint { color: var(--ink-70); font-size: 12.5px; line-height: 1.6; }
+  .hint strong, .prose strong { color: var(--ink); font-weight: 600; }
+  .figure { font: 500 17px/1 var(--mono); }
+  .sym { font: 500 13.5px/1.35 var(--sans); }
+  .nm { font: 400 12px/1.4 var(--sans); color: var(--ink-65); }
 
-  .split { display: grid; gap: 56px; align-items: start; }
-  .split-main { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); }
-  .split-rail { grid-template-columns: minmax(0, 1fr) 330px; }
-  .sticky { position: sticky; top: 40px; }
-
-  .tablehead, .tablerow { display: grid; gap: 18px; align-items: center; }
+  /* Tables: a mono, letter-spaced head over rows separated by hairlines. Columns are
+     set from COLS in the script so a head and its rows cannot drift apart. */
+  .tablehead, .tablerow { display: grid; column-gap: 14px; align-items: center; }
   .tablehead {
-    padding: 20px 0 8px; border-bottom: 1px solid var(--color-text);
-    font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase;
-    color: var(--color-neutral-700);
+    padding-bottom: 9px; border-bottom: 1px solid var(--line-2);
+    font: 500 10px/1 var(--mono); letter-spacing: .07em; text-transform: uppercase; color: var(--ink-65);
   }
-  .tablerow { padding: 14px 0; border-bottom: 1px solid var(--color-divider); }
-  .tablerow.dim { opacity: 0.55; }
+  .tablerow { padding: 14px 0; border-bottom: 1px solid var(--line); }
+  .tablerow.dim { opacity: .55; }
   .tablerow.pick { cursor: pointer; }
-  .tablerow.on { background: var(--color-accent-100); }
-  .sym { font-family: var(--font-heading); font-weight: 600; font-size: 20px; }
-  .nm { font-size: 15px; color: var(--color-neutral-700); }
-
-  .chips { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
-  .chip {
-    background: transparent; border: 1px solid var(--color-neutral-300);
-    border-radius: var(--radius-md); padding: 7px 14px; cursor: pointer; text-align: left;
-    font-family: var(--font-heading); font-weight: 600; font-size: 16px; color: var(--color-text);
-  }
-  .chip.on { background: var(--color-accent-200); border-color: var(--color-accent-600); }
-  .chip.down { opacity: 0.5; cursor: not-allowed; }
-  .chip .sub { display: block; font-family: var(--mono); font-size: 11px; font-weight: 400; color: var(--color-neutral-600); }
-  .chip .trust { font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; }
-  .chip .trust.unverified { color: var(--color-accent-2-700); }
-  .chip .trust.verified { color: var(--color-accent-700); }
-
-  .panel { background: var(--color-neutral-100); padding: 22px 26px 24px; margin-top: 20px; }
-  .panel h3 { font-size: 22px; margin: 0 0 6px; }
-  .kvgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 16px 22px; }
-  .kvgrid .k { font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--color-neutral-700); }
-  .kvgrid .v { font-family: var(--font-heading); font-weight: 600; font-size: 18px; }
-
-  pre {
-    background: var(--color-neutral-100); border: 1px solid var(--color-divider);
-    padding: 12px; overflow-x: auto; font-size: 12px; margin: 12px 0 0;
-  }
+  .tablerow.on { background: var(--blue-wash); box-shadow: 0 0 0 8px var(--blue-wash); }
   .scroll { overflow-x: auto; }
-  .signals { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 26px 34px; max-width: 780px; }
-  .signals .figure { font-size: 26px; line-height: 1.15; margin-top: 6px; }
-  .signals .judge { font-size: 14.5px; line-height: 1.35; margin-top: 5px; max-width: 22ch; }
-  .progress { height: 2px; background: var(--color-neutral-300); margin-top: 10px; }
-  .progress > div { height: 2px; background: var(--color-accent); }
+  .a-note { font: 400 11px/1.45 var(--mono); color: var(--ink-65); margin-top: 2px; }
+  .a-note .addr { color: inherit; }
 
-  .footer {
-    display: flex; justify-content: space-between; gap: 20px; flex-wrap: wrap; margin-top: 14px;
-    font-size: 10.5px; letter-spacing: 0.07em; text-transform: uppercase; color: var(--color-neutral-600);
+  .card { background: var(--surface); border: 1px solid rgba(20,22,26,.11); border-radius: var(--r-lg); padding: 17px 19px; }
+  .card h3 { font: 600 13px/1.3 var(--sans); margin-bottom: 7px; }
+  .card p, .card .cb { font: 400 12.5px/1.6 var(--sans); color: var(--ink-70); margin: 0; }
+  .card.amber { border-color: var(--amber-line); }
+  .card.amber .ch { color: oklch(0.38 0.10 66); }
+  .ch { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; font: 600 13px/1.3 var(--sans); }
+  .dotc { width: 9px; height: 9px; border-radius: 50%; background: var(--blue); flex: none; }
+  .dotc.amber { background: var(--amber); }
+  .cards3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+
+  .panel { background: var(--card); border: 1px solid var(--line-2); border-radius: var(--r-lg); padding: 20px 22px; margin-top: 16px; }
+  .panel h3 { font: 600 14px/1.35 var(--sans); margin-bottom: 8px; }
+  .panel.hintbox { border-color: var(--amber-line); background: var(--amber-wash); }
+  .kvgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 14px 22px; }
+  .kvgrid .k { font: 400 9.5px/1 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--ink-65); margin-bottom: 6px; }
+  .kvgrid .v { font: 500 14px/1.2 var(--mono); }
+  .kv { display: flex; justify-content: space-between; gap: 10px; padding: 3px 0; font: 400 12px/1.4 var(--mono); }
+  .kv .k { color: var(--ink-65); }
+  .kv .v { font-variant-numeric: tabular-nums; }
+  pre {
+    background: var(--card); border: 1px solid var(--line-2); border-radius: var(--r-md);
+    padding: 12px; overflow-x: auto; font: 400 11px/1.6 var(--mono); margin: 10px 0 0;
   }
 
-  /* The graph tab, carried over from the page this used to be. */
-  .stage { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 30px; margin-top: 24px; align-items: start; }
-  #canvas-holder { position: relative; height: 70vh; min-height: 460px; background: var(--scene); overflow: hidden; }
+  /* ── 02 The answer ────────────────────────────────────────────────────── */
+  .idle, .loading { padding: 32px 0; font: 400 13px/1.6 var(--mono); color: var(--ink-65); }
+  .ans-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
+  .ans-addr { font: 500 20px/1.25 var(--mono); }
+  .ans-line { font: 400 12.5px/1.3 var(--sans); color: var(--ink-65); }
+  .ans-stats { display: flex; gap: 6px 0; flex-wrap: wrap; font: 400 11.5px/1.5 var(--mono); color: var(--ink-65); margin-bottom: 20px; }
+  .ans-stats span + span::before { content: " · "; }
+  .ans-stats b { font-weight: 500; color: var(--ink); }
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 20px; }
+  .chips .label { margin-right: 4px; }
+  .chip {
+    background: var(--surface); border: 1px solid rgba(20,22,26,.16); border-radius: 20px;
+    padding: 6px 12px; cursor: pointer; text-align: left; display: inline-flex; align-items: center; gap: 8px;
+    font: 500 12px/1 var(--sans); color: var(--ink);
+  }
+  .chip:hover { border-color: rgba(20,22,26,.4); }
+  .chip.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+  .chip.down { opacity: .5; cursor: not-allowed; }
+  .chip .sub { font: 400 10.5px/1 var(--mono); color: var(--ink-62); }
+  .chip.on .sub { color: rgba(255,255,255,.65); }
+  .chip .trust { font: 500 9px/1 var(--mono); letter-spacing: .06em; text-transform: uppercase; }
+  .chip .trust.unverified { color: var(--amber-text); }
+  .chip.on .trust.unverified { color: oklch(0.85 0.1 80); }
+  .chip .trust.verified { color: var(--blue-deep); }
+  .chip.on .trust.verified { color: oklch(0.8 0.08 250); }
+  .block { margin-top: 36px; }
+  .block h3 { font: 600 15px/1.3 var(--sans); }
+  .total {
+    display: flex; justify-content: space-between; align-items: baseline; gap: 16px; flex-wrap: wrap;
+    margin-top: 18px; padding-top: 15px; border-top: 1px solid var(--line-2);
+  }
+  .total .note { font: 400 12.5px/1.5 var(--sans); color: var(--ink-70); max-width: 62ch; }
+  .total .sum { display: flex; align-items: baseline; gap: 10px; }
+  .total .sum b { font: 600 22px/1 var(--mono); }
+  .emptycard { max-width: 620px; }
+  .emptycard .card { background: var(--card); border-color: var(--line-2); padding: 20px 22px; margin-top: 24px; }
+  .emptycard .card h3 { font-size: 14px; margin-bottom: 8px; }
+  .emptycard .card p { font-size: 13px; margin-bottom: 16px; }
+  .verdict-cell { display: flex; gap: 6px; justify-content: flex-end; align-items: center; flex-wrap: nowrap; }
+
+  /* ── 04 The machine ───────────────────────────────────────────────────── */
+  .stages { display: flex; align-items: flex-end; gap: 8px; flex-wrap: nowrap; overflow: hidden; margin-bottom: 30px; }
+  .stage { flex: 1 1 0; min-width: 0; }
+  .stage .l { font: 400 10.5px/1.3 var(--mono); color: var(--ink-65); margin-bottom: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .stage .c { font: 500 17px/1 var(--mono); margin-bottom: 8px; }
+  .stage .b { height: 7px; border-radius: 2px; background: rgba(20,22,26,.13); position: relative; overflow: hidden; }
+  .stage .b > div { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 2px; background: var(--blue); }
+  .stage .b > div.amber { background: var(--amber); }
+  .stage .b > div.ink { background: rgba(20,22,26,.24); }
+  .stage .n { font: 400 10px/1.4 var(--mono); color: var(--ink-62); margin-top: 6px; }
+  .machine { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 22px; align-items: start; }
+  .progress { height: 2px; background: var(--fill-2); margin-top: 8px; }
+  .progress > div { height: 2px; background: var(--blue); width: 0; }
+  .bar-cell .b { height: 6px; border-radius: 2px; background: rgba(20,22,26,.12); position: relative; overflow: hidden; }
+  .bar-cell .b > div { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 2px; background: var(--blue); }
+  .bar-cell .b > div.amber { background: var(--amber); }
+  .bar-cell .n { font: 400 10px/1.4 var(--mono); color: var(--ink-65); margin-top: 5px; }
+
+  /* The dark panel: the operator's side of the page. Everything the script draws in
+     here — rows, buttons, signals — is restyled for the dark ground. */
+  .dark { background: var(--dark); border-radius: var(--r-xl); padding: 19px 20px 21px; color: var(--dark-ink); }
+  .dark .label { color: var(--dark-ink-68); }
+  .dark .empty, .dark .quiet, .dark .hint, .dark .nm { color: var(--dark-ink-72); }
+  .dark .addr { color: var(--dark-ink-72); }
+  .dark .err { color: oklch(0.85 0.1 80); }
+  .dark a { color: var(--dark-ink); text-decoration: underline; text-underline-offset: 3px; }
+  .dark .tablerow { border-color: var(--dark-line); padding: 10px 0; }
+  .dark .btn {
+    background: transparent; color: var(--dark-ink); border-color: var(--dark-line-2);
+    font: 500 11.5px/1 var(--mono);
+  }
+  .dark .btn:hover:not(:disabled) { border-color: rgba(255,255,255,.45); }
+  .dark .btn-primary { background: var(--dark-ink); color: var(--dark); border-color: var(--dark-ink); }
+  .dark .btn-primary:hover:not(:disabled) { background: #fff; border-color: #fff; }
+  .dark .btn-spam { color: var(--dark-ink); border-color: var(--dark-line-2); }
+  .dark .btn-spam:hover:not(:disabled) { background: transparent; border-color: rgba(255,255,255,.45); }
+  .dark .btn kbd { border-color: rgba(255,255,255,.25); }
+  .dark .btn-primary kbd { border-color: rgba(16,18,22,.35); }
+  .dark .verdict.v-approved { color: var(--green); }
+  .dark .verdict.v-spam { color: oklch(0.85 0.1 80); }
+  .dark .verdict.v-none { color: var(--dark-ink-68); }
+  .t-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding-bottom: 13px; border-bottom: 1px solid var(--dark-line); }
+  .t-node { font: 400 10px/1 var(--mono); color: var(--green); }
+  .t-node.warn { color: oklch(0.85 0.1 80); }
+  .dark .progress { background: var(--dark-line); margin-top: 0; }
+  .dark .progress > div { background: var(--green); }
+  .t-progressline { font: 400 10px/1.4 var(--mono); color: var(--dark-ink-55); margin: 8px 0 15px; }
+  .t-title { display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap; margin-bottom: 6px; }
+  .t-title #card-symbol { font: 500 14.5px/1.25 var(--mono); }
+  .t-std, .t-flag { font: 400 9.5px/1 var(--mono); color: var(--dark); background: var(--dark-ink); border-radius: 3px; padding: 3px 5px; text-transform: uppercase; }
+  .t-flag { background: oklch(0.85 0.1 80); }
+  .t-name { font: 400 12px/1.4 var(--sans); color: var(--dark-ink-72); }
+  .t-addr { margin: 4px 0 14px; word-break: break-all; }
+  .t-signals { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px 10px; margin-bottom: 15px; }
+  .t-signals .kicker { font: 400 9.5px/1 var(--mono); letter-spacing: .04em; color: var(--dark-ink-68); margin-bottom: 6px; }
+  .t-signals .figure { font: 500 14px/1 var(--mono); color: var(--dark-ink); }
+  .t-signals .judge { font: 400 10.5px/1.4 var(--mono); margin-top: 5px; color: var(--dark-ink-72); }
+  .t-signals .judge.v-approved { color: var(--green); }
+  .t-signals .judge.v-spam { color: oklch(0.85 0.1 80); }
+  .t-read {
+    font: 400 11px/1.6 var(--mono); color: var(--dark-ink-82);
+    border-left: 2px solid rgba(255,255,255,.2); padding-left: 11px; margin-bottom: 16px;
+  }
+  .t-actions { display: flex; gap: 7px; flex-wrap: wrap; margin-bottom: 14px; }
+  .t-actions .btn { display: flex; gap: 7px; padding: 9px 13px; }
+  .t-undo { font: 400 10.5px/1.6 var(--mono); color: var(--dark-ink-72); margin-bottom: 14px; }
+  .t-empty { padding: 22px 0 26px; font: 400 11.5px/1.7 var(--mono); color: var(--dark-ink-72); }
+  .t-empty span { color: var(--dark-ink-55); }
+  .t-sub { font: 400 9.5px/1 var(--mono); letter-spacing: .08em; color: var(--dark-ink-68); border-top: 1px solid var(--dark-line); padding-top: 14px; margin: 4px 0 10px; }
+  .t-intro { font: 400 10.5px/1.6 var(--mono); color: var(--dark-ink-55); margin: 0 0 8px; }
+  .q-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; column-gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--dark-line); font: 400 11px/1.4 var(--mono); }
+  .q-row .q-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .q-row .q-name b { font-weight: 500; }
+  .q-row .q-n { color: var(--dark-ink-72); white-space: nowrap; }
+  .q-row .q-act { display: flex; gap: 5px; }
+  .q-row .btn { padding: 5px 8px; font-size: 10px; }
+  .ev { display: flex; gap: 9px; font: 400 10.5px/1.75 var(--mono); }
+  .ev .k { flex: none; width: 62px; color: var(--dark-ink-55); }
+  .ev .x { color: var(--dark-ink-82); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ev .x .when { color: var(--dark-ink-55); }
+
+  /* The graph, folded under the machine and drawn only when asked for. */
+  .graphsec { margin-top: 36px; padding-top: 24px; border-top: 1px solid var(--line); }
+  .controls { display: flex; gap: 22px; flex-wrap: wrap; align-items: center; margin-top: 14px; }
+  .ctl { display: flex; gap: 8px; align-items: center; font-size: 12.5px; }
+  .ctl label { font: 400 10px/1 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--ink-65); }
+  .ctl .val { font: 400 11px/1 var(--mono); color: var(--ink-62); }
+  .stage-grid { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 22px; margin-top: 18px; align-items: start; }
+  #canvas-holder { position: relative; height: 70vh; min-height: 460px; background: var(--scene); overflow: hidden; border-radius: var(--r-lg); border: 1px solid var(--line); }
   #canvas-holder canvas { display: block; width: 100%; height: 100%; }
   .overlay {
     position: absolute; inset: 0; display: grid; place-items: center; text-align: center;
-    padding: 24px; background: var(--scene);
-    color: var(--color-neutral-700); font-size: 15px; pointer-events: none;
+    padding: 24px; background: var(--scene); color: var(--ink-65); font: 400 12.5px/1.6 var(--mono); pointer-events: none;
   }
-  /* The graph module lifts this once the first page of the index is drawn. */
   .overlay.gone { display: none; }
-  .hud {
-    position: absolute; left: 12px; bottom: 10px; font-family: var(--mono); font-size: 11px;
-    color: var(--color-neutral-700); pointer-events: none;
-  }
+  .hud { position: absolute; left: 12px; bottom: 10px; font: 400 10.5px/1.4 var(--mono); color: var(--ink-65); pointer-events: none; }
   .tip {
-    position: absolute; display: none; pointer-events: none; background: var(--color-bg);
-    border: 1px solid var(--color-divider); padding: 6px 9px; font-family: var(--mono);
-    font-size: 11px; white-space: nowrap; z-index: 3;
+    position: absolute; display: none; pointer-events: none; background: var(--surface);
+    border: 1px solid var(--line-2); border-radius: var(--r-sm); padding: 6px 9px; font: 400 11px/1.4 var(--mono);
+    white-space: nowrap; z-index: 3;
   }
   .legend { list-style: none; margin: 6px 0 0; padding: 0; max-height: 46vh; overflow-y: auto; }
-  .legend li { display: flex; align-items: baseline; gap: 8px; padding: 7px 6px; cursor: pointer; border-bottom: 1px solid var(--color-divider); }
-  .legend li.on { background: var(--color-accent-100); }
+  .legend li { display: flex; align-items: baseline; gap: 8px; padding: 7px 6px; cursor: pointer; border-bottom: 1px solid var(--line); }
+  .legend li.on { background: var(--blue-wash); }
   .swatch { width: 9px; height: 9px; border-radius: 50%; flex: none; }
-  .controls { display: flex; gap: 22px; flex-wrap: wrap; align-items: center; margin-top: 18px; }
-  .ctl { display: flex; gap: 8px; align-items: center; font-size: 13px; }
-  .ctl label { font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--color-neutral-700); }
-  .ctl .val { font-family: var(--mono); font-size: 11.5px; color: var(--color-neutral-600); }
-  aside section { margin-bottom: 26px; }
-  aside h2 { font-size: 17px; margin: 0 0 8px; }
-  .bal { font-family: var(--mono); font-size: 12px; }
-  .ct { font-family: var(--mono); font-size: 11px; color: var(--color-neutral-600); }
-  /* The selection panel's label/value lines, which the graph module writes. */
-  .kv { display: flex; justify-content: space-between; gap: 10px; padding: 3px 0; font-size: 13px; }
-  .kv .k { color: var(--color-neutral-700); }
-  .kv .v { font-variant-numeric: tabular-nums; }
-  .legend .nm { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+  aside section { margin-bottom: 22px; }
+  aside h2 { font: 600 13px/1.3 var(--sans); margin: 0 0 8px; }
+  .bal { font: 400 11.5px/1.4 var(--mono); }
+  .ct { font: 400 10.5px/1.4 var(--mono); color: var(--ink-62); }
+  .legend .nm { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--ink); }
   .legend .ct { font-variant-numeric: tabular-nums; }
 
-  /* The canvas is a desktop instrument; everything else folds to one column. */
+  /* ── 05 Check it yourself ─────────────────────────────────────────────── */
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; align-items: start; }
+  .stack { display: flex; flex-direction: column; gap: 14px; }
+  .cmd { background: var(--dark-2); }
+  .cmd .label { color: rgba(255,255,255,.55); margin-bottom: 13px; }
+  .cmd .code { font: 400 11.5px/1.9 var(--mono); color: var(--dark-ink); word-break: break-all; white-space: pre-wrap; }
+  .split-rail { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 22px; align-items: start; }
+  .rail .label { margin-bottom: 10px; }
+  .rail-name { font: 500 16px/1.25 var(--mono); word-break: break-word; margin-bottom: 4px; }
+  .acct-row { display: grid; grid-template-columns: minmax(0, 1fr) 78px 40px; gap: 12px; align-items: baseline; font: 400 12px/1.4 var(--mono); }
+  .acct-row .sym { font: 500 12.5px/1.4 var(--sans); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .acct-name { font: 500 13.5px/1.35 var(--sans); }
+  .acct-name.raw { font: 400 12.5px/1.35 var(--mono); }
+  .foot {
+    display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+    margin-top: 34px; padding-top: 20px; border-top: 1px solid var(--line);
+    font: 400 12px/1.7 var(--mono); color: var(--ink-62);
+  }
+
   @media (max-width: 900px) {
-    .page { padding: 24px 16px 48px; }
-    .masthead h1 { font-size: 34px; }
-    .split-main, .split-rail, .stage { grid-template-columns: minmax(0, 1fr); gap: 34px; }
-    .sticky { position: static; }
+    .wrap, .beatrow { padding-inline: 16px; }
+    h1 { font-size: 34px; }
+    .toplinks { margin-left: 0; }
+    .beat .t { font-size: 11px; }
+    .split-rail, .stage-grid { grid-template-columns: minmax(0, 1fr); }
+    .stages { flex-wrap: wrap; }
+    .stage { flex: 1 1 30%; }
     .tablehead { display: none; }
-    .tablerow { grid-template-columns: minmax(0, 1fr) !important; gap: 6px; }
-    .tablerow .num { text-align: left; }
+    .tablerow { grid-template-columns: minmax(0, 1fr) !important; row-gap: 6px; }
+    .tablerow .num, .verdict-cell { text-align: left; justify-content: flex-start; }
   }
 </style>
 </head>
 <body>
-<div class="page">
 
-<div class="masthead">
-  <h1>The Asset Index</h1>
-  <div class="meta" id="masthead-meta"><span>reading the daemon…</span></div>
-</div>
-<div class="rule-thick"></div>
-<div class="rule-thin"></div>
-
-<div class="tabbar">
-  <div class="tabs" role="tablist">
-    <button class="tab" role="tab" data-tab="wallet" aria-selected="false">Wallet</button>
-    <button class="tab" role="tab" data-tab="overview" aria-selected="true">Overview</button>
-    <button class="tab" role="tab" data-tab="triage" aria-selected="false">Triage <span class="count" id="tab-queue"></span></button>
-    <button class="tab" role="tab" data-tab="accounts" aria-selected="false">Accounts</button>
-    <button class="tab" role="tab" data-tab="graph" aria-selected="false">Interaction graph</button>
+<header class="top">
+  <div class="wrap bar">
+    <div class="brand">evm-scan</div>
+    <span class="pill" id="pill-chain"><span class="dot"></span>reading the daemon…</span>
+    <span class="pill" id="pill-node" hidden></span>
+    <span class="pill amber" id="pill-epoch" hidden></span>
+    <nav class="toplinks">
+      <a href="#beat5">Verify</a>
+      <a href="#beat4">Operator</a>
+      <a href="https://github.com/Skanislav/evm-scan" target="_blank" rel="noopener">GitHub</a>
+    </nav>
   </div>
-  <div class="statusline" id="statusline"></div>
-</div>
-<div class="rule"></div>
-
-<!-- ── WALLET ─────────────────────────────────────────────────────────── -->
-<section id="tab-wallet" hidden style="margin-top:32px">
-  <div class="row" style="margin-bottom:26px">
-    <input class="input" type="text" id="account" style="flex:1 1 360px" spellcheck="false"
-           autocomplete="off" placeholder="0x… address, or a name like vitalik.eth">
-    <button class="btn btn-primary" id="lookup">Look up</button>
+  <div class="beats">
+    <nav class="wrap beatrow" aria-label="sections">
+      <a href="#beat1" class="beat on" data-beat="beat1"><span class="n">01</span><span class="t">The question</span></a>
+      <a href="#beat2" class="beat" data-beat="beat2"><span class="n">02</span><span class="t">The answer</span></a>
+      <a href="#beat3" class="beat" data-beat="beat3"><span class="n">03</span><span class="t">Where it came from</span></a>
+      <a href="#beat4" class="beat" data-beat="beat4"><span class="n">04</span><span class="t">The machine</span></a>
+      <a href="#beat5" class="beat" data-beat="beat5"><span class="n">05</span><span class="t">Check it yourself</span></a>
+    </nav>
   </div>
-  <div class="hint" id="name-note" hidden style="margin-bottom:12px"></div>
-  <div class="hint" id="rpc-note" hidden style="margin-bottom:12px"></div>
-  <div class="err" id="account-err" hidden></div>
+</header>
 
-  <!-- The same question, asked without the address leaving the browser. "Look up"
-       above puts it in a URL; this works it out from a file every visitor downloads
-       identically. Offered beside the button rather than instead of it, because it
-       answers a narrower question and costs a 1.4 MB download to do it. -->
-  <div style="margin-top:4px">
-    <button class="linkbtn" id="private-open">or ask the index without naming the address</button>
-  </div>
-  <div class="panel" id="private" hidden>
-    <h3>Private lookup</h3>
-    <div id="private-body"><span class="empty">loading…</span></div>
-  </div>
-
-  <div id="wallet-head" hidden>
-    <div style="display:flex; align-items:flex-end; justify-content:space-between; gap:40px; flex-wrap:wrap">
-      <div>
-        <div class="kicker">wallet</div>
-        <h2 id="wallet-name" style="font-size:40px; line-height:1.05; margin:8px 0 4px"></h2>
-        <div class="addr" id="wallet-addr" style="font-size:13.5px; word-break:break-all"></div>
+<!-- ── 01 THE QUESTION ─────────────────────────────────────────────────── -->
+<section id="beat1" class="beat-sec">
+  <div class="wrap">
+    <div class="narrow">
+      <div class="kicker sec">01 · The question</div>
+      <h1>What does this address hold?</h1>
+      <p class="lede">Every wallet needs that answer fast, and almost every wallet buys it from one of a
+        handful of indexing providers. This one is answered from logs read off <em>your own node</em> —
+        and the machine that answered it is further down this page, not behind a login.</p>
+      <div class="lookup">
+        <input class="input big" type="text" id="account" style="flex:1 1 380px; min-width:0" spellcheck="false"
+               autocomplete="off" placeholder="0x… or an ENS name">
+        <button class="btn btn-primary big" id="lookup">Look up</button>
       </div>
-      <div class="kvgrid" id="wallet-totals" style="flex:1; min-width:320px; max-width:620px; gap:34px"></div>
+      <div class="try" id="try"><span>try</span><span class="empty" style="font-size:12px">an account from the index, once it has loaded…</span></div>
+      <div class="hint" id="name-note" hidden style="margin-top:14px"></div>
+      <div class="hint" id="rpc-note" hidden style="margin-top:10px"></div>
+      <div class="err" id="account-err" hidden></div>
+
+      <!-- The same question, asked without the address leaving the browser. "Look up"
+           above puts it in a URL; this works it out from a file every visitor downloads
+           identically. Offered beside the button rather than instead of it, because it
+           answers a narrower question and costs a 1.4 MB download to do it. -->
+      <div class="quietrow">
+        <button class="linkbtn" id="private-open">or ask the index without naming the address</button>
+        <span>·</span>
+        <button class="linkbtn" id="chain-rpc-open">read balances through your own RPC</button>
+      </div>
+      <div class="row" id="chain-rpc-row" hidden style="margin-top:12px">
+        <input class="input" type="text" id="chain-rpc" style="flex:1 1 320px" spellcheck="false" autocomplete="off" placeholder="https://… your own RPC for the indexed chain">
+        <button class="btn btn-secondary" id="chain-rpc-save">Use it</button>
+        <button class="btn btn-ghost" id="chain-rpc-clear">Use the daemon</button>
+      </div>
+      <div class="row" id="name-rpc-row" hidden style="margin-top:12px">
+        <input class="input" type="text" id="name-rpc" style="flex:1 1 320px" spellcheck="false" autocomplete="off" placeholder="https://… mainnet RPC for the name library (offchain names, .gwei, .wei)">
+        <button class="btn btn-secondary" id="name-rpc-save">Save</button>
+        <button class="btn btn-ghost" id="name-rpc-reset">Default</button>
+      </div>
+    </div>
+    <div class="panel" id="private" hidden>
+      <h3>Private lookup</h3>
+      <div id="private-body"><span class="empty">loading…</span></div>
     </div>
   </div>
+</section>
 
-  <div class="chips" id="networks" style="margin-top:34px">
-    <span class="kicker" style="margin-right:6px">networks</span>
-    <span class="empty">loading…</span>
-  </div>
-  <div class="hint" id="chain-unverified" hidden style="margin-top:10px"></div>
+<!-- ── 02 THE ANSWER ───────────────────────────────────────────────────── -->
+<section id="beat2" class="beat-sec alt">
+  <div class="wrap">
+    <div class="kicker sec">02 · The answer</div>
 
-  <!-- Adding a network is a real thing the daemon does: it dials the endpoint, asks
-       the node for its own chain id, and refuses the pair if they disagree. -->
-  <div class="panel" id="add-chain" hidden>
-    <h3>Add a network</h3>
-    <p class="prose" style="margin:6px 0 18px; max-width:62ch">
-      Name it and the <code>on.eth</code> registry answers with its chain id — one
-      <code>eth_call</code> on mainnet, no gateway. The registry deliberately publishes no
-      endpoints, because an endpoint URL is where an API key lives, so that part stays yours
-      to supply.
-    </p>
-    <div class="row">
-      <input class="input" type="text" id="chain-name" style="flex:1 1 280px" spellcheck="false"
-             autocomplete="off" placeholder="a chain name — base, optimism, arbitrum">
-      <button class="btn btn-primary" id="chain-resolve">Look it up</button>
-      <button class="btn btn-ghost" id="chain-manual-open">Enter it by hand</button>
-      <button class="btn btn-ghost" id="add-chain-close">Close</button>
+    <div class="idle" id="answer-idle">Look an address up and the answer lands here — which indexed
+      contracts it has touched, and what it holds in them right now, read at head in one call.</div>
+    <div class="loading" id="answer-loading" hidden><span class="pulse">reading your node · one eth_call, one block…</span></div>
+
+    <div id="wallet-head" hidden>
+      <div class="ans-head">
+        <span class="ans-addr" id="wallet-name"></span>
+        <span class="ans-line" id="wallet-line"></span>
+      </div>
+      <div class="addr" id="wallet-addr" style="margin-bottom:6px; word-break:break-all"></div>
+      <div class="ans-stats" id="wallet-totals"></div>
     </div>
-    <div class="hint" id="chain-resolve-hint" style="margin-top:10px"></div>
-    <div class="err" id="chain-err" hidden></div>
-    <div id="chain-card" hidden style="margin-top:16px"></div>
 
-    <div id="chain-manual" hidden style="margin-top:14px">
+    <div class="chips" id="networks">
+      <span class="label">networks</span>
+      <span class="empty">loading…</span>
+    </div>
+    <div class="hint" id="chain-unverified" hidden style="margin-top:10px"></div>
+
+    <!-- Adding a network is a real thing the daemon does: it dials the endpoint, asks
+         the node for its own chain id, and refuses the pair if they disagree. -->
+    <div class="panel" id="add-chain" hidden>
+      <h3>Add a network</h3>
+      <p class="prose" style="margin:0 0 16px; max-width:62ch">
+        Name it and the <code>on.eth</code> registry answers with its chain id — one
+        <code>eth_call</code> on mainnet, no gateway. The registry deliberately publishes no
+        endpoints, because an endpoint URL is where an API key lives, so that part stays yours
+        to supply.
+      </p>
       <div class="row">
-        <input class="input" type="text" id="chain-manual-id" style="flex:0 1 200px" spellcheck="false" autocomplete="off" placeholder="chain id — e.g. 421614">
-        <input class="input" type="text" id="chain-manual-name" style="flex:0 1 200px" spellcheck="false" autocomplete="off" placeholder="a short name">
-        <input class="input" type="text" id="chain-manual-symbol" style="flex:0 1 180px" spellcheck="false" autocomplete="off" placeholder="native symbol (ETH)">
+        <input class="input" type="text" id="chain-name" style="flex:1 1 280px" spellcheck="false"
+               autocomplete="off" placeholder="a chain name — base, optimism, arbitrum">
+        <button class="btn btn-primary" id="chain-resolve">Look it up</button>
+        <button class="btn btn-ghost" id="chain-manual-open">Enter it by hand</button>
+        <button class="btn btn-ghost" id="add-chain-close">Close</button>
       </div>
-      <div class="hint" style="margin-top:8px">Most chains are not in the registry — it is new, and
-        testnets are not its early population. Typing the id is an ordinary way in, not a failure.</div>
-    </div>
+      <div class="hint" id="chain-resolve-hint" style="margin-top:10px"></div>
+      <div class="err" id="chain-err" hidden></div>
+      <div id="chain-card" hidden style="margin-top:16px"></div>
 
-    <div id="chain-commit" hidden style="margin-top:14px">
-      <div class="row">
-        <input class="input" type="text" id="chain-node" style="flex:1 1 320px" spellcheck="false"
-               autocomplete="off" placeholder="https://… your own RPC for this network">
-        <button class="btn btn-primary" id="chain-add">Start indexing</button>
-        <button class="btn btn-ghost" id="chain-cancel">Cancel</button>
-      </div>
-      <div class="hint" style="margin-top:8px">Stored so a restart brings the chain back, and never
-        returned by the API — the URL usually carries a provider's key. Before anything is written the
-        daemon dials it and asks the node for <em>its own</em> chain id; if that disagrees with the
-        number above, the network is refused. A chain reached over somebody else's RPC starts
-        <strong>unverified</strong>: indexed and served, but never backing an on-chain commitment until
-        you say so deliberately.</div>
-    </div>
-  </div>
-  <div class="hint" id="add-chain-off" hidden style="margin-top:14px">This deployment does not allow adding networks at runtime.</div>
-
-  <div id="holdings-wrap" hidden>
-    <div style="display:flex; align-items:baseline; justify-content:space-between; gap:25px; flex-wrap:wrap; margin-top:40px">
-      <h3 id="holdings-title" style="font-size:26px; margin:0">Holdings</h3>
-      <div class="colhead" id="price-line"></div>
-    </div>
-    <div class="scroll">
-      <div class="tablehead cols-hold">
-        <span>asset</span><span class="num">balance</span><span class="num">price</span>
-        <span>price source</span><span class="num">value</span><span class="num">triage</span>
-      </div>
-      <div id="holdings"></div>
-    </div>
-    <div id="xchain" style="margin-top:40px">
-      <div style="display:flex; align-items:baseline; justify-content:space-between; gap:25px; flex-wrap:wrap">
-        <h3 style="font-size:26px; margin:0">Elsewhere</h3>
-        <button class="linkbtn" id="xchain-open">look on other chains</button>
-      </div>
-      <div id="xchain-panel" hidden style="margin-top:14px">
-        <p class="hint" id="xchain-disclosure"></p>
-        <div class="row" style="gap:10px; margin:12px 0; flex-wrap:wrap">
-          <button class="btn btn-secondary btn-sm" id="xchain-all">select all</button>
-          <button class="btn btn-secondary btn-sm" id="xchain-none">clear</button>
-          <button class="btn btn-primary btn-sm" id="xchain-go">Look</button>
-          <span class="hint" id="xchain-status"></span>
+      <div id="chain-manual" hidden style="margin-top:14px">
+        <div class="row">
+          <input class="input" type="text" id="chain-manual-id" style="flex:0 1 200px" spellcheck="false" autocomplete="off" placeholder="chain id — e.g. 421614">
+          <input class="input" type="text" id="chain-manual-name" style="flex:0 1 200px" spellcheck="false" autocomplete="off" placeholder="a short name">
+          <input class="input" type="text" id="chain-manual-symbol" style="flex:0 1 180px" spellcheck="false" autocomplete="off" placeholder="native symbol (ETH)">
         </div>
-        <div id="xchain-list" class="scroll" style="max-height:240px"></div>
-        <div id="xchain-results" style="margin-top:18px"></div>
+        <div class="hint" style="margin-top:8px">Most chains are not in the registry — it is new, and
+          testnets are not its early population. Typing the id is an ordinary way in, not a failure.</div>
+      </div>
+
+      <div id="chain-commit" hidden style="margin-top:14px">
+        <div class="row">
+          <input class="input" type="text" id="chain-node" style="flex:1 1 320px" spellcheck="false"
+                 autocomplete="off" placeholder="https://… your own RPC for this network">
+          <button class="btn btn-primary" id="chain-add">Start indexing</button>
+          <button class="btn btn-ghost" id="chain-cancel">Cancel</button>
+        </div>
+        <div class="hint" style="margin-top:8px">Stored so a restart brings the chain back, and never
+          returned by the API — the URL usually carries a provider's key. Before anything is written the
+          daemon dials it and asks the node for <em>its own</em> chain id; if that disagrees with the
+          number above, the network is refused. A chain reached over somebody else's RPC starts
+          <strong>unverified</strong>: indexed and served, but never backing an on-chain commitment until
+          you say so deliberately.</div>
       </div>
     </div>
+    <div class="hint" id="add-chain-off" hidden style="margin-top:14px">This deployment does not allow adding networks at runtime.</div>
 
-    <!-- What discovery found that the index does not keep. A balance read at head is
-         gone the moment the tab closes; an indexed asset is committed to a root and
-         served from the registry. This is where one becomes the other. -->
-    <div id="preserve" hidden style="margin-top:40px">
-      <div style="display:flex; align-items:baseline; justify-content:space-between; gap:25px; flex-wrap:wrap">
-        <h3 style="font-size:26px; margin:0">Keep these on-chain</h3>
-        <span class="hint" id="preserve-count"></span>
+    <div id="holdings-wrap" hidden>
+      <div class="subrow block">
+        <h3 id="holdings-title">Holdings</h3>
+        <div class="colnote" id="price-line"></div>
       </div>
-      <div id="preserve-body" style="margin-top:12px"></div>
-    </div>
-
-    <div class="row" style="margin-top:18px">
-      <button class="linkbtn" id="spam-toggle" hidden></button>
-      <span class="hint" id="spam-note"></span>
-    </div>
-  </div>
-
-  <!-- A blinded filter over the reader's own set: testable by whoever holds the
-       secret, opaque to whoever stores the file.
-       Deliberately outside #holdings-wrap. Building one needs holdings, but *opening*
-       one needs nothing at all — and #holdings-wrap is only unhidden by the lookup
-       that names the address to the daemon. Nesting this inside it would mean a reader
-       had to disclose the account before they could open the file that exists so they
-       would not have to. -->
-  <div id="watchlist" style="margin-top:40px">
-    <div style="display:flex; align-items:baseline; justify-content:space-between; gap:25px; flex-wrap:wrap">
-      <h3 style="font-size:26px; margin:0">Private watchlist</h3>
-      <button class="linkbtn" id="watch-open">keep a list somewhere that cannot read it</button>
-    </div>
-    <div id="watch-panel" hidden style="margin-top:14px"></div>
-  </div>
-  <div class="empty" id="account-empty" hidden style="margin-top:20px">No indexed interactions, and no balance in any indexed asset.</div>
-  <div class="hint" id="account-held" hidden style="margin-top:14px">No indexed interactions for this account — its
-    token events are older than the history this node can serve. These are live balances read at head.</div>
-
-  <p class="prose" style="margin-top:30px">
-    Balances and prices are read live through the deployless lens, in one call per batch, so every figure
-    carries the block it is true at. The index only supplies which contracts to ask about.
-    <button class="btn btn-ghost btn-sm" id="chain-rpc-open">use your own RPC</button>
-    and this page reads them in your browser, from your node, without this deployment touching them.
-  </p>
-  <div class="row" id="chain-rpc-row" hidden style="margin-top:10px">
-    <input class="input" type="text" id="chain-rpc" style="flex:1 1 320px" spellcheck="false" autocomplete="off" placeholder="https://… your own RPC for the indexed chain">
-    <button class="btn btn-secondary" id="chain-rpc-save">Use it</button>
-    <button class="btn btn-ghost" id="chain-rpc-clear">Use the daemon</button>
-  </div>
-  <div class="row" id="name-rpc-row" hidden style="margin-top:10px">
-    <input class="input" type="text" id="name-rpc" style="flex:1 1 320px" spellcheck="false" autocomplete="off" placeholder="https://… mainnet RPC for the name library (offchain names, .gwei, .wei)">
-    <button class="btn btn-secondary" id="name-rpc-save">Save</button>
-    <button class="btn btn-ghost" id="name-rpc-reset">Default</button>
-  </div>
-</section>
-
-<!-- ── OVERVIEW ───────────────────────────────────────────────────────── -->
-<section id="tab-overview" style="margin-top:34px">
-  <div class="grid-stats" id="stats"><span class="empty">loading…</span></div>
-  <div class="hint" id="node-note" hidden style="margin-top:22px; max-width:80ch"></div>
-
-  <div class="split split-main" style="margin-top:50px">
-    <div>
-      <h2 style="font-size:26px; margin:0 0 4px">Next in the queue</h2>
-      <p class="prose" id="queue-intro" style="margin:0 0 20px; max-width:56ch"></p>
-      <div class="err" id="cand-err" hidden></div>
-      <div id="queue"></div>
-      <button class="linkbtn" id="to-triage" style="margin-top:16px; font-size:17px">Open the triage card →</button>
-    </div>
-
-    <div>
-      <h2 style="font-size:26px; margin:0 0 16px">Recent decisions</h2>
-      <div id="ledger"><span class="empty">nothing decided yet</span></div>
-      <p class="hint" style="margin-top:20px; max-width:36ch; font-style:italic">Verdicts on contracts
-        <em>discovery</em> found, newest first. A hint someone paid to register enters the index without
-        ever being a candidate, so it never appears here.</p>
-    </div>
-  </div>
-
-  <h2 style="font-size:26px; margin:50px 0 4px">Indexed assets</h2>
-  <p class="prose" style="margin:0 0 16px">Contracts the index maintains per account: promoted from
-    discovery, or registered as a hint and paid for on-chain.</p>
-  <div class="row" style="margin-bottom:8px">
-    <input class="input" type="text" id="new-asset" style="flex:1 1 340px" spellcheck="false" autocomplete="off" placeholder="0x… contract address to index">
-    <button class="btn btn-secondary" id="register">Register hint</button>
-  </div>
-  <div class="err" id="asset-err" hidden></div>
-  <div class="scroll">
-    <div class="tablehead cols-assets">
-      <span>asset</span><span>standard</span><span>status</span><span>source</span>
-      <span class="num">logs</span><span>backfill</span>
-    </div>
-    <div id="assets"></div>
-  </div>
-
-  <div id="request-section" hidden>
-    <h2 style="font-size:26px; margin:50px 0 4px">Pay for a contract to be indexed</h2>
-    <p class="prose" id="req-terms" style="margin:0 0 16px"></p>
-    <div class="row">
-      <input class="input" type="text" id="req-token" style="flex:1 1 300px" spellcheck="false" autocomplete="off" placeholder="0x… token contract">
-      <select class="input" id="req-kind">
-        <option value="20">ERC-20</option>
-        <option value="21">ERC-721</option>
-        <option value="55">ERC-1155</option>
-        <option value="0">unknown</option>
-      </select>
-      <input class="input" type="text" id="req-from" style="flex:0 1 150px" spellcheck="false" autocomplete="off" placeholder="from block">
-      <input class="input" type="text" id="req-value" style="flex:0 1 150px" spellcheck="false" autocomplete="off" placeholder="deposit in ETH">
-      <button class="btn btn-secondary" id="req-connect">Connect wallet</button>
-      <button class="btn btn-primary" id="req-send" disabled>Request</button>
-    </div>
-    <div class="err" id="req-err" hidden></div>
-    <div class="hint" id="req-result" hidden style="margin-top:10px"></div>
-    <p class="hint" style="margin-top:10px; max-width:74ch">The deposit above the asset bond becomes that
-      asset's funding, and the registry pays it back to whoever indexes it, per block covered. This is the
-      same <code>requestIndexing</code> call <code>evmscan-deploy -request</code> makes — from your own wallet.</p>
-  </div>
-</section>
-
-<!-- ── TRIAGE ─────────────────────────────────────────────────────────── -->
-<section id="tab-triage" hidden style="margin-top:24px">
-  <div style="display:flex; align-items:center; justify-content:space-between; gap:25px; flex-wrap:wrap">
-    <div class="colhead" id="progress-line"></div>
-    <div class="colhead">one candidate at a time · keyboard driven</div>
-  </div>
-  <div class="progress"><div id="progress-bar" style="width:0%"></div></div>
-  <div class="err" id="triage-err" hidden></div>
-
-  <div id="triage-empty" hidden style="padding:90px 0; max-width:46ch">
-    <div class="figure" style="font-size:32px">Queue cleared.</div>
-    <p class="prose" style="font-size:18px">Discovery is still sweeping the head; new candidates appear
-      here once they pass the promotion thresholds.</p>
-  </div>
-
-  <div id="triage-card" hidden class="split split-rail" style="margin-top:34px">
-    <div>
-      <div class="row" style="gap:14px">
-        <span class="tag" id="card-standard"></span>
-        <span class="tag tag-flag" id="card-flag" hidden></span>
-        <span class="colhead">candidate · not yet promoted</span>
-      </div>
-      <h2 id="card-symbol" style="font-size:64px; line-height:0.98; letter-spacing:-0.025em; margin:12px 0 6px"></h2>
-      <div id="card-name" style="font-size:24px; color:var(--color-neutral-800)"></div>
-      <div class="addr" id="card-address" style="font-size:13px; margin-top:12px"></div>
-      <p class="prose" id="card-note" style="font-size:20px; max-width:58ch; margin:26px 0 0"></p>
-      <div class="signals" id="card-signals" style="margin-top:34px"></div>
-      <div class="row" style="gap:10px; margin-top:40px">
-        <button class="btn btn-primary" id="v-approve" style="font-size:16px">Approve <span class="key">A</span></button>
-        <button class="btn btn-secondary btn-spam" id="v-spam" style="font-size:16px">Spam <span class="key">S</span></button>
-        <button class="btn btn-ghost" id="v-skip" style="font-size:16px">Skip <span class="key">K</span></button>
-      </div>
-      <div class="hint" id="undo-line" hidden style="margin-top:14px"></div>
-    </div>
-
-    <div class="sticky">
-      <div class="colhead">what a verdict costs</div>
-      <p class="prose" style="font-size:15.5px; margin-top:10px">Approving commits a backfill down to the
-        node's history floor, and a per-account row for every account this contract has ever touched.
-        Marking it spam costs a row in the ledger, and is undone from here.</p>
-      <div class="colhead" style="margin-top:30px">why there is no holder list</div>
-      <p class="prose" style="font-size:15.5px; margin-top:10px">Discovery keeps counters and nothing
-        else — no per-account data exists for a contract until it is promoted. That is the trade that
-        makes watching every contract on the chain affordable, and it is why the evidence here is four
-        numbers rather than a cluster of names.</p>
-    </div>
-  </div>
-</section>
-
-<!-- ── ACCOUNTS ───────────────────────────────────────────────────────── -->
-<section id="tab-accounts" hidden style="margin-top:30px">
-  <div class="split split-rail">
-    <div>
-      <p class="prose" style="margin:0">Accounts are keyed by address; the index holds no names for them.
-        A reverse ENS record is resolved in your browser for the rows on screen — through the Universal
-        Resolver on your RPC, or a public one for this chain — and stands in for the address only once the
-        forward record agrees with it.</p>
-      <div class="row" style="margin-top:22px">
-        <input class="input" type="text" id="accounts-q" style="flex:0 1 300px" spellcheck="false"
-               autocomplete="off" placeholder="0x… address, or a prefix">
-        <span class="colhead" id="ens-line"></span>
-      </div>
-      <div class="err" id="accounts-err" hidden></div>
       <div class="scroll">
-        <div class="tablehead cols-accounts">
-          <span>account</span><span class="num">assets</span><span class="num">events</span><span class="num">ens record</span>
+        <div class="tablehead cols-hold">
+          <span>asset</span><span class="num">balance</span><span class="num">price</span>
+          <span class="num">value</span><span class="num">confidence</span><span class="num">triage</span>
         </div>
-        <div id="accounts"></div>
+        <div id="holdings"></div>
       </div>
-      <div class="row" style="margin-top:16px">
-        <button class="btn btn-secondary" id="accounts-more" hidden>Load more</button>
+      <div class="total" id="holdings-total" hidden>
+        <div class="note">The total carries the <em>weakest</em> confidence in the sum — a portfolio is only as
+          trustworthy as its worst price.</div>
+        <div class="sum"><b id="total-val">—</b><span class="badge none" id="total-tier">NONE</span></div>
+      </div>
+      <div class="row" style="margin-top:14px">
+        <button class="linkbtn" id="spam-toggle" hidden></button>
+        <span class="hint" id="spam-note"></span>
       </div>
 
-      <h2 style="font-size:26px; margin:50px 0 4px">On-chain commitments</h2>
-      <p class="prose" style="margin:0 0 16px">A merkle root over the whole account→contracts index,
-        published with a challenge window. An account's row in it is provable on-chain without trusting
-        this server.</p>
-      <div class="row" id="op-token-row" hidden style="margin-bottom:10px">
+      <div id="xchain" class="block">
+        <div class="subrow">
+          <h3>Elsewhere</h3>
+          <button class="linkbtn" id="xchain-open">look on other chains</button>
+        </div>
+        <div id="xchain-panel" hidden>
+          <p class="hint" id="xchain-disclosure" style="margin:0"></p>
+          <div class="row" style="margin:12px 0">
+            <button class="btn btn-secondary btn-sm" id="xchain-all">select all</button>
+            <button class="btn btn-secondary btn-sm" id="xchain-none">clear</button>
+            <button class="btn btn-primary btn-sm" id="xchain-go">Look</button>
+            <span class="hint" id="xchain-status"></span>
+          </div>
+          <div id="xchain-list" class="scroll" style="max-height:240px"></div>
+          <div id="xchain-results" style="margin-top:18px"></div>
+        </div>
+      </div>
+
+      <!-- What discovery found that the index does not keep. A balance read at head is
+           gone the moment the tab closes; an indexed asset is committed to a root and
+           served from the registry. This is where one becomes the other. -->
+      <div id="preserve" hidden class="block">
+        <div class="subrow">
+          <h3>Keep these on-chain</h3>
+          <span class="colnote" id="preserve-count"></span>
+        </div>
+        <div id="preserve-body"></div>
+      </div>
+    </div>
+
+    <div class="emptycard" id="account-empty" hidden>
+      <div class="ans-addr" id="empty-addr" style="margin-bottom:8px"></div>
+      <div class="ans-line" id="empty-line" style="display:block; font-family:var(--mono); font-size:12px"></div>
+      <div class="card">
+        <h3>Nothing indexed — and that is an answer, not a failure</h3>
+        <p>This address has touched no contract that anyone has promoted or paid to index. A provider would
+          guess; this returns nothing and says why. Register a hint for a contract and it enters the index
+          at the next epoch.</p>
+        <a class="btn btn-secondary" href="#beat4" id="empty-register">Register a hint →</a>
+      </div>
+    </div>
+    <div class="hint" id="account-held" hidden style="margin-top:14px">No indexed interactions for this account — its
+      token events are older than the history this node can serve. These are live balances read at head.</div>
+
+    <!-- A blinded filter over the reader's own set: testable by whoever holds the
+         secret, opaque to whoever stores the file.
+         Deliberately outside #holdings-wrap. Building one needs holdings, but *opening*
+         one needs nothing at all — and #holdings-wrap is only unhidden by the lookup
+         that names the address to the daemon. -->
+    <div id="watchlist" class="block">
+      <div class="subrow">
+        <h3>Private watchlist</h3>
+        <button class="linkbtn" id="watch-open">keep a list somewhere that cannot read it</button>
+      </div>
+      <div id="watch-panel" hidden></div>
+    </div>
+  </div>
+</section>
+
+<!-- ── 03 WHERE IT CAME FROM ───────────────────────────────────────────── -->
+<section id="beat3" class="beat-sec">
+  <div class="wrap">
+    <div class="kicker" style="margin-bottom:8px">03 · Where it came from</div>
+    <p class="lede">Three separate claims sit behind the table above, and they are not equally strong.
+      Saying which is which is the product.</p>
+    <div class="cards3">
+      <div class="card">
+        <div class="ch"><span class="dotc"></span>Which contracts</div>
+        <div class="cb" id="claim-contracts">Found by scanning this node's logs for the account, and only among
+          contracts somebody promoted or paid to index. They come from the committed index: a merkle root
+          published on-chain with a challenge window, so a reader can check a row without trusting this
+          server.</div>
+      </div>
+      <div class="card">
+        <div class="ch"><span class="dotc"></span>The balances</div>
+        <div class="cb">Live reads at head through a lens contract that is never deployed — no address to
+          trust, no upgrade key. Never summed from <code>Transfer</code> events, which rebasing and
+          fee-on-transfer tokens make wrong. Point the page at your own RPC and this deployment reads none of it.</div>
+      </div>
+      <div class="card amber">
+        <div class="ch"><span class="dotc amber"></span>What is missing</div>
+        <div class="cb" id="claim-missing">A snap-synced node serves logs only back to a history floor, so
+          anything older is unreadable here and <code>history_complete</code> stays false rather than
+          implying coverage. Contracts nobody promoted are not indexed at all — a miss means "not
+          indexed", never "no balance".</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── 04 THE MACHINE ──────────────────────────────────────────────────── -->
+<section id="beat4" class="beat-sec alt">
+  <div class="wrap">
+    <div class="kicker-row">
+      <span class="kicker">04 · The machine</span>
+      <span class="sub">the operator's side of the same page — no login, nothing hidden</span>
+    </div>
+    <p class="lede">Discovery is wide and cheap; indexing is narrow and expensive. Keeping those apart is
+      what lets one machine watch a whole chain — and it is why a contract has to be <em>promoted</em>
+      before it gets history.</p>
+
+    <div class="stages" id="stats"><span class="empty mono">loading…</span></div>
+    <div class="hint" id="node-note" hidden style="margin:-12px 0 26px; max-width:80ch"></div>
+    <div class="err" id="cand-err" hidden style="margin-bottom:16px"></div>
+
+    <div class="machine">
+      <div>
+        <div class="subrow">
+          <span class="label">indexed assets · <span id="asset-count">0</span></span>
+          <button class="btn btn-secondary btn-sm" id="hint-open">Register hint</button>
+        </div>
+
+        <div class="panel hintbox" id="hint-panel" hidden style="margin:0 0 16px">
+          <h3>Register a hint — permissionless, no allowlist</h3>
+          <p class="hint" style="margin:0 0 14px">A hint confers nothing: it asks the indexer to read logs that
+            are already public. A bad hint wastes our disk, not your trust.</p>
+          <div class="row">
+            <input class="input" type="text" id="new-asset" style="flex:1 1 300px" spellcheck="false" autocomplete="off" placeholder="0x… contract address to index">
+            <button class="btn btn-primary" id="register">Register</button>
+            <button class="btn btn-ghost" id="hint-close">Close</button>
+          </div>
+          <div class="err" id="asset-err" hidden></div>
+
+          <div id="request-section" hidden style="margin-top:18px; padding-top:16px; border-top:1px solid var(--line-2)">
+            <h3 style="font-size:13px">Or pay for it on-chain, from your own wallet</h3>
+            <p class="hint" id="req-terms" style="margin:0 0 12px"></p>
+            <div class="row">
+              <input class="input" type="text" id="req-token" style="flex:1 1 300px" spellcheck="false" autocomplete="off" placeholder="0x… token contract">
+              <select class="input" id="req-kind">
+                <option value="20">ERC-20</option>
+                <option value="21">ERC-721</option>
+                <option value="55">ERC-1155</option>
+                <option value="0">unknown</option>
+              </select>
+              <input class="input" type="text" id="req-from" style="flex:0 1 150px" spellcheck="false" autocomplete="off" placeholder="from block">
+              <input class="input" type="text" id="req-value" style="flex:0 1 150px" spellcheck="false" autocomplete="off" placeholder="deposit in ETH">
+              <button class="btn btn-secondary" id="req-connect">Connect wallet</button>
+              <button class="btn btn-primary" id="req-send" disabled>Sign requestIndexing</button>
+            </div>
+            <div class="err" id="req-err" hidden></div>
+            <div class="hint" id="req-result" hidden style="margin-top:10px"></div>
+            <p class="hint" style="margin:10px 0 0; max-width:74ch">The deposit above the asset bond becomes that
+              asset's funding, and the registry pays it back to whoever indexes it, per block covered. This is
+              the same <code>requestIndexing</code> call <code>evmscan-deploy -request</code> makes.</p>
+          </div>
+        </div>
+
+        <div class="scroll">
+          <div class="tablehead cols-assets">
+            <span>asset</span><span class="num">logs</span><span>backfill to floor</span><span>source</span>
+          </div>
+          <div id="assets"><span class="empty">loading…</span></div>
+        </div>
+      </div>
+
+      <div class="dark triage" id="triage">
+        <div class="t-head">
+          <span class="label">triage · <span id="tab-queue">0</span> undecided</span>
+          <span class="t-node" id="triage-node"></span>
+        </div>
+        <div class="progress" style="margin-top:12px"><div id="progress-bar"></div></div>
+        <div class="t-progressline" id="progress-line"></div>
+        <div class="err" id="triage-err" hidden></div>
+
+        <div id="triage-card" hidden>
+          <div class="t-title">
+            <span id="card-symbol"></span>
+            <span class="t-std" id="card-standard"></span>
+            <span class="t-flag" id="card-flag" hidden></span>
+          </div>
+          <div class="t-name" id="card-name"></div>
+          <div class="addr t-addr" id="card-address"></div>
+          <div class="t-signals" id="card-signals"></div>
+          <div class="t-read" id="card-note"></div>
+          <div class="t-actions">
+            <button class="btn btn-primary" id="v-approve"><kbd>a</kbd>promote</button>
+            <button class="btn btn-spam" id="v-spam"><kbd>s</kbd>spam</button>
+            <button class="btn" id="v-skip"><kbd>k</kbd>skip</button>
+          </div>
+          <div class="t-undo" id="undo-line" hidden></div>
+        </div>
+        <div class="t-empty" id="triage-empty" hidden>queue cleared. every discovered contract has a verdict —
+          discovery keeps running at the head, so more will arrive.<br><span>press u to take the last spam verdict back</span></div>
+
+        <div class="t-sub">up next</div>
+        <p class="t-intro" id="queue-intro"></p>
+        <div id="queue"></div>
+
+        <div class="t-sub">event log</div>
+        <div id="ledger"><span class="empty">nothing decided yet</span></div>
+      </div>
+    </div>
+
+    <div class="graphsec">
+      <div class="subrow">
+        <div>
+          <span class="label">interaction graph</span>
+          <p class="hint" style="margin:8px 0 0; max-width:70ch">Every node is an <strong>account</strong>; every edge
+            is a <strong>contract both of its ends touched</strong>. The index folds events per
+            <code>(account, asset)</code> and keeps no counterparties, so an edge means co-membership, never a
+            transfer. Weight is event count, not token amount: the decoder reads indexed topics only, so no
+            transferred value exists in the index to draw.</p>
+        </div>
+        <button class="btn btn-secondary btn-sm" id="graph-open">Draw it</button>
+      </div>
+      <div id="tab-graph" hidden>
+        <div class="controls">
+          <div class="ctl">
+            <label for="assets-range">Contracts per load</label>
+            <input type="range" id="assets-range" min="5" max="400" step="5" value="40">
+            <span class="val" id="assets-val">40</span>
+          </div>
+          <div class="ctl">
+            <label for="holders">Accounts per contract</label>
+            <input type="range" id="holders" min="2" max="40" step="1" value="10">
+            <span class="val" id="holders-val">10 → 45 edges each</span>
+          </div>
+          <div class="ctl"><button class="btn btn-secondary btn-sm" id="more" disabled>Load more</button>
+            <span class="val" id="paging"></span></div>
+          <div class="ctl"><button class="btn btn-secondary btn-sm" id="reload">Redraw</button></div>
+          <div class="ctl"><button class="btn btn-ghost btn-sm" id="recenter">Recenter</button></div>
+        </div>
+        <div class="stage-grid">
+          <div id="canvas-holder">
+            <div class="overlay" id="overlay">loading three.js and the index…</div>
+            <div class="hud" id="hud"></div>
+            <div class="tip" id="tip"></div>
+          </div>
+          <aside>
+            <section>
+              <h2>Selection</h2>
+              <div id="sel"><span class="empty">Click an account to inspect it.</span></div>
+            </section>
+            <section>
+              <h2>Contracts <span class="hint" id="legend-count"></span></h2>
+              <ul class="legend" id="legend"></ul>
+              <div class="hint" style="margin-top:8px">Accounts drawn · events indexed. Hover a contract to
+                isolate it; click to fly to it.</div>
+            </section>
+            <section>
+              <div class="hint">A node's size is that account's total indexed events; an edge's brightness is
+                the <em>smaller</em> of its two ends' counts on that contract — the most the pair can have in
+                common there. Counts are mapped through a log scale, because a router has millions of events
+                where an ordinary account has three.</div>
+              <div class="err" id="err"></div>
+            </section>
+          </aside>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── 05 CHECK IT YOURSELF ────────────────────────────────────────────── -->
+<section id="beat5" class="beat-sec">
+  <div class="wrap">
+    <div class="kicker" style="margin-bottom:8px">05 · Check it yourself</div>
+    <p class="lede">The index is committed on-chain as a merkle root with a challenge window. Nothing above
+      has to be believed — which is exactly why publishing it permissionlessly is safe.</p>
+    <div class="grid2">
+      <div class="dark cmd">
+        <div class="label">recompute the leaf, replay the proof, call verifyInclusion on-chain</div>
+        <div class="code" id="verify-cmd">evmscan-verify -epoch &lt;id&gt; \
+  -account &lt;0x…&gt;
+
+evmscan-verify -ens \
+  &lt;hex&gt;.hints.&lt;parent&gt;</div>
+      </div>
+      <div class="stack">
+        <div class="card">
+          <h3>Or read it with no evm-scan code at all</h3>
+          <p>The same answer is an ENS text record and an ERC-3668 gateway response. Any viem or ENS client can
+            fetch it; a gateway can withhold an answer but cannot forge one, and cannot serve a stale epoch.</p>
+        </div>
+        <div class="card">
+          <h3>What we do <em>not</em> claim</h3>
+          <p>A dispute is settled by UMA's voters, not a fraud proof. Prices from a DEX TWAP are manipulable
+            with capital and time. Candidate ranking is event count and distinct blocks — crude on purpose,
+            which is why auto-promote is off by default.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="block" id="commitments">
+      <div class="subrow">
+        <div>
+          <h3>On-chain commitments</h3>
+          <p class="hint" style="margin:6px 0 0; max-width:74ch">A merkle root over the whole account→contracts
+            index, published with a challenge window. An account's row in it is provable on-chain without
+            trusting this server.</p>
+        </div>
+        <div class="row">
+          <button class="btn btn-primary btn-sm" id="build">Build &amp; publish</button>
+          <button class="btn btn-secondary btn-sm" id="refresh-epochs">Refresh</button>
+        </div>
+      </div>
+      <div class="row" id="op-token-row" hidden style="margin:10px 0">
         <input class="input" type="password" id="op-token" style="flex:0 1 280px" spellcheck="false" autocomplete="off" placeholder="operator token">
         <button class="btn btn-secondary" id="op-token-save">Save</button>
         <span class="hint">Kept in this browser only, and sent as a bearer token on the actions that
           spend. It is <code>EVMSCAN_API_TOKEN</code> on the deployment.</span>
-      </div>
-      <div class="row" style="margin-bottom:8px">
-        <button class="btn btn-primary" id="build">Build &amp; publish</button>
-        <button class="btn btn-ghost" id="refresh-epochs">Refresh</button>
       </div>
       <div class="err" id="epoch-err" hidden></div>
       <div class="scroll">
@@ -617,83 +913,55 @@
           <span class="num">#</span><span>root</span><span class="num">accounts</span>
           <span class="num">range</span><span>status</span><span>tx</span>
         </div>
-        <div id="epochs"></div>
+        <div id="epochs"><span class="empty">loading…</span></div>
       </div>
     </div>
 
-    <div class="sticky">
-      <div class="colhead">account</div>
-      <h2 id="acct-name" style="font-size:32px; line-height:1.05; margin:8px 0 4px; word-break:break-word">—</h2>
-      <div class="addr" id="acct-addr" style="font-size:12px; word-break:break-all"></div>
-      <div class="hint" id="acct-record" style="margin-top:8px"></div>
-      <div id="acct-assets" style="display:grid; gap:11px; margin-top:26px"></div>
-      <div class="colhead" id="proof-head" hidden style="margin-top:30px">inclusion proof</div>
-      <pre id="proof" hidden></pre>
-      <div class="hint" id="proof-note" hidden style="margin-top:8px"></div>
+    <div class="split-rail block">
+      <div>
+        <div class="subrow">
+          <h3>Accounts in the index</h3>
+          <span class="colnote" id="ens-line"></span>
+        </div>
+        <p class="hint" style="margin:0 0 14px; max-width:74ch">Accounts are keyed by address; the index holds no
+          names for them. A reverse ENS record is resolved in your browser for the rows on screen — through the
+          Universal Resolver on your RPC, or a public one for this chain — and stands in for the address only
+          once the forward record agrees with it.</p>
+        <div class="row">
+          <input class="input" type="text" id="accounts-q" style="flex:0 1 320px" spellcheck="false"
+                 autocomplete="off" placeholder="0x… address, or a prefix">
+        </div>
+        <div class="err" id="accounts-err" hidden></div>
+        <div class="scroll">
+          <div class="tablehead cols-accounts">
+            <span>account</span><span class="num">assets</span><span class="num">events</span><span class="num">ens record</span>
+          </div>
+          <div id="accounts"><span class="empty">scroll here and the first page loads</span></div>
+        </div>
+        <div class="row" style="margin-top:14px">
+          <button class="btn btn-secondary btn-sm" id="accounts-more" hidden>Load more</button>
+        </div>
+      </div>
+
+      <div class="card rail">
+        <div class="label">account</div>
+        <div class="rail-name" id="acct-name">—</div>
+        <div class="addr" id="acct-addr" style="word-break:break-all"></div>
+        <div class="hint" id="acct-record" style="margin-top:8px"></div>
+        <div id="acct-assets" style="display:grid; gap:9px; margin-top:20px"></div>
+        <div class="label" id="proof-head" hidden style="margin-top:22px">inclusion proof</div>
+        <pre id="proof" hidden></pre>
+        <div class="hint" id="proof-note" hidden style="margin-top:8px"></div>
+      </div>
+    </div>
+
+    <div class="foot">
+      <span id="footer-counts">evm-scan · permissionless asset indexing for the access layer, built on your own node</span>
+      <span>keys · a promote · s spam · k skip · u undo</span>
     </div>
   </div>
 </section>
 
-<!-- ── GRAPH ──────────────────────────────────────────────────────────── -->
-<section id="tab-graph" hidden style="margin-top:28px">
-  <p class="prose" style="margin:0; max-width:70ch">Every node is an <strong>account</strong>; every edge
-    is a <strong>contract both of its ends touched</strong>. The index folds events per
-    <code>(account, asset)</code> and keeps no counterparties, so an edge means co-membership, never a
-    transfer. Weight is event count, not token amount: the decoder reads indexed topics only, so no
-    transferred value exists in the index to draw.</p>
-
-  <div class="controls">
-    <div class="ctl">
-      <label for="assets-range">Contracts per load</label>
-      <input type="range" id="assets-range" min="5" max="400" step="5" value="40">
-      <span class="val" id="assets-val">40</span>
-    </div>
-    <div class="ctl">
-      <label for="holders">Accounts per contract</label>
-      <input type="range" id="holders" min="2" max="40" step="1" value="10">
-      <span class="val" id="holders-val">10 → 45 edges each</span>
-    </div>
-    <div class="ctl"><button class="btn btn-secondary btn-sm" id="more" disabled>Load more</button>
-      <span class="val" id="paging"></span></div>
-    <div class="ctl"><button class="btn btn-secondary btn-sm" id="reload">Redraw</button></div>
-    <div class="ctl"><button class="btn btn-ghost btn-sm" id="recenter">Recenter</button></div>
-  </div>
-
-  <div class="stage">
-    <div id="canvas-holder">
-      <div class="overlay" id="overlay">loading three.js and the index…</div>
-      <div class="hud" id="hud"></div>
-      <div class="tip" id="tip"></div>
-    </div>
-    <aside>
-      <section>
-        <h2>Selection</h2>
-        <div id="sel"><span class="empty">Click an account to inspect it.</span></div>
-      </section>
-      <section>
-        <h2>Contracts <span class="hint" id="legend-count"></span></h2>
-        <ul class="legend" id="legend"></ul>
-        <div class="hint" style="margin-top:8px">Accounts drawn · events indexed. Hover a contract to
-          isolate it; click to fly to it.</div>
-      </section>
-      <section>
-        <div class="hint">A node's size is that account's total indexed events; an edge's brightness is
-          the <em>smaller</em> of its two ends' counts on that contract — the most the pair can have in
-          common there. Counts are mapped through a log scale, because a router has millions of events
-          where an ordinary account has three.</div>
-        <div class="err" id="err"></div>
-      </section>
-    </aside>
-  </div>
-</section>
-
-<div class="rule" style="margin-top:56px"></div>
-<div class="footer">
-  <span id="footer-counts"></span>
-  <span>keys · a approve · s spam · k skip · u undo</span>
-</div>
-
-</div>
 <script>
 const $ = (id) => document.getElementById(id);
 const short = (h, n = 6) => (h && h.length > 2 * n + 4) ? h.slice(0, n + 2) + '…' + h.slice(-n) : (h || '');
@@ -708,15 +976,18 @@ function esc(s) {
 
 // Column templates, named once so a header and its rows cannot drift apart.
 const COLS = {
-  hold: 'minmax(0, 1.4fr) 120px 100px minmax(0, 0.9fr) 110px 150px',
-  assets: 'minmax(0, 1.4fr) 90px 100px 110px 80px 130px',
-  accounts: 'minmax(0, 1.5fr) 92px 88px 130px',
-  epochs: '46px minmax(0, 1fr) 90px 150px 110px 120px',
-  queue: 'minmax(0, 1fr) 80px 80px auto',
+  hold: 'minmax(0, 1fr) minmax(90px, 130px) minmax(80px, 110px) minmax(90px, 130px) 96px 160px',
+  assets: 'minmax(0, 1fr) 64px minmax(96px, 150px) 92px',
+  accounts: 'minmax(0, 1.5fr) 72px 80px 120px',
+  epochs: '40px minmax(0, 1fr) 84px 150px 96px 110px',
 };
 for (const [k, v] of Object.entries(COLS)) {
   document.querySelectorAll('.cols-' + k).forEach(el => { el.style.gridTemplateColumns = v; });
 }
+
+// Token standards as the chain reports them, written the way people do.
+const STD_LABEL = { erc20: 'ERC-20', erc721: 'ERC-721', erc1155: 'ERC-1155' };
+const stdLabel = s => STD_LABEL[s] || (s ? String(s).toUpperCase() : '');
 
 // --------------------------------------------------------------------------
 // Talking to the daemon
@@ -747,10 +1018,10 @@ async function api(path, opts) {
   try { body = text ? JSON.parse(text) : {}; } catch { body = { error: text }; }
   if (!res.ok) {
     if (res.status === 401) {
-      // The token box lives on the accounts tab, so asking for it means going there.
+      // The token box lives beside the commitments, so asking for it means going there.
       $('op-token-row').hidden = false;
-      show('accounts');
-      $('op-token-row').scrollIntoView({ block: 'center' });
+      $('op-token-row').scrollIntoView({ block: 'center', behavior: 'smooth' });
+      $('op-token').focus({ preventScroll: true });
     }
     const err = new Error(body.detail || body.error || res.statusText);
     err.status = res.status;
@@ -813,7 +1084,6 @@ function ago(iso) {
 // State
 // --------------------------------------------------------------------------
 
-let VIEW = 'overview';
 let CHAINS = [], PICKED = null, DEFAULT_CHAIN = 0, PENDING = null, CAN_ADD = false;
 let INDEXED_CHAIN = 0, HEAD = 0, REG = null, WALLET = null, STATUS = null;
 let THRESHOLDS = { min_events: 0, min_blocks: 0 };
@@ -825,9 +1095,14 @@ let CARD_ADDR = null, LAST_VERDICT = null;
 // Skips are this session's, not the index's: "not now" is a different statement from
 // "not ever", and only the second one is worth a row in the database.
 const SKIPPED = new Set();
-let WALLET_ADDR = '', WALLET_NAME = '', HOLDINGS = [], VALUATION = null, SHOW_SPAM = false;
+let WALLET_ADDR = '', WALLET_NAME = '', WALLET_HINT = '', HOLDINGS = [], VALUATION = null, SHOW_SPAM = false;
 let ACCOUNTS = [], ACCT_OFFSET = 0, ACCT_MORE = false, ACCT_SELECTED = null;
 let graphLoaded = false;
+// Reverse-name lookups go to an RPC the page does not own, so the accounts table
+// waits until somebody scrolls to it. Set once the first page has been asked for.
+let ACCOUNTS_STARTED = false;
+// Hotkeys judge a contract, so they only fire while the triage panel is on screen.
+let TRIAGE_VISIBLE = false;
 
 function activeChainID() {
   if (PICKED && CHAINS.some(c => c.chain_id === PICKED && c.running)) return PICKED;
@@ -844,37 +1119,64 @@ function chainName() {
 }
 
 // --------------------------------------------------------------------------
-// Tabs
+// One page, five beats
+//
+// Nothing is behind a tab. The strip under the header says where the reader is and
+// scrolls them to a beat; the observers below do the lazy work the tabs used to —
+// the accounts table (which reaches an RPC for names) waits for the reader to get
+// there, and the triage hotkeys only fire while the panel is in view.
 // --------------------------------------------------------------------------
 
-function show(view) {
-  VIEW = view;
-  for (const t of document.querySelectorAll('.tab')) {
-    t.setAttribute('aria-selected', String(t.dataset.tab === view));
-  }
-  for (const v of ['wallet', 'overview', 'triage', 'accounts', 'graph']) {
-    $('tab-' + v).hidden = v !== view;
-  }
-  $('statusline').textContent = view === 'triage'
-    ? 'a verdict is one keystroke'
-    : 'discovery sweeping the head every 5s';
-
-  if (view === 'accounts' && !ACCOUNTS.length) loadAccounts();
-  if (view === 'accounts' && !EPOCHS.length) loadEpochs();
-  // three.js is most of a megabyte, and most visits never ask for a picture, so the
-  // import is what starts the scene — and only once somebody opens this tab.
-  if (view === 'graph' && !graphLoaded) {
-    graphLoaded = true;
-    import('./graph.js').catch(e => {
-      $('overlay').textContent = 'could not load the graph: ' + e.message;
-    });
-  }
+const BEATS = ['beat1', 'beat2', 'beat3', 'beat4', 'beat5'];
+function markBeat(id) {
+  for (const a of document.querySelectorAll('.beat')) a.classList.toggle('on', a.dataset.beat === id);
 }
-document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => show(t.dataset.tab)));
+function goTo(id) {
+  const el = $(id);
+  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+if (typeof IntersectionObserver === 'function') {
+  const spy = new IntersectionObserver(entries => {
+    let best = null;
+    for (const e of entries) {
+      if (!e.isIntersecting) continue;
+      const i = BEATS.indexOf(e.target.id);
+      if (i >= 0 && (best === null || i < best)) best = i;
+    }
+    if (best !== null) markBeat(BEATS[best]);
+  }, { rootMargin: '-40% 0px -50% 0px', threshold: 0 });
+  BEATS.forEach(id => { const el = $(id); if (el) spy.observe(el); });
+
+  const lazy = new IntersectionObserver(entries => {
+    for (const e of entries) {
+      if (e.target.id === 'triage') TRIAGE_VISIBLE = e.isIntersecting;
+      if (e.target.id === 'beat5' && e.isIntersecting && !ACCOUNTS_STARTED) {
+        ACCOUNTS_STARTED = true;
+        loadAccounts();
+      }
+    }
+  }, { rootMargin: '200px 0px', threshold: 0 });
+  lazy.observe($('triage'));
+  lazy.observe($('beat5'));
+} else {
+  TRIAGE_VISIBLE = true;
+}
+
+// three.js is most of a megabyte, and most visits never ask for a picture, so the
+// import is what starts the scene — and only once somebody asks for it.
+function openGraph() {
+  $('tab-graph').hidden = false;
+  $('graph-open').hidden = true;
+  if (graphLoaded) return;
+  graphLoaded = true;
+  import('./graph.js').catch(e => {
+    $('overlay').textContent = 'could not load the graph: ' + e.message;
+  });
+}
 
 window.evmscanOpenWallet = (addr) => {
   $('account').value = addr;
-  show('wallet');
+  goTo('beat2');
   lookup();
 };
 
@@ -897,30 +1199,26 @@ async function loadStatus() {
     HEAD = c.head_block || 0;
     INDEXED_CHAIN = c.chain_id;
 
-    $('masthead-meta').innerHTML = [
-      `chain ${c.chain_id}${c.name ? ' · ' + esc(c.name) : ''}`,
-      `head ${num(c.head_block)}`,
-      `discovery cursor ${num(c.discovery_cursor)}`,
-    ].map(x => `<span>${x}</span>`).join('');
+    $('pill-chain').innerHTML =
+      `<span class="dot"></span>${esc(c.name || 'chain ' + c.chain_id)} · block ${num(c.head_block)}`;
+    const nodePill = $('pill-node');
+    nodePill.hidden = false;
+    nodePill.textContent = c.node_local
+      ? `node ${esc(c.node_transport || 'local')} · loopback enforced`
+      : `node ${esc(c.node_transport || 'remote')} · third-party RPC`;
+    const tn = $('triage-node');
+    tn.textContent = c.node_local ? 'own node ✓' : 'remote node';
+    tn.classList.toggle('warn', !c.node_local);
+
+    renderStages(c);
 
     const spam = c.candidates_spam ?? 0;
     const ready = c.candidates_promotable ?? 0;
-    $('stats').innerHTML = [
-      [num(c.candidates_observed), 'candidates observed', 'counters only, no per-account rows'],
-      [num(ready), 'awaiting a verdict', THRESHOLDS.min_events
-        ? `past ${num(THRESHOLDS.min_events)} events across ${num(THRESHOLDS.min_blocks)} blocks`
-        : 'past the promotion thresholds'],
-      [num(c.assets), 'promoted to assets', 'each one backfilled to the history floor'],
-      [num(spam), 'marked spam', 'never offered for promotion again'],
-    ].map(([v, k, note]) => `<div class="stat">
-        <div class="figure">${v}</div>
-        <div class="kicker">${k}</div>
-        <div class="note">${note}</div>
-      </div>`).join('');
-
     $('footer-counts').textContent =
+      `evm-scan · ${esc(c.name || 'chain ' + c.chain_id)} · block ${num(c.head_block)} · ` +
       `${num(c.assets)} indexed · ${num(spam)} spam · ${num(ready)} awaiting a verdict · ` +
       `${num(c.accounts)} accounts · ${num(c.interactions)} interactions`;
+    renderClaims();
 
     const p = c.pricing || {};
     const sources = [
@@ -945,6 +1243,73 @@ async function loadStatus() {
 
     renderRequestSection();
   } catch (e) { showErr('cand-err', e); }
+}
+
+// The funnel: wide and cheap on the left, narrow and expensive on the right. Bars are
+// each stage against the one before it, so the picture is the ratio, not the count.
+function renderStages(c) {
+  const observed = c.candidates_observed ?? 0;
+  const ready = c.candidates_promotable ?? 0;
+  const assets = c.assets ?? 0;
+  const accounts = c.accounts ?? 0;
+  const committed = EPOCHS.length;
+  const finalized = EPOCHS.filter(e => e.status === 'finalized').length;
+  const pct = (a, b) => (b > 0 ? Math.max(a > 0 ? 3 : 0, Math.min(100, Math.round((a / b) * 100))) : (a > 0 ? 100 : 0));
+  const stages = [
+    ['discovered', observed, 100, 'ink', 'a counter per contract'],
+    ['candidates', ready, pct(ready, observed), 'amber', `${num(queue().length)} awaiting a verdict`],
+    ['promoted', assets, pct(assets, Math.max(ready, assets)), 'blue', 'history walk committed'],
+    ['accounts', accounts, accounts > 0 ? 80 : 0, 'blue', `${num(c.interactions)} per-account rows`],
+    ['committed', committed, committed > 0 ? 100 : 0, 'amber', committed > finalized ? 'challenge window open' : 'roots published'],
+    ['finalized', finalized, pct(finalized, committed), 'blue', finalized ? 'nobody challenged' : 'none yet'],
+  ];
+  $('stats').innerHTML = stages.map(([l, n, w, cls, note]) => `<div class="stage">
+      <div class="l">${l}</div>
+      <div class="c">${num(n)}</div>
+      <div class="b"><div class="${cls}" style="width:${w}%"></div></div>
+      <div class="n">${note}</div>
+    </div>`).join('');
+}
+
+// The three claims behind the answer, restated for whatever is on screen: the account
+// looked up, the epoch it can be checked against, and how much history is missing.
+function renderClaims() {
+  const fin = EPOCHS.find(e => e.status === 'finalized');
+  const epochNote = fin
+    ? `They come from the committed index — epoch <code>#${esc(String(fin.onchain_epoch_id ?? fin.id))}</code>, finalized, nobody challenged it inside the window.`
+    : EPOCHS.length
+      ? `They come from the committed index — epoch <code>#${esc(String(EPOCHS[0].onchain_epoch_id ?? EPOCHS[0].id))}</code> is published and still inside its challenge window.`
+      : 'They will come from the committed index once the first epoch is published; until then this is the daemon\'s own table.';
+  const indexed = HOLDINGS.filter(h => h.event_count).length;
+  $('claim-contracts').innerHTML = WALLET_ADDR
+    ? (indexed
+        ? `${num(indexed)} contract${indexed === 1 ? '' : 's'}, found by scanning logs for this account. ${epochNote}`
+        : `No contract this address touched has been promoted or paid for, so the index has no row for it. ${epochNote}`)
+    : `Found by scanning this node's logs for the account, and only among contracts somebody promoted or paid to index. ${epochNote}`;
+
+  const floor = STATUS ? STATUS.history_floor : undefined;
+  const partial = ASSETS.filter(a => a.history_complete === false).length;
+  const floorNote = floor
+    ? `This node's logs start at block ${num(floor)}, so anything older is unreadable here and <code>history_complete</code> stays false rather than implying coverage.`
+    : `A snap-synced node serves logs only back to a history floor, so anything older is unreadable here and <code>history_complete</code> stays false rather than implying coverage.`;
+  $('claim-missing').innerHTML = (ASSETS.length
+    ? (partial
+        ? `History is partial for ${num(partial)} of ${num(ASSETS.length)} indexed assets. `
+        : `Every one of the ${num(ASSETS.length)} indexed assets is walked back to the floor. `)
+    : '') + floorNote + ' Contracts nobody promoted are not indexed at all — a miss means "not indexed", never "no balance".';
+
+  const fromEpoch = fin || EPOCHS[0];
+  const acct = WALLET_ADDR || '<0x…>';
+  const ens = (WALLET_HINT || '<hex>.hints.<parent>');
+  $('verify-cmd').textContent =
+    `evmscan-verify -epoch ${fromEpoch ? (fromEpoch.onchain_epoch_id ?? fromEpoch.id) : '<id>'} \\\n  -account ${acct}\n\n` +
+    `evmscan-verify -ens \\\n  ${ens}`;
+
+  const pe = $('pill-epoch');
+  if (!EPOCHS.length) { pe.hidden = true; return; }
+  const latest = EPOCHS[0];
+  pe.hidden = false;
+  pe.textContent = `epoch ${latest.onchain_epoch_id ?? latest.id} · ${latest.status}`;
 }
 
 // --------------------------------------------------------------------------
@@ -985,7 +1350,7 @@ async function loadChains() {
 function renderChains() {
   const el = $('networks');
   const active = activeChainID();
-  el.innerHTML = '<span class="kicker" style="margin-right:6px">networks</span>' + (CHAINS.length
+  el.innerHTML = '<span class="label">networks</span>' + (CHAINS.length
     ? CHAINS.map(c => {
         const why = c.running ? (c.node_local ? 'your own node' : 'a third-party RPC') : (c.last_error || 'not running');
         return `<button class="chip ${c.chain_id === active ? 'on' : ''} ${c.running ? '' : 'down'}"
@@ -1008,8 +1373,8 @@ function renderChains() {
       renderChains();
       // Every panel on the page is about one chain, so re-ask for all of it.
       CANDIDATES = []; ACCOUNTS = []; ACCT_OFFSET = 0; ACCT_SELECTED = null; EPOCHS = [];
-      loadStatus(); loadAssets(); loadCandidates(); loadDecisions();
-      if (VIEW === 'accounts') { loadAccounts(); loadEpochs(); }
+      loadStatus(); loadAssets(); loadCandidates(); loadDecisions(); loadEpochs();
+      if (ACCOUNTS_STARTED) loadAccounts();
       if (graphLoaded && window.evmscanGraphReload) window.evmscanGraphReload();
       if (WALLET_ADDR) lookup();
     });
@@ -1066,9 +1431,9 @@ function renderChainCard(r) {
   $('chain-card').hidden = false;
   $('chain-card').innerHTML = `
     <div style="display:flex; align-items:center; gap:12px; margin-bottom:14px">
-      ${ico ? `<img src="${esc(ico)}" alt="" style="width:28px; height:28px">` : ''}
+      ${ico ? `<img src="${esc(ico)}" alt="" style="width:28px; height:28px; border-radius:50%">` : ''}
       <div>
-        <div class="sym">${esc(s.name || r.label)}</div>
+        <div class="sym" style="font-size:15px">${esc(s.name || r.label)}</div>
         <div class="addr">${esc(r.ens_name)} → chain ${r.chain_id}</div>
       </div>
     </div>
@@ -1168,23 +1533,48 @@ function priceOnly(p) {
   return `<span class="mono">${usd(p.usd)}</span>`;
 }
 
-function priceSource(p) {
-  if (!p || !p.usd) {
-    const why = (p && p.notes && p.notes[0]) || 'no on-chain source found';
-    return `<span class="conf none"></span><span class="empty" title="${esc(why)}">no source found</span>`;
-  }
-  const route = (p.route || []).map(h => {
+// The whole route, one hop per line, for the title of whatever shows the price.
+function priceRoute(p) {
+  return (p.route || []).map(h => {
     let s = `${SOURCE_LABEL[h.kind] || h.kind}: ${h.pair} = ${h.price}`;
     if (h.twap_seconds) s += ` (${Math.round(h.twap_seconds / 60)}m TWAP)`;
     if (h.age_seconds !== undefined) s += ` (updated ${h.age_seconds}s ago${h.stale ? ', STALE' : ''})`;
     if (h.depth_usd) s += ` · depth ${usd(h.depth_usd)}`;
     return s;
   }).concat(p.notes || []).join('\n');
+}
+
+// The line under an asset's name: where its price came from, in a few words.
+function priceNote(p) {
+  if (!p || !p.usd) return (p && p.notes && p.notes[0]) || 'no on-chain price source found';
   const first = (p.route || [])[0] || {};
   let label = SOURCE_LABEL[p.source] || p.source;
-  if (first.twap_seconds) label += ` ${Math.round(first.twap_seconds / 60)}m`;
-  return `<span class="conf ${esc(p.confidence)}"></span><span title="${esc(route)}">${esc(label)}` +
-    `${p.stale ? ' · stale' : ''} · ${esc(p.confidence)} confidence</span>`;
+  if (first.pair) label += ` ${first.pair}`;
+  if (first.twap_seconds) label += ` · ${Math.round(first.twap_seconds / 60)} m TWAP`;
+  if (first.age_seconds !== undefined) label += ` · ${first.age_seconds} s old`;
+  if (p.stale) label += ' · stale';
+  return label;
+}
+
+// How far to trust the price, as a badge: filled for a fresh feed, outlined for a
+// DEX average, amber for a spot read, dashed for none.
+function priceBadge(p) {
+  if (!p || !p.usd) {
+    const why = (p && p.notes && p.notes[0]) || 'no on-chain source found';
+    return `<span class="badge none" title="${esc(why)}">none</span>`;
+  }
+  const tier = ['high', 'medium', 'low'].includes(p.confidence) ? p.confidence : 'none';
+  return `<span class="badge ${tier}" title="${esc(priceRoute(p))}">${esc(tier)}</span>`;
+}
+
+// Kept for anything that still wants the dot-and-words form.
+function priceSource(p) {
+  if (!p || !p.usd) {
+    const why = (p && p.notes && p.notes[0]) || 'no on-chain source found';
+    return `<span class="conf none"></span><span class="empty" title="${esc(why)}">no source found</span>`;
+  }
+  return `<span class="conf ${esc(p.confidence)}"></span><span title="${esc(priceRoute(p))}">${esc(priceNote(p))}` +
+    ` · ${esc(p.confidence)} confidence</span>`;
 }
 
 // --------------------------------------------------------------------------
@@ -1195,24 +1585,36 @@ async function loadAssets() {
   try {
     const { assets = [] } = await api(onChain('/v1/assets'));
     ASSETS = assets;
-    $('assets').innerHTML = assets.length ? assets.map(a => `
+    $('asset-count').textContent = num(assets.length);
+    const floor = STATUS ? STATUS.history_floor : 0;
+    const head = HEAD || (STATUS && STATUS.head_block) || 0;
+    $('assets').innerHTML = assets.length ? assets.map(a => {
+      // How far back the walk has got, against the range it has to cover: from the
+      // floor (or the hint's own start) up to the head it was anchored at.
+      const start = Math.max(floor || 0, a.hint_from_block || 0);
+      const span = Math.max(1, head - start);
+      const pct = a.backfill_done ? 100
+        : Math.max(2, Math.min(98, Math.round(((head - (a.backfill_next ?? head)) / span) * 100)));
+      const note = a.backfill_done
+        ? (a.history_complete === false ? `complete to the floor${floor ? ' · ' + num(floor) : ''}` : 'complete')
+        : `${pct} % · walking back to ${num(a.backfill_next)}`;
+      return `
       <div class="tablerow" style="grid-template-columns:${COLS.assets}">
         <div style="min-width:0">
-          <div class="row" style="gap:9px">
-            <span class="sym">${a.symbol ? esc(a.symbol) : '<span class="empty">unknown</span>'}</span>
-            <span class="nm">${esc(a.name || '')}</span>
-          </div>
+          <div class="sym" style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap">${a.symbol ? esc(a.symbol) : '<span class="empty">unknown</span>'}${
+            a.name ? ` <span class="nm">${esc(a.name)}</span>` : ''}<span class="std">${esc(stdLabel(a.standard))}</span></div>
           <div class="addr">${esc(a.address)}</div>
         </div>
-        <span><span class="tag">${esc(a.standard)}</span></span>
-        <span class="quiet">${esc(a.status)}</span>
-        <span class="quiet">${esc(a.source)}</span>
         <span class="num mono">${num(a.logs_seen ?? 0)}</span>
-        <span>${a.backfill_done
-          ? `<span class="verdict v-approved">${a.history_complete === false ? 'to the floor' : 'complete'}</span>`
-          : `<span class="quiet" style="font-size:13px">to block ${num(a.backfill_next)}</span>`}</span>
-      </div>`).join('')
+        <div class="bar-cell">
+          <div class="b"><div class="${a.backfill_done ? '' : 'amber'}" style="width:${pct}%"></div></div>
+          <div class="n">${note}</div>
+        </div>
+        <span class="quiet" style="font-size:11px; font-family:var(--mono)">${esc(a.source)}${a.status && a.status !== 'active' ? ' · ' + esc(a.status) : ''}</span>
+      </div>`;
+    }).join('')
       : '<div class="empty" style="padding:14px 0">No assets indexed yet.</div>';
+    renderClaims();
   } catch (e) { showErr('asset-err', e); }
 }
 
@@ -1413,29 +1815,26 @@ function queue() {
 
 function renderQueue() {
   const q = queue();
-  $('tab-queue').textContent = q.length ? String(q.length) : '';
+  $('tab-queue').textContent = num(q.length);
   $('queue-intro').textContent = THRESHOLDS.min_events
     ? `Candidates that cleared the promotion thresholds — ${num(THRESHOLDS.min_events)} events across ` +
       `${num(THRESHOLDS.min_blocks)} blocks — and are waiting on a verdict. Busiest first.`
     : 'Candidates that cleared the promotion thresholds and are waiting on a verdict. Busiest first.';
 
-  $('queue').innerHTML = q.length ? q.slice(0, 5).map(c => `
-    <div class="tablerow" style="grid-template-columns:${COLS.queue}">
-      <div style="min-width:0">
-        <div class="row" style="gap:9px">
-          <span class="sym">${c.symbol ? esc(c.symbol) : '<span class="empty">unknown</span>'}</span>
-          <span class="nm">${esc(c.name || '')}</span>
-        </div>
-        <div class="addr">${esc(c.address)}</div>
-      </div>
-      <div class="num mono">${num(c.event_count)}</div>
-      <div class="num mono quiet">${num(c.blocks_seen)} blk</div>
-      <div class="row" style="gap:7px; flex-wrap:nowrap">
-        <button class="btn btn-primary btn-sm" data-approve="${esc(c.address)}">Approve</button>
-        <button class="btn btn-secondary btn-spam btn-sm" data-spam="${esc(c.address)}">Spam</button>
+  // The card above shows the head of the queue; this is what follows it.
+  const rest = q.slice(1, 6);
+  $('queue').innerHTML = rest.length ? rest.map(c => `
+    <div class="q-row">
+      <div class="q-name" title="${esc(c.address)}"><b>${c.symbol ? esc(c.symbol) : short(c.address, 5)}</b>${
+        c.name ? ` <span class="quiet">${esc(c.name)}</span>` : ''}</div>
+      <div class="q-n">${num(c.event_count)} ev · ${num(c.blocks_seen)} blk</div>
+      <div class="q-act">
+        <button class="btn btn-primary" data-approve="${esc(c.address)}">promote</button>
+        <button class="btn btn-spam" data-spam="${esc(c.address)}">spam</button>
       </div>
     </div>`).join('')
-    : '<div class="empty" style="padding:14px 0">Nothing is waiting on a verdict.</div>';
+    : `<div class="empty" style="padding:6px 0 10px; font:400 10.5px/1.6 var(--mono)">${
+        q.length ? 'nothing behind it' : 'nothing is waiting on a verdict'}</div>`;
   wireVerdictButtons($('queue'));
 }
 
@@ -1468,7 +1867,7 @@ async function decide(address, verdict, btn) {
     CARD_ADDR = null;
     await Promise.all([loadCandidates(), loadDecisions(), loadAssets(), loadStatus()]);
   } catch (e) {
-    showErr(VIEW === 'triage' ? 'triage-err' : 'cand-err', e);
+    showErr('triage-err', e);
     if (btn) btn.disabled = false;
   }
 }
@@ -1476,16 +1875,13 @@ async function decide(address, verdict, btn) {
 async function loadDecisions() {
   try {
     const { decisions = [] } = await api(onChain('/v1/decisions?limit=12'));
-    $('ledger').innerHTML = decisions.length ? decisions.map(d => {
+    $('ledger').innerHTML = decisions.length ? decisions.slice(0, 8).map(d => {
       const approved = d.verdict === 'approved';
-      return `<div class="row" style="gap:12px; padding:9px 0; border-bottom:1px solid var(--color-divider); flex-wrap:nowrap">
-        <span class="verdict ${approved ? 'v-approved' : 'v-spam'}" style="width:14px"
-              title="${esc(d.reason || '')}">${approved ? '✓' : '✗'}</span>
-        <span class="sym" style="font-size:17px; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">${
-          d.symbol ? esc(d.symbol) : short(d.address, 5)}</span>
-        <span class="colhead" style="white-space:nowrap">${esc(ago(d.at))} · ${esc(d.verdict)}</span>
+      return `<div class="ev" title="${esc(d.reason || '')}">
+        <span class="k verdict ${approved ? 'v-approved' : 'v-spam'}">${approved ? 'promoted' : 'spam'}</span>
+        <span class="x">${d.symbol ? esc(d.symbol) : short(d.address, 5)} · <span class="when">${esc(ago(d.at))}</span></span>
       </div>`;
-    }).join('') : '<span class="empty">nothing decided yet</span>';
+    }).join('') : '<span class="empty" style="font:400 10.5px/1.6 var(--mono)">nothing decided yet — verdicts on contracts discovery found land here, newest first</span>';
   } catch {
     // A ledger that will not load is not worth a banner; the queue beside it still works.
   }
@@ -1531,8 +1927,8 @@ function renderTriage() {
   const decided = CANDIDATES.filter(c => c.verdict).length;
   const total = decided + q.length;
   $('progress-line').textContent = total
-    ? `${num(decided)} decided · ${num(q.length)} left in the bin`
-    : 'nothing discovered yet';
+    ? `${num(decided)} decided · ${num(q.length)} left in the bin · a verdict is one keystroke`
+    : 'nothing past the thresholds yet · discovery sweeps the head every 5 s';
   $('progress-bar').style.width = total ? ((decided / total) * 100).toFixed(1) + '%' : '0%';
 
   const undo = $('undo-line');
@@ -1559,14 +1955,14 @@ function renderTriage() {
   // reorders under the operator must not change what the next keystroke judges.
   const c = q.find(x => x.address === CARD_ADDR) || q[0];
   CARD_ADDR = c.address;
-  $('card-standard').textContent = c.standard;
+  $('card-standard').textContent = stdLabel(c.standard);
   $('card-symbol').textContent = c.symbol || short(c.address, 5);
   $('card-name').textContent = c.name || 'no name on the contract';
   $('card-address').textContent = c.address;
   $('card-note').textContent =
-    `Seen ${num(c.event_count)} times across ${num(c.blocks_seen)} blocks, between ${num(c.first_seen_block)} ` +
-    `and ${num(c.last_seen_block)}. Everything below is counted from what discovery watched go past; ` +
-    `nothing here has been probed beyond its symbol.`;
+    `seen ${num(c.event_count)} times across ${num(c.blocks_seen)} blocks, between ${num(c.first_seen_block)} ` +
+    `and ${num(c.last_seen_block)} — counted from what discovery watched go past; nothing here has been ` +
+    `probed beyond its symbol, and ranking alone cannot tell a held token from an airdrop.`;
 
   const perBlock = c.blocks_seen > 0 ? c.event_count / c.blocks_seen : 0;
   const flag = $('card-flag');
@@ -1586,8 +1982,9 @@ function renderTriage() {
 }
 
 window.addEventListener('keydown', e => {
-  if (VIEW !== 'triage') return;
+  if (!TRIAGE_VISIBLE) return;
   if (e.target.matches('input, textarea, select')) return;
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
   const k = e.key.toLowerCase();
   if (k === 'u' && LAST_VERDICT && LAST_VERDICT.verdict === 'spam') {
     e.preventDefault(); decide(LAST_VERDICT.address, 'unspam'); return;
@@ -2897,16 +3294,19 @@ async function lookup() {
   if (!typed) return;
   showErr('account-err', null);
   $('lookup').disabled = true;
+  $('answer-idle').hidden = true;
+  $('answer-loading').hidden = false;
   try {
     const resolved = await resolveAccount(typed);
     const addr = resolved.address;
     WALLET_ADDR = addr;
     WALLET_NAME = resolved.name || '';
+    WALLET_HINT = '';
     showResolved(resolved.name ? resolved : null);
 
     const r = await api(onChain(`/v1/accounts/${addr}?prices=true`));
     // The daemon formats the hint name from registry.ens_parent; it resolves nothing.
-    if (r.hint_name) { resolved.hintName = r.hint_name; showResolved(resolved); }
+    if (r.hint_name) { resolved.hintName = r.hint_name; WALLET_HINT = r.hint_name; showResolved(resolved); }
     const indexed = r.assets || [];
     VALUATION = indexed.length ? r.valuation : null;
 
@@ -2931,10 +3331,14 @@ async function lookup() {
     await markUnlisted(HOLDINGS, r.chain_id);
 
     $('wallet-head').hidden = false;
-    $('wallet-name').textContent = WALLET_NAME || short(addr, 8);
+    $('wallet-name').textContent = WALLET_NAME || short(addr, 4);
     $('wallet-addr').textContent = addr;
-    renderWalletTotals();
+    $('wallet-line').textContent =
+      `${num(indexed.length)} contract${indexed.length === 1 ? '' : 's'} touched · ` +
+      `${num(HOLDINGS.length)} hold${HOLDINGS.length === 1 ? 's' : ''} a balance now`;
+    renderWalletTotals(r);
     renderHoldings();
+    renderClaims();
 
     // Everything above is read at head and gone when the tab closes. The module below
     // is what makes it outlast the visit: it remembers this set locally so the next
@@ -2949,7 +3353,12 @@ async function lookup() {
     // A name that failed to resolve should not leave a stale "x.eth → 0x…" above the
     // error saying it did.
     if (!ADDRESS_RE.test($('account').value.trim())) showResolved(null);
-  } finally { $('lookup').disabled = false; }
+  } finally {
+    $('lookup').disabled = false;
+    $('answer-loading').hidden = true;
+    // With nothing on screen the section needs its one-line explanation back.
+    $('answer-idle').hidden = !($('wallet-head').hidden && $('account-empty').hidden);
+  }
 }
 
 // Balances for tokens the index has no rows for. The reader's own endpoint first, when
@@ -3001,19 +3410,21 @@ async function heldBalances(addr, addrs) {
     });
 }
 
-function renderWalletTotals() {
+// The line under the address: when the answer was read, how, and what is unpriced.
+// One mono line rather than three figures — the figures are in the table below.
+function renderWalletTotals(r) {
   const v = VALUATION || {};
   const unpriced = HOLDINGS.filter(h => !(h.price && h.price.usd)).length;
-  $('wallet-totals').innerHTML = [
-    [v.total_usd !== undefined ? usd(v.total_usd) : '—', 'valuation',
-      v.confidence ? `weakest confidence: ${esc(v.confidence)}` : 'nothing priced'],
-    [`${unpriced} of ${HOLDINGS.length}`, 'without a price', 'reported, never guessed'],
-    [num(v.as_of_block || (STATUS && STATUS.head_block)), 'as of block', 'read at head, not derived'],
-  ].map(([val, label, note]) => `<div>
-      <div class="figure" style="font-size:32px">${val}</div>
-      <div class="kicker" style="margin-top:7px">${label}</div>
-      <div style="font-size:14.5px; color:var(--color-neutral-700); margin-top:3px">${note}</div>
-    </div>`).join('');
+  const state = (r && r.account_state) || {};
+  const parts = [
+    `<span>read at block <b>${num(v.as_of_block || (r && r.as_of_block) || (STATUS && STATUS.head_block))}</b></span>`,
+    `<span>one eth_call · one block</span>`,
+  ];
+  if (state.nonce !== undefined) parts.push(`<span>nonce <b>${num(state.nonce)}</b></span>`);
+  if (HOLDINGS.length) {
+    parts.push(`<span>${num(unpriced)} of ${num(HOLDINGS.length)} without a price · reported, never guessed</span>`);
+  }
+  $('wallet-totals').innerHTML = parts.join('');
 }
 
 function renderHoldings() {
@@ -3026,36 +3437,52 @@ function renderHoldings() {
   $('holdings-wrap').hidden = rows.length === 0;
   $('account-empty').hidden = rows.length !== 0;
   $('account-held').hidden = !(rows.length && rows.every(h => !h.event_count));
+  if (!rows.length) {
+    $('empty-addr').textContent = WALLET_NAME || short(WALLET_ADDR, 4);
+    $('empty-line').textContent =
+      `0 contracts in the index · read at block ${num((VALUATION && VALUATION.as_of_block) || (STATUS && STATUS.head_block))}`;
+  }
 
   $('holdings').innerHTML = shown.map(h => {
     const v = h.verdict;
-    const mark = v === 'approved' ? '✓ indexed' : v === 'spam' ? '✗ spam' : '';
+    const mark = v === 'approved' ? 'indexed' : v === 'spam' ? 'spam' : '';
     const cls = v === 'approved' ? 'v-approved' : v === 'spam' ? 'v-spam' : 'v-none';
     const action = v === 'spam'
       ? `<button class="btn btn-ghost btn-sm" data-unspam="${esc(h.address)}">undo</button>`
       : v ? ''
-      : `<div class="row" style="gap:6px; justify-content:flex-end; flex-wrap:nowrap">
-           <button class="btn btn-primary btn-sm" data-approve="${esc(h.address)}">Approve</button>
-           <button class="btn btn-secondary btn-spam btn-sm" data-spam="${esc(h.address)}">Spam</button>
-         </div>`;
+      : `<button class="btn btn-primary btn-sm" data-approve="${esc(h.address)}">Promote</button>
+         <button class="btn btn-spam btn-sm" data-spam="${esc(h.address)}">Spam</button>`;
+    const fungible = h.standard === 'erc20';
+    const note = fungible
+      ? (h.price && h.price.usd ? esc(priceNote(h.price)) : `<span title="${esc(priceNote(h.price))}">${esc(priceNote(h.price))}</span>`)
+      : 'NFTs are not priced here — a floor is a market question, not an oracle one';
     return `<div class="tablerow ${v === 'spam' ? 'dim' : ''}" style="grid-template-columns:${COLS.hold}">
       <div style="min-width:0">
-        <div class="row" style="gap:9px">
-          <span class="sym">${h.symbol ? esc(h.symbol) : '<span class="empty">unknown</span>'}</span>
-          <span class="nm">${esc(h.name || '')}</span>
-          ${h.unlisted ? '<span class="tag" title="no token list this deployment loaded vouches for this contract. Checked in your browser, against a filter already downloaded — the daemon was not asked.">unlisted</span>' : ''}
-        </div>
-        <div class="addr">${esc(h.address)}</div>
+        <div class="sym">${h.symbol ? esc(h.symbol) : '<span class="empty">unknown</span>'}${
+          h.name ? ` <span class="nm">${esc(h.name)}</span>` : ''}<span class="std">${esc(stdLabel(h.standard))}</span>${
+          h.unlisted ? ' <span class="tag tag-flag" title="no token list this deployment loaded vouches for this contract. Checked in your browser, against a filter already downloaded — the daemon was not asked.">unlisted</span>' : ''}${
+          h.event_count ? '' : ' <span class="tag" title="the index has no rows for this contract and account; the balance was read live at head">live read</span>'}</div>
+        <div class="a-note" title="${esc(h.address)}">${note}</div>
       </div>
       <div class="num mono">${formatUnits(h.balance, h.decimals)}</div>
-      <div class="num">${h.standard === 'erc20' ? priceOnly(h.price)
-        : '<span class="empty" title="NFTs are not priced: a floor is a market question, not an oracle one">—</span>'}</div>
-      <div style="font-size:13.5px; color:var(--color-neutral-800)">${h.standard === 'erc20' ? priceSource(h.price) : ''}</div>
-      <div class="num figure" style="font-size:19px">${h.value_usd ? usd(h.value_usd) : '—'}</div>
-      <div class="num">${mark ? `<span class="verdict ${cls}">${mark}</span> ` : ''}${action}</div>
+      <div class="num mono">${fungible ? priceOnly(h.price) : '<span class="empty">—</span>'}</div>
+      <div class="num mono" style="font-weight:500">${h.value_usd ? usd(h.value_usd) : '<span class="empty">—</span>'}</div>
+      <div class="num">${fungible ? priceBadge(h.price) : '<span class="badge none" title="NFTs are not priced">none</span>'}</div>
+      <div class="verdict-cell">${mark ? `<span class="verdict ${cls}">${mark}</span>` : ''}${action}</div>
     </div>`;
   }).join('');
   wireVerdictButtons($('holdings'));
+
+  // The total, carrying the weakest confidence in the sum.
+  const v = VALUATION || {};
+  const tot = $('holdings-total');
+  tot.hidden = !(rows.length && v.total_usd !== undefined);
+  if (!tot.hidden) {
+    const tier = ['high', 'medium', 'low'].includes(v.confidence) ? v.confidence : 'none';
+    $('total-val').textContent = usd(v.total_usd);
+    $('total-tier').textContent = tier;
+    $('total-tier').className = `badge ${tier}`;
+  }
 
   $('spam-toggle').hidden = !spamCount;
   $('spam-toggle').textContent = SHOW_SPAM
@@ -3102,10 +3529,8 @@ function renderAccounts() {
     return `<div class="tablerow pick ${a.account === ACCT_SELECTED ? 'on' : ''}"
         style="grid-template-columns:${COLS.accounts}" data-account="${esc(a.account)}">
       <div style="min-width:0">
-        <div style="${named
-          ? 'font-family:var(--font-heading); font-weight:600; font-size:19px'
-          : 'font-family:var(--mono); font-size:14px'}">${named ? esc(rev.name) : short(a.account, 8)}</div>
-        <div class="nm" style="font-size:14px">${ENS_SUB[state]}</div>
+        <div class="acct-name ${named ? '' : 'raw'}">${named ? esc(rev.name) : short(a.account, 8)}</div>
+        <div class="nm">${ENS_SUB[state]}</div>
       </div>
       <div class="num mono">${num(a.asset_count)}</div>
       <div class="num mono">${num(a.event_count)}</div>
@@ -3147,9 +3572,9 @@ async function selectAccount(addr) {
   try {
     const r = await api(onChain(`/v1/accounts/${addr}`));
     $('acct-assets').innerHTML = (r.assets || []).map(a => `
-      <div style="display:grid; grid-template-columns:minmax(0,1fr) 78px 62px; gap:12px; align-items:baseline">
-        <span class="sym" style="font-size:17px">${a.symbol ? esc(a.symbol) : short(a.address, 5)}</span>
-        <span class="num mono quiet" style="font-size:12.5px">${num(a.event_count)} ev</span>
+      <div class="acct-row">
+        <span class="sym" title="${esc(a.address)}">${a.symbol ? esc(a.symbol) : short(a.address, 5)}</span>
+        <span class="num quiet">${num(a.event_count)} ev</span>
         <span class="num verdict v-approved">✓</span>
       </div>`).join('') || '<span class="empty">no indexed interactions</span>';
   } catch { /* the rail is a detail; the table beside it still stands */ }
@@ -3207,7 +3632,29 @@ async function loadEpochs() {
       </div>`).join('')
       : '<div class="empty" style="padding:14px 0">No commitments built yet.</div>';
     if (ACCT_SELECTED) loadProof(ACCT_SELECTED);
+    if (STATUS) renderStages(STATUS);
+    renderClaims();
   } catch (e) { showErr('epoch-err', e); }
+}
+
+// Three accounts from the index, offered under the search box so the first click
+// shows a real answer. They come from the daemon's own table, not from anywhere else.
+async function loadExamples() {
+  const el = $('try');
+  try {
+    const r = await api(onChain('/v1/accounts?limit=3'));
+    const rows = (r.accounts || []).slice(0, 3);
+    if (!rows.length) { el.hidden = true; return; }
+    el.innerHTML = '<span>try</span>' + rows.map(a =>
+      `<button class="ex" data-example="${esc(a.account)}" title="${esc(a.account)} · ${num(a.asset_count)} contracts · ${num(a.event_count)} events">${esc(short(a.account, 4))}</button>`
+    ).join('');
+    el.querySelectorAll('[data-example]').forEach(b => b.addEventListener('click', () => {
+      $('account').value = b.dataset.example;
+      lookup();
+    }));
+  } catch {
+    el.hidden = true; // the box works without examples
+  }
 }
 
 async function buildEpoch() {
@@ -3273,8 +3720,24 @@ $('watch-open').addEventListener('click', async () => {
 // because a reader looks up more than one account per visit.
 window.evmscanHoldings = () => HOLDINGS;
 $('account').addEventListener('keydown', e => { if (e.key === 'Enter') lookup(); });
-$('to-triage').addEventListener('click', () => show('triage'));
 $('spam-toggle').addEventListener('click', () => { SHOW_SPAM = !SHOW_SPAM; renderHoldings(); });
+
+// The hint panel holds both registration paths: the daemon's own, and the paid
+// on-chain one. Opened from the assets table and from the empty answer.
+function openHintPanel() {
+  $('hint-panel').hidden = false;
+  $('hint-open').hidden = true;
+  $('new-asset').focus({ preventScroll: true });
+}
+$('hint-open').addEventListener('click', openHintPanel);
+$('hint-close').addEventListener('click', () => { $('hint-panel').hidden = true; $('hint-open').hidden = false; });
+$('empty-register').addEventListener('click', () => { openHintPanel(); });
+$('graph-open').addEventListener('click', openGraph);
+document.querySelectorAll('.beat').forEach(a => a.addEventListener('click', ev => {
+  ev.preventDefault();
+  markBeat(a.dataset.beat);
+  goTo(a.dataset.beat);
+}));
 $('xchain-open').addEventListener('click', openXChain);
 $('xchain-all').addEventListener('click', () => {
   // "All available" is every mainnet the list has tokens for that viem knows and
@@ -3325,14 +3788,14 @@ $('name-rpc-save').addEventListener('click', () => {
   nameCache.clear(); reverseCache.clear();
   $('name-rpc-row').hidden = true;
   if (WALLET_ADDR) lookup();
-  if (VIEW === 'accounts') { renderAccounts(); resolveVisibleNames(); }
+  if (ACCOUNTS_STARTED) { renderAccounts(); resolveVisibleNames(); }
 });
 $('name-rpc-reset').addEventListener('click', () => {
   setNameRpc('');
   nameCache.clear(); reverseCache.clear();
   $('name-rpc-row').hidden = true;
   if (WALLET_ADDR) lookup();
-  if (VIEW === 'accounts') { renderAccounts(); resolveVisibleNames(); }
+  if (ACCOUNTS_STARTED) { renderAccounts(); resolveVisibleNames(); }
 });
 $('chain-resolve').addEventListener('click', resolveChainName);
 $('chain-name').addEventListener('keydown', e => { if (e.key === 'Enter') resolveChainName(); });
@@ -3345,6 +3808,8 @@ $('add-chain-close').addEventListener('click', () => { $('add-chain').hidden = t
 loadChains();
 loadStatus();
 loadDecisions();
+loadEpochs();
+loadExamples();
 
 // ?account=0x… lets a link hand this page a subject. The lookup has to wait for the
 // asset and candidate lists: walletTokens() reads both, and firing it first would ask
@@ -3353,15 +3818,13 @@ const deepLinked = new URLSearchParams(location.search).get('account');
 Promise.all([loadAssets(), loadCandidates()]).then(() => {
   if (!deepLinked) return;
   $('account').value = deepLinked;
-  show('wallet');
+  goTo('beat2');
   lookup();
 });
-show(deepLinked ? 'wallet' : 'overview');
 // Discovery moves; the rest does not. An account lookup, the epochs table and the
 // graph are left alone until something asks for them again.
 setInterval(() => {
-  loadChains(); loadStatus(); loadCandidates(); loadDecisions();
-  if (VIEW === 'overview') loadAssets();
+  loadChains(); loadStatus(); loadCandidates(); loadDecisions(); loadAssets();
 }, 5000);
 </script>
 </body>
