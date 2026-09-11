@@ -190,7 +190,9 @@ shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module 
   `graph.js` is the WebGL graph, imported the first time that tab is opened because
   three.js is most of a megabyte and most visits never ask for a picture. Token metadata is
   attacker-controlled text from the chain, so everything interpolated into markup goes
-  through `esc()`.
+  through `esc()`. The wallet tab's ENS-record card (`renderEnsCard`) reads
+  `<hex>.hints.<parent>` back through the Universal Resolver and the ERC-3668 callback in
+  the browser, mirroring `internal/ens.ResolveText`; it must never ask the daemon for it.
 - `mirror/` is a separate TypeScript package (`make test-mirror`, own `node_modules`, not
   in the Go build): the commitment encoding ported for clients, plus a local-first mirror
   that keeps the committed rows in the client's SQLite via Evolu and rebuilds the keccak

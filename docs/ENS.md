@@ -148,8 +148,21 @@ make build
 ```
 
 Then set `registry.ens_parent: <yourname>.eth` in the daemon config so account responses
-carry `hint_name` and the page prints it. That is the only thing the daemon does with the
-name: it formats it, it does not resolve through it.
+carry `hint_name`. That is the only thing the daemon does with the name: it formats it, it
+does not resolve through it.
+
+**The page reads the record back**, in the browser, with the same code path any ENS
+client would use and none of the daemon's. The wallet tab's "as an ENS record" card
+asks the Universal Resolver on the reader's RPC where the resolver sits (`findResolver`,
+so the walk root → `eth` → `<yourname>` → `hints` is shown, and that it is a wildcard),
+reads `evmscan.epoch`, `evmscan.range`, `evmscan.root` and `evmscan.registry` with one
+`eth_call` each, then reads `evmscan.contracts`: it decodes the `OffchainLookup`, fetches
+the gateway the revert named, and calls the resolver's callback, so `HintRegistry`
+verifies the proof before the list is rendered. The card sets the verified list against
+the live one from the API and says which contracts the last finalized commitment does
+not carry yet. Every failure is explained in the resolver's terms (the table below); a
+gateway that holds no copy of the finalized epoch is called out as such, because that
+is what an indexer that lost its database after publishing looks like from outside.
 
 Any ENS client works from here, with no evm-scan code:
 
