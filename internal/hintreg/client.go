@@ -278,12 +278,20 @@ type Funding struct {
 	Balance  *big.Int
 	PaidFrom uint64
 	PaidTo   uint64
+	// Vouched is every wei ever committed to this asset, which only goes up.
+	// Balance answers whether the asset can still pay an indexer and drains as
+	// coverage is claimed; this answers how much anyone ever cared.
+	Vouched *big.Int
 }
 
+// Field order and types have to match HintRegistry.Funding exactly: go-ethereum
+// decodes a tuple positionally, so a field added on one side and not the other is
+// not an error, it is a wrong number.
 type abiFunding struct {
 	Balance  *big.Int
 	PaidFrom uint64
 	PaidTo   uint64
+	Vouched  *big.Int
 }
 
 // Funding reads an asset's remaining funding and paid range.
@@ -293,7 +301,7 @@ func (c *Client) Funding(ctx context.Context, key common.Hash) (Funding, error) 
 		return Funding{}, err
 	}
 	f := *abi.ConvertType(vals[0], new(abiFunding)).(*abiFunding)
-	return Funding{Balance: f.Balance, PaidFrom: f.PaidFrom, PaidTo: f.PaidTo}, nil
+	return Funding{Balance: f.Balance, PaidFrom: f.PaidFrom, PaidTo: f.PaidTo, Vouched: f.Vouched}, nil
 }
 
 // Claimable is what a finalized claim for this asset range would pay right now.

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
+	"sort"
 	"strconv"
 	"time"
 
@@ -51,6 +52,16 @@ type assetJSON struct {
 	FundingWei string `json:"funding_wei,omitempty"`
 	PaidFrom   uint64 `json:"paid_from,omitempty"`
 	PaidTo     uint64 `json:"paid_to,omitempty"`
+	// VouchedWei is every wei ever committed to this asset, which never goes down.
+	// FundingWei drains as publishers claim coverage, so a well-indexed asset that
+	// someone paid a lot for reads as zero there — the same as one nobody wanted.
+	// This is the number to rank a list of contracts by.
+	VouchedWei string `json:"vouched_wei,omitempty"`
+	// Reports is how many complaints this asset has. One is enough to sink it: it
+	// orders a scan and decides nothing else, and the two mistakes available here
+	// are not the same size. Absent when nobody has complained.
+	Reports      int    `json:"reports,omitempty"`
+	ReportReason string `json:"report_reason,omitempty"`
 }
 
 func (s *Server) assetView(ctx context.Context, a store.Asset) assetJSON {
@@ -65,6 +76,8 @@ func (s *Server) assetView(ctx context.Context, a store.Asset) assetJSON {
 		Source:        a.Source,
 		HintFromBlock: a.HintFromBlock,
 		Promoted:      a.Promoted,
+		Reports:       a.Reports,
+		ReportReason:  a.ReportReason,
 	}
 	if a.Registrant != nil {
 		v.Registrant = a.Registrant.Hex()
@@ -83,6 +96,9 @@ func (s *Server) assetView(ctx context.Context, a store.Asset) assetJSON {
 	if s.d.Registry != nil {
 		if f, err := s.d.Registry.Funding(ctx, hintreg.AssetKey(a.ChainID, a.Address)); err == nil {
 			v.FundingWei = f.Balance.String()
+			if f.Vouched != nil {
+				v.VouchedWei = f.Vouched.String()
+			}
 			v.PaidFrom, v.PaidTo = f.PaidFrom, f.PaidTo
 		}
 	}
@@ -106,7 +122,48 @@ func (s *Server) listAssets(w http.ResponseWriter, r *http.Request) {
 	for _, a := range assets {
 		out = append(out, s.assetView(r.Context(), a))
 	}
+	orderAssets(out)
 	writeJSON(w, http.StatusOK, map[string]any{"chain_id": chainID, "assets": out})
+}
+
+// orderAssets is the scan order: what a reader should ask about first.
+//
+// Two signals, and one of them is not a tiebreak. A report sends a contract to the
+// bottom regardless of what was paid for it, because the alternative is that buying
+// the most funding buys the top of somebody's wallet — and the whole point of an open
+// registry is that anyone can pay into it, including whoever minted the scam. Paying
+// for a scam is still welcome, in the sense that the gas subsidises the honest
+// assets; it simply does not come with a position.
+//
+// Under that, more wei vouched ranks higher. Not because money is a proof of quality,
+// but because it is the only signal here that costs the person producing it — and
+// ordering, unlike indexing, has to be decided for contracts nobody has judged yet.
+//
+// The sort is stable, so the store's chain and address ordering survives as the last
+// tiebreak and a list with no funding and no reports stays in a fixed order rather
+// than shuffling per request.
+func orderAssets(v []assetJSON) {
+	sort.SliceStable(v, func(i, j int) bool {
+		if (v[i].Reports > 0) != (v[j].Reports > 0) {
+			return v[j].Reports > 0
+		}
+		a, b := weiOrZero(v[i].VouchedWei), weiOrZero(v[j].VouchedWei)
+		return a.Cmp(b) > 0
+	})
+}
+
+// weiOrZero parses a decimal wei string, treating anything unparseable as nothing
+// vouched. A registry that could not be read leaves the field empty, and an asset
+// nobody can price should sort as if nobody paid rather than as if everybody did.
+func weiOrZero(s string) *big.Int {
+	if s == "" {
+		return new(big.Int)
+	}
+	v, ok := new(big.Int).SetString(s, 10)
+	if !ok {
+		return new(big.Int)
+	}
+	return v
 }
 
 func (s *Server) getAsset(w http.ResponseWriter, r *http.Request) {

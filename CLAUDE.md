@@ -193,6 +193,20 @@ shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module 
   everything that is not a read, minus one allowlisted exception (`POST /ccip`, which any
   ERC-3668 resolver has to reach) — an inverted rule, so a new mutating route is guarded
   before anyone remembers to add it, and `auth_test.go` is what holds the exception open.
+- Money buys indexing and does not buy position. `HintRegistry.Funding` keeps
+  `vouched` beside `balance`: `balance` drains as `claimCoverage` pays the publisher,
+  so a well-funded, well-indexed asset reads as zero there — the same as one nobody
+  ever wanted — which makes it useless for ranking. `vouched` only ever rises.
+  `orderAssets` in `internal/api` sorts by it, and any report sinks a contract below
+  every unreported one regardless of the amount, because the registry is open and
+  otherwise the cheapest attack is to buy the top of somebody's wallet. Reports live
+  on `assets` (migration 0009), not on `candidates`: a contract someone paid to
+  register never passes through discovery, so no candidate verdict can reach it. One
+  report is enough because ordering is not adjudication — deranking a good contract
+  costs it a place and a reader one extra balance read, while ranking a scam puts it
+  at the top of a wallet, and those are not the same mistake. A report can never
+  revoke, un-index or refund: the funding already bought a backfill and the coverage
+  is already in a root.
 - A candidate carries at most one live verdict. `spam_at` drops it out of
   `PromotableCandidates` — the only query auto-promote reads, so that one clause is the
   whole rule — and promotion clears the mark rather than sitting beside it, which is what
