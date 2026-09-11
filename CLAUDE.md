@@ -148,11 +148,20 @@ shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module 
   a chain there as well would answer for one chain through keys that claim all of
   them, and a subkey mismatch presents as an empty wallet rather than an error.
   `StructureBloom` exists for the size the other two are bad at: at 65 keys fuse8's
-  fixed segment geometry costs 198 bytes and sorted-u64 costs 562, where a bloom hits
-  0.18% in 128 bytes and **fits one EVM storage slot at 256 bits** — which is what
-  makes a per-account hint publishable on-chain or as an ENS text record. Its bitmap
-  is MSB-first bytes, not packed words, so the JavaScript reader indexes it without
-  reproducing Go's word endianness. **The Go writer and the JavaScript
+  fixed segment geometry costs 198 bytes and sorted-u64 costs 562, where a bloom is
+  0.12% in 128 bytes — small enough to publish on-chain or as an ENS text record.
+  `HintBits` is 1024 and **not** 256: one storage slot is the obvious size and the
+  wrong one, measuring 9.1% false positives at fifty tokens against 0.05% at 128
+  bytes, and on Base the difference between writing one word and four is a tenth of a
+  cent. Past 128 the extra bytes buy decimal places rather than round trips, since
+  once false positives fall below the real holdings the holdings decide the batch
+  count; the headroom that is left absorbs incremental `|=` additions before a
+  rebuild. Its bitmap is MSB-first bytes, not packed words, so the JavaScript reader
+  indexes it without reproducing Go's word endianness. The browser builds these
+  itself — the daemon never sees the account — so three implementations of the probe
+  have to agree, and `testdata/public-bloom-interop.xorf` (Go-written, 256 bits) plus
+  `testdata/browser-slot-interop.xorf` (browser-written, 1024) pin both directions
+  and both sizes. **The Go writer and the JavaScript
   reader in `web/index.html` must agree byte-for-byte** — `internal/hintfilter/testdata`
   is the fixture that enforces it, regenerated with `go test ./internal/hintfilter
   -update`, and `testdata/browser-watch.xorf` (WebAuthn prf) plus

@@ -182,11 +182,20 @@ func TestGoReadsBrowserSlot(t *testing.T) {
 	if f.ChainID != 0 {
 		t.Errorf("chain id %d: an interop filter binds no single chain", f.ChainID)
 	}
-	if m, _ := f.BloomParams(); m != 256 {
-		t.Errorf("m = %d, want the 256 bits that fit a storage slot", m)
+	if m, _ := f.BloomParams(); m != HintBits {
+		t.Errorf("m = %d, want HintBits (%d)", m, HintBits)
 	}
-	if _, err := f.Slot(); err != nil {
-		t.Errorf("Slot: %v", err)
+	bm, err := f.Bitmap()
+	if err != nil {
+		t.Fatalf("Bitmap: %v", err)
+	}
+	if len(bm) != int(HintBits)/8 {
+		t.Errorf("bitmap is %d bytes, want %d", len(bm), HintBits/8)
+	}
+	// Not one word, and deliberately: a 256-bit hint is 9.1% false positives at
+	// fifty tokens, and the slot it would have fitted was never the expensive part.
+	if _, err := f.Slot(); err == nil {
+		t.Error("Slot returned a bytes32 for a filter four times that size")
 	}
 
 	sub := InteropSubkey(PublicSecret)
@@ -211,9 +220,10 @@ func TestGoReadsBrowserSlot(t *testing.T) {
 			hits, len(browserSlotTokens))
 	}
 
-	// Half the bits set is what a correctly sized bloom looks like. Far from it in
-	// either direction means the builder and the sizing rule have come apart.
-	if s := f.Saturation(); s < 0.25 || s > 0.75 {
-		t.Errorf("saturation %.0f%%, want near 50%% for a filter sized to its key count", 100*s)
+	// Saturation is the health signal a reader can compute from the bytes alone. At
+	// HintBits over a couple of dozen keys it sits well under half — the room left
+	// over is what incremental additions grow into before anyone has to rebuild.
+	if s := f.Saturation(); s > 0.75 {
+		t.Errorf("saturation %.0f%%: a filter this full answers yes to nearly everything", 100*s)
 	}
 }

@@ -24,19 +24,42 @@ import (
 //	 198 bytes    0.39%   <- binary-fuse8, for comparison
 //
 // Which is the point of adding a third structure rather than tuning the two that
-// exist: 32 bytes is one EVM storage slot. A per-account hint that fits in a slot
-// can be published on-chain or written to an ENS text record for the price of a
-// setText, and a reader anywhere can then skip most of a token list without asking
-// anybody anything. At 14% false positives it still turns a 405-contract sweep from
-// seventeen eth_calls into five.
+// exist: a per-account hint this small can be published on-chain or written to an
+// ENS text record, and a reader anywhere can then skip most of a token list without
+// asking anybody anything.
 //
-// The rate degrades gracefully rather than breaking: a wallet holding two hundred
-// contracts gets 54% false positives in one slot, which is still fewer calls than
-// asking about everything. Callers that can afford more bytes should spend them —
-// BloomBits picks a size for a target rate.
+// HintBits is 128 bytes, and the reasoning is worth writing down because the obvious
+// choice is 32 — one EVM storage slot. Measured false positives by wallet size:
+//
+//	 tokens |    32B     64B    128B
+//	     25 |   1.3%   0.11%   0.02%
+//	     50 |   9.1%   0.71%   0.05%
+//	     65 |  13.7%    2.2%   0.12%
+//	    100 |  28.4%    9.3%   0.78%
+//	    200 |  54.7%   29.2%    8.9%
+//
+// One slot is already halfway to useless at fifty tokens, which is an ordinary
+// wallet. And the saving it was chosen for does not exist: on Base at 0.01 gwei a
+// cold write costs $0.0010 at 32 bytes and $0.0025 at 128, so the size is free and
+// only the accuracy differs.
+//
+// 128 rather than 256 because past this the extra bytes buy decimal places rather
+// than round trips — once false positives fall below the real holdings, the holdings
+// themselves decide how many batches a sweep takes, and at 65 tokens 128B and 256B
+// both cost three eth_calls. The headroom that is left goes to incremental
+// additions, which is what a bloom is here for: a hint grows by OR-ing new keys in,
+// and it should be able to absorb a few before anyone has to rebuild it.
+//
+// The rate degrades rather than breaking, and there are never false negatives, so an
+// over-full filter is slow and not wrong. BloomBits picks a size for a target rate
+// when a caller wants to decide for itself.
 
 // StructureBloom is a bit array with k probes per key.
 const StructureBloom Structure = 3
+
+// HintBits is the default size of a published per-account hint: 1024 bits, 128
+// bytes. See the commentary above for why this rather than one storage slot.
+const HintBits uint32 = 1024
 
 // bloom is the bit array plus the two numbers a reader needs to reproduce the
 // probes. Both travel in the file: a reader that guessed k would silently compute
@@ -188,12 +211,22 @@ func (f *Filter) BloomParams() (m uint32, k uint8) {
 	return f.bloom.m, f.bloom.k
 }
 
-// ErrNotBloom is returned by Slot for a filter that is not one slot wide.
-var ErrNotBloom = errors.New("hintfilter: not a 256-bit bloom filter")
+// ErrNotBloom is returned by Bitmap and Slot for a filter that is not a bloom.
+var ErrNotBloom = errors.New("hintfilter: not a bloom filter")
 
-// Slot returns the bitmap as the 32 bytes that would go into a storage slot or an
-// ENS text record. Only defined for a 256-bit Bloom, because that is the whole
-// reason the size exists.
+// Bitmap returns the bits alone, without the .xorf header: what gets written to a
+// storage word, an ENS text record, or anywhere else that stores a hint and knows
+// its own m and k. A copy, so a caller cannot reach back into the filter.
+func (f *Filter) Bitmap() ([]byte, error) {
+	if f.Structure != StructureBloom || f.bloom == nil {
+		return nil, ErrNotBloom
+	}
+	return append([]byte(nil), f.bloom.bytesOut()...), nil
+}
+
+// Slot returns the bitmap as a single bytes32, for the case where a hint has to fit
+// one storage word. Only defined for a 256-bit bloom; HintBits is four times that,
+// because one slot is already 9% false positives at fifty tokens.
 func (f *Filter) Slot() ([32]byte, error) {
 	var out [32]byte
 	if f.Structure != StructureBloom || f.bloom == nil || f.bloom.m != 256 {

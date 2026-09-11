@@ -722,18 +722,25 @@ async function readBack(f, d) {
 
 const KIND_INTEROP = 3;
 
-// A bloom sized to one EVM storage slot.
+// A bloom sized for a wallet.
 //
 // The reader for this lives in index.html and the writer is here, which is the one
 // direction that is safe to implement twice: a builder that is wrong produces a file
 // whose own reader rejects it, loudly, rather than one that quietly answers no. The
 // probe has to match internal/hintfilter/bloom.go exactly all the same —
-// testdata/public-bloom-interop.xorf is what holds the three of them together.
+// testdata/public-bloom-interop.xorf is what holds the three of them together, and
+// testdata/browser-slot-interop.xorf pins this direction.
+//
+// 1024 bits, matching hintfilter.HintBits. Not 256 — one storage slot is the obvious
+// size and the wrong one: measured, it is 9.1% false positives at fifty tokens and
+// 13.7% at sixty-five, where 128 bytes is 0.05% and 0.12%. The slot was never
+// actually cheaper in any way that matters, either; on Base the difference between
+// writing one word and four is a tenth of a cent.
 //
 // Only the bloom is built here. The fuse filter needs a peeling loop with retries and
 // a second implementation of that in a second language is a bad trade at this size;
 // a bloom is an OR.
-const SLOT_BITS = 256;
+const HINT_BITS = 1024;
 
 function bloomK(m, n) {
   if (n <= 0) return 1;
@@ -755,14 +762,15 @@ function bloomAdd(bitmap, key, k, m) {
 }
 
 // buildSlotHint returns { bytes, bitmap, k, hex } for a set of (chainId, token)
-// pairs. `bytes` is the whole .xorf; `hex` is the bare 32 bytes that go in a slot.
+// pairs. `bytes` is the whole .xorf; `hex` is the bare bitmap, which is what gets
+// published — whatever stores it already knows its own m and k.
 async function buildSlotHint(pairs) {
   const sub = await H.interopSubkey(new Uint8Array(0));
   const keys = [];
   for (const p of pairs) keys.push(await H.interopKey(sub, p.chainId, p.address));
   const uniq = [...new Set(keys.map(String))].map(BigInt);
 
-  const m = SLOT_BITS;
+  const m = HINT_BITS;
   const k = bloomK(m, uniq.length);
   const bitmap = new Uint8Array(m / 8);
   for (const key of uniq) bloomAdd(bitmap, key, k, m);
@@ -863,8 +871,8 @@ function renderPreserve(account, holdings, indexed, hint) {
       chain. Next visit asks about these first instead of walking a token list.
       It is not secret — these balances are public on chain, so a hint that saves someone work
       they could already do gives away nothing.
-      <br><code style="word-break:break-all">${H.esc(hint.hex)}</code>
-      <button class="linkbtn" id="preserve-copy">copy</button>
+      <br><code style="word-break:break-all">${H.esc(abbrev(hint.hex))}</code>
+      <button class="linkbtn" id="preserve-copy">copy all ${H.esc(String(hint.m / 8))} bytes</button>
     </p>` : '';
 
   if (!rows.length) {
@@ -927,6 +935,11 @@ function renderPreserve(account, holdings, indexed, hint) {
   }
   wireCopy(hint);
 }
+
+// 128 bytes is 258 hex characters, which is a wall rather than a value. Show enough
+// of each end to recognise it and to tell two apart; the button copies the whole
+// thing, which is the only form anyone actually uses.
+const abbrev = (hex) => hex.length <= 42 ? hex : `${hex.slice(0, 22)}…${hex.slice(-18)}`;
 
 function wireCopy(hint) {
   const btn = $('preserve-copy');
