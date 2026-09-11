@@ -434,7 +434,12 @@
   .stage .b > div.amber { background: var(--amber); }
   .stage .b > div.ink { background: rgba(20,22,26,.24); }
   .stage .n { font: 400 10px/1.4 var(--mono); color: var(--ink-62); margin-top: 6px; }
-  .machine { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 22px; align-items: start; }
+  /* The table gets the width: a 42-character address plus three figures needs it, and
+     the triage card is one contract at a time. */
+  .machine { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(300px, 0.9fr); gap: 22px; align-items: start; }
+  /* An address that does not fit truncates rather than runs under the next column;
+     user-select: all still copies the whole of it. */
+  #assets .addr { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .progress { height: 2px; background: var(--fill-2); margin-top: 8px; }
   .progress > div { height: 2px; background: var(--blue); width: 0; }
   .bar-cell .b { height: 6px; border-radius: 2px; background: rgba(20,22,26,.12); position: relative; overflow: hidden; }
@@ -465,6 +470,7 @@
   .dark .verdict.v-approved { color: var(--green); }
   .dark .verdict.v-spam { color: oklch(0.85 0.1 80); }
   .dark .verdict.v-none { color: var(--dark-ink-68); }
+  .triage { padding: 16px 16px 18px; }
   .t-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding-bottom: 13px; border-bottom: 1px solid var(--dark-line); }
   .t-node { font: 400 10px/1 var(--mono); color: var(--green); }
   .t-node.warn { color: oklch(0.85 0.1 80); }
@@ -476,8 +482,8 @@
   .t-std, .t-flag { font: 400 9.5px/1 var(--mono); color: var(--dark); background: var(--dark-ink); border-radius: 3px; padding: 3px 5px; text-transform: uppercase; }
   .t-flag { background: oklch(0.85 0.1 80); }
   .t-name { font: 400 12px/1.4 var(--sans); color: var(--dark-ink-72); }
-  .t-addr { margin: 4px 0 14px; word-break: break-all; }
-  .t-signals { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px 10px; margin-bottom: 15px; }
+  .t-addr { margin: 4px 0 12px; word-break: break-all; }
+  .t-signals { display: grid; grid-template-columns: repeat(auto-fit, minmax(105px, 1fr)); gap: 10px 8px; margin-bottom: 13px; }
   .t-signals .kicker { font: 400 9.5px/1 var(--mono); letter-spacing: .04em; color: var(--dark-ink-68); margin-bottom: 6px; }
   .t-signals .figure { font: 500 14px/1 var(--mono); color: var(--dark-ink); }
   .t-signals .judge { font: 400 10.5px/1.4 var(--mono); margin-top: 5px; color: var(--dark-ink-72); }
@@ -488,7 +494,7 @@
     border-left: 2px solid rgba(255,255,255,.2); padding-left: 11px; margin-bottom: 16px;
   }
   .t-actions { display: flex; gap: 7px; flex-wrap: wrap; margin-bottom: 14px; }
-  .t-actions .btn { display: flex; gap: 7px; padding: 9px 13px; }
+  .t-actions .btn { display: flex; gap: 6px; padding: 8px 11px; font-size: 11px; }
   .t-undo { font: 400 10.5px/1.6 var(--mono); color: var(--dark-ink-72); margin-bottom: 14px; }
   .t-empty { padding: 22px 0 26px; font: 400 11.5px/1.7 var(--mono); color: var(--dark-ink-72); }
   .t-empty span { color: var(--dark-ink-55); }
@@ -578,7 +584,7 @@
     h1 { font-size: 34px; }
     .toplinks { margin-left: 0; }
     .beat .t { font-size: 11px; }
-    .split-rail, .stage-grid { grid-template-columns: minmax(0, 1fr); }
+    .split-rail, .stage-grid, .machine { grid-template-columns: minmax(0, 1fr); }
     .stages { flex-wrap: wrap; }
     .stage { flex: 1 1 30%; }
     .tablehead { display: none; }
@@ -1339,7 +1345,7 @@ function esc(s) {
 // Column templates, named once so a header and its rows cannot drift apart.
 const COLS = {
   hold: 'minmax(0, 1fr) minmax(90px, 130px) minmax(80px, 110px) minmax(90px, 130px) 96px 160px',
-  assets: 'minmax(0, 1fr) 64px minmax(96px, 150px) 92px',
+  assets: 'minmax(0, 1fr) 72px minmax(96px, 150px) 110px',
   accounts: 'minmax(0, 1.5fr) 72px 80px 120px',
   epochs: '40px minmax(0, 1fr) 84px 150px minmax(150px, 210px) 110px',
 };
