@@ -169,16 +169,12 @@
   .split-rail { grid-template-columns: minmax(0, 1fr) 330px; }
   .sticky { position: sticky; top: 40px; min-width: 0; overflow-wrap: anywhere; }
   pre.wrap { white-space: pre-wrap; word-break: break-all; }
-  /* A folded card: one row that says the answer, everything behind it on a click. */
-  .fold > summary {
-    display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: baseline; cursor: pointer; list-style: none;
-    padding: 10px 0; border-top: 1px solid var(--color-divider); border-bottom: 1px solid var(--color-divider);
+  /* The panel that opens under a picked account row: the row is the toggle. */
+  .acct-detail {
+    padding: 18px 22px 22px; margin: 0 0 2px; border-bottom: 1px solid var(--color-divider);
+    border-left: 3px solid var(--color-accent-600); background: var(--color-neutral-100); min-width: 0; overflow-wrap: anywhere;
   }
-  .fold > summary::-webkit-details-marker { display: none; }
-  .fold > summary .fold-more { margin-left: auto; font-size: 11.5px; color: var(--color-neutral-600); white-space: nowrap; }
-  .fold > summary .fold-more::after { content: 'details ▾'; }
-  .fold[open] > summary .fold-more::after { content: 'hide ▴'; }
-  .fold-body { padding-top: 12px; }
+  .acct-proof .kvgrid { grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px 22px; }
   .checks { display: grid; gap: 6px; font-size: 13.5px; line-height: 1.4; }
   .checks > div { display: grid; grid-template-columns: 14px minmax(0, 1fr); gap: 8px; align-items: baseline; }
   .checks .addr { display: block; margin-top: 1px; }
@@ -591,37 +587,40 @@
       </div>
     </div>
 
+    <!-- The inclusion proof card. It is one DOM node moved under whichever account row is
+         open, so re-rendering the table as reverse names land does not lose its state. It is
+         evmscan-verify in the browser: the proof this server hands out is recomputed from the
+         account and its asset list, replayed to the root, then put to HintRegistry on the
+         reader's RPC. The API's hashes are compared with the recomputed ones, never trusted. -->
+    <div id="proof-park" hidden>
+      <div id="proof-card" class="acct-proof">
+        <div class="row" style="gap:6px 14px; align-items:baseline">
+          <span class="colhead">inclusion proof · checked in your browser</span>
+          <span id="proof-verdict-chip"></span>
+        </div>
+        <div id="proof-verdict-text" style="margin-top:8px"></div>
+        <div class="kvgrid" id="proof-facts" style="margin-top:16px"></div>
+        <div class="checks" id="proof-steps" style="margin-top:16px"></div>
+        <div class="hint" id="proof-epoch" style="margin-top:10px"></div>
+        <details id="proof-repro" hidden style="margin-top:12px">
+          <summary class="hint" style="cursor:pointer">reproduce in a shell</summary>
+          <pre id="proof-how" class="wrap"></pre>
+        </details>
+        <details style="margin-top:8px">
+          <summary class="hint" style="cursor:pointer">the proof as served</summary>
+          <pre id="proof" class="wrap"></pre>
+        </details>
+      </div>
+    </div>
+
     <div class="sticky">
       <div class="colhead">account</div>
       <h2 id="acct-name" style="font-size:32px; line-height:1.05; margin:8px 0 4px; word-break:break-word">—</h2>
       <div class="addr" id="acct-addr" style="font-size:12px; word-break:break-all"></div>
       <div class="hint" id="acct-record" style="margin-top:8px"></div>
       <div id="acct-assets" style="display:grid; gap:11px; margin-top:26px"></div>
-      <!-- evmscan-verify, in the browser: the proof this server hands out is recomputed from
-           the account and its asset list, replayed to the root, then put to HintRegistry on the
-           reader's RPC. The API's hashes are shown beside the recomputed ones, never trusted. -->
-      <details class="fold" id="proof-card" hidden style="margin-top:30px">
-        <summary>
-          <span class="colhead">inclusion proof</span>
-          <span id="proof-verdict-chip"></span>
-          <span class="fold-more"></span>
-        </summary>
-        <div class="fold-body">
-          <div id="proof-verdict-text"></div>
-          <div class="kvgrid" id="proof-facts" style="margin-top:14px; gap:10px 18px; grid-template-columns:repeat(2, minmax(0,1fr))"></div>
-          <div class="checks" id="proof-steps" style="margin-top:14px"></div>
-          <div class="hint" id="proof-epoch" style="margin-top:10px"></div>
-          <details id="proof-repro" hidden style="margin-top:12px">
-            <summary class="hint" style="cursor:pointer">reproduce in a shell</summary>
-            <pre id="proof-how" class="wrap"></pre>
-          </details>
-          <details style="margin-top:8px">
-            <summary class="hint" style="cursor:pointer">the proof as served</summary>
-            <pre id="proof" class="wrap"></pre>
-          </details>
-          <div class="hint" style="margin-top:10px">Checked in your browser on your RPC; this server’s hashes were recomputed, not believed.</div>
-        </div>
-      </details>
+      <div class="hint" id="acct-more" hidden style="margin-top:26px">The row on the left opens the account’s
+        inclusion proof, checked in your browser.</div>
     </div>
   </div>
 </section>
@@ -818,7 +817,7 @@ let CARD_ADDR = null, LAST_VERDICT = null;
 // "not ever", and only the second one is worth a row in the database.
 const SKIPPED = new Set();
 let WALLET_ADDR = '', WALLET_NAME = '', HOLDINGS = [], VALUATION = null, SHOW_SPAM = false;
-let ACCOUNTS = [], ACCT_OFFSET = 0, ACCT_MORE = false, ACCT_SELECTED = null;
+let ACCOUNTS = [], ACCT_OFFSET = 0, ACCT_MORE = false, ACCT_SELECTED = null, ACCT_OPEN = false;
 let graphLoaded = false;
 
 function activeChainID() {
@@ -2741,11 +2740,12 @@ function renderAccounts() {
       <div class="num mono">${num(a.asset_count)}</div>
       <div class="num mono">${num(a.event_count)}</div>
       <div class="num verdict ${cls}">${state}</div>
-    </div>`;
+    </div>${a.account === ACCT_SELECTED && ACCT_OPEN ? '<div class="acct-detail" id="acct-detail"></div>' : ''}`;
   }).join('') : '<div class="empty" style="padding:14px 0">No accounts in the index yet.</div>';
 
   $('accounts').querySelectorAll('[data-account]').forEach(el =>
     el.addEventListener('click', () => selectAccount(el.dataset.account)));
+  placeProofCard();
 
   const named = ACCOUNTS.filter(a => {
     const r = reverseCache.get(`${nameRpc()}|${a.account.toLowerCase()}`);
@@ -2771,8 +2771,23 @@ async function resolveVisibleNames() {
   } finally { resolving = false; }
 }
 
+// The card is one node, moved under the open row or parked; moving it keeps what it
+// shows and which of its folds are open.
+function placeProofCard() {
+  const card = $('proof-card'), slot = $('acct-detail');
+  (slot || $('proof-park')).appendChild(card);
+}
+
+// A row is the toggle for its own detail: the first click picks the account and
+// opens it, a second click on the same row closes it, a click elsewhere moves on.
 async function selectAccount(addr) {
+  if (addr === ACCT_SELECTED) {
+    ACCT_OPEN = !ACCT_OPEN;
+    renderAccounts();
+    return;
+  }
   ACCT_SELECTED = addr;
+  ACCT_OPEN = true;
   renderAccounts();
   renderAccountRail();
   try {
@@ -2792,6 +2807,7 @@ function renderAccountRail() {
   const rev = reverseCache.get(`${nameRpc()}|${ACCT_SELECTED.toLowerCase()}`);
   $('acct-name').textContent = (rev && rev.state === 'cached') ? rev.name : short(ACCT_SELECTED, 8);
   $('acct-addr').textContent = ACCT_SELECTED;
+  $('acct-more').hidden = false;
   $('acct-record').textContent = {
     cached: 'ENS reverse record, confirmed against the forward resolver in your browser',
     failed: 'the reverse record names something whose forward record points elsewhere, so it is not shown',
@@ -2806,7 +2822,6 @@ function renderAccountRail() {
 // earned it is the checklist under it, and the API's hashes are never trusted — where
 // the two disagree, the chain wins and the card says so.
 async function loadProof(addr) {
-  $('proof-card').hidden = false;
   $('proof').textContent = '';
   const set = (id, html) => { $(id).innerHTML = html; };
   showVerdict({ chip: '', note: '' }); set('proof-facts', ''); set('proof-steps', ''); set('proof-epoch', '');
