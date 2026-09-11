@@ -186,6 +186,27 @@
   }
   .worth-head { font: 500 11px/1 var(--mono); letter-spacing: .07em; text-transform: uppercase; color: oklch(0.38 0.10 66); margin-bottom: 3px; }
 
+  /* From what you type to a number: the pipeline behind the answer, one step per
+     row. The one blue step is the one call that does the reading. */
+  .pipe { margin-top: 22px; }
+  .pipe-steps { padding: 16px 16px 6px; display: flex; flex-direction: column; gap: 14px; }
+  .pstep { display: flex; gap: 12px; align-items: flex-start; }
+  .pstep > div { min-width: 0; }
+  .pstepn {
+    flex: none; width: 20px; height: 20px; border-radius: 50%; background: rgba(20,22,26,.08); color: var(--ink);
+    font: 500 11px/20px var(--mono); text-align: center;
+  }
+  .pstepn.blue { background: var(--blue); color: #fff; }
+  .pstep-t { font: 500 13px/1.45 var(--sans); margin-bottom: 3px; }
+  .pstep-d { font: 400 11.5px/1.6 var(--mono); color: var(--ink-65); }
+  .pstep-d b { font-weight: 400; color: var(--ink); }
+  .pstep-d.amber { color: var(--amber-text); }
+  .pipe-foot {
+    padding: 13px 16px 14px; border-top: 1px solid var(--line); background: var(--card);
+    font: 400 12px/1.6 var(--sans); color: var(--ink-70);
+  }
+  .pipe-foot strong { font-weight: 600; color: var(--ink); }
+
   /* ── Controls shared by every panel, including the ones hints.js draws ─── */
   .btn {
     display: inline-flex; align-items: center; justify-content: center; gap: 6px;
@@ -609,6 +630,56 @@
           <!-- hints.js draws the filter's own numbers, the button and the answer here. -->
           <div id="private-body"><span class="empty">loading the filter's numbers…</span></div>
         </div>
+      </div>
+
+      <!-- What happens between the box above and the table below, in order. Numbered
+           because it is a sequence: each step consumes the one before it. -->
+      <div class="howto pipe" id="pipeline">
+        <div class="howto-head">from what you type to a number</div>
+        <div class="pipe-steps">
+          <div class="pstep">
+            <span class="pstepn">1</span>
+            <div>
+              <div class="pstep-t">Whatever you typed becomes one address.</div>
+              <div class="pstep-d">a hex address is checksum-checked · a name is NFC-normalised and lowercased, and the page echoes the exact form it hashed, so a disagreement with your wallet's rendering is visible instead of silent</div>
+              <div class="pstep-d amber">a name resolves through ENS's Universal Resolver on the RPC endpoint you set under "how to ask" — the one step here that leaves the browser, in either mode</div>
+            </div>
+          </div>
+          <div class="pstep">
+            <span class="pstepn">2</span>
+            <div>
+              <div class="pstep-t">The index says which contracts are worth reading.</div>
+              <div class="pstep-d">contracts this address has actually touched — not a token list walked hopefully, and not a balance inferred from summed Transfer events, which rebasing and fee-on-transfer tokens make wrong</div>
+            </div>
+          </div>
+          <div class="pstep">
+            <span class="pstepn blue">3</span>
+            <div>
+              <div class="pstep-t">One call reads all of it, at one block.</div>
+              <div class="pstep-d">eth_call with no <b>to</b> address, carrying the lens's creation code as the payload — the constructor returns the answer, so a contract becomes a pure function with no address to trust and no upgrade key</div>
+              <div class="pstep-d">native balance, ERC-20 balances and allowances, ERC-165 detection, NFT ids and URIs, ERC-721Enumerable walking, code hash and the EIP-7702 delegation target — one round trip, one consistent snapshot, instead of a hundred calls landing at a hundred different blocks</div>
+              <div class="pstep-d">the reply is treated as contract code, so EIP-170 caps it at 24 576 bytes; too large a portfolio fails outright rather than truncating, and the client halves the batch when a node says no</div>
+            </div>
+          </div>
+          <div class="pstep">
+            <span class="pstepn">4</span>
+            <div>
+              <div class="pstep-t">The nonce has to come separately.</div>
+              <div class="pstep-d">the EVM has no opcode for another account's nonce, so no contract — deployless or not — can report one. eth_getTransactionCount alongside the call, and the answer says whether that read landed rather than printing a confident 0</div>
+            </div>
+          </div>
+          <div class="pstep">
+            <span class="pstepn">5</span>
+            <div>
+              <div class="pstep-t">Integers become amounts, then a value.</div>
+              <div class="pstep-d">a balance is an integer in the token's own decimals — 18 for ether, so wei, and 1 gwei is 10⁹ of them; 6 for most stablecoins. Scaled by the decimals that same call returned, never by an assumption</div>
+              <div class="pstep-d">then priced from the chain: a Chainlink feed, a Uniswap v3 TWAP, or a spot pool — whichever is defensible, tagged HIGH / MEDIUM / LOW, with the route shown. Nothing defensible means no price at all, never a zero</div>
+            </div>
+          </div>
+        </div>
+        <div class="pipe-foot">Every read inside that one call is a staticcall with capped gas and capped returndata, so nothing a
+          hostile token does can revert the batch. A token that stays silent comes back as <strong>unknown</strong> — never
+          as a balance of nought, because rendering a failed call as zero is a bug, not a rounding error.</div>
       </div>
     </div>
   </div>
