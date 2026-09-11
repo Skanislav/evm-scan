@@ -25,6 +25,7 @@ import (
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/rpc"
@@ -122,13 +123,26 @@ func (n *Node) HeadBlock(ctx context.Context) (uint64, error) {
 	return n.eth.BlockNumber(ctx)
 }
 
+// HeaderHash reports the hash the node itself attaches to the block at that height,
+// not one recomputed from the header fields. Recomputing assumes the node serialises
+// every field the current fork puts in a header and that our go-ethereum knows the
+// layout; Helios breaks the first (it serves blocks rebuilt from the beacon payload
+// with parentBeaconBlockRoot and requestsHash empty) and the next fork breaks the
+// second. Either way the recomputed hash disagrees with the one on every log, and the
+// follower treats each block as a reorg. The reported hash is what the node verified,
+// which is the value the reorg check actually wants.
 func (n *Node) HeaderHash(ctx context.Context, number uint64) (common.Hash, error) {
 	n.meter.add("eth_getBlockByNumber")
-	h, err := n.eth.HeaderByNumber(ctx, new(big.Int).SetUint64(number))
-	if err != nil {
+	var head *struct {
+		Hash common.Hash `json:"hash"`
+	}
+	if err := n.rpc.CallContext(ctx, &head, "eth_getBlockByNumber", hexutil.EncodeUint64(number), false); err != nil {
 		return common.Hash{}, err
 	}
-	return h.Hash(), nil
+	if head == nil {
+		return common.Hash{}, ethereum.NotFound
+	}
+	return head.Hash, nil
 }
 
 func (n *Node) Logs(ctx context.Context, q Query) ([]types.Log, error) {
