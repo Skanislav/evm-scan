@@ -295,13 +295,44 @@ type abiFunding struct {
 }
 
 // Funding reads an asset's remaining funding and paid range.
+//
+// Tolerant of a registry deployed before `vouched` existed, because one is live and
+// the rules of this contract are immutable by design — changing them means a new
+// deployment, so old and new will always both be out there. An older registry
+// returns three words where this ABI expects four, which go-ethereum reports as
+// "length insufficient 96 require 128" rather than as anything a caller could act
+// on, and the caller in internal/api discards a Funding error silently. Left alone,
+// upgrading the daemon would have quietly emptied the funding column against the
+// registry that is actually deployed.
+//
+// Vouched stays nil for the old shape. That registry genuinely does not track the
+// number, and substituting Balance would put a figure that drains as coverage is
+// claimed into a column whose whole point is that it only ever rises.
 func (c *Client) Funding(ctx context.Context, key common.Hash) (Funding, error) {
-	vals, err := c.call(ctx, "getFunding", [32]byte(key))
+	in, err := c.abi.Pack("getFunding", [32]byte(key))
 	if err != nil {
-		return Funding{}, err
+		return Funding{}, fmt.Errorf("hintreg: pack getFunding: %w", err)
 	}
-	f := *abi.ConvertType(vals[0], new(abiFunding)).(*abiFunding)
-	return Funding{Balance: f.Balance, PaidFrom: f.PaidFrom, PaidTo: f.PaidTo, Vouched: f.Vouched}, nil
+	out, err := c.src.CallAtHead(ctx, ethereum.CallMsg{To: &c.addr, Data: in})
+	if err != nil {
+		return Funding{}, fmt.Errorf("hintreg: call getFunding: %w", err)
+	}
+
+	if vals, err := c.abi.Unpack("getFunding", out); err == nil {
+		f := *abi.ConvertType(vals[0], new(abiFunding)).(*abiFunding)
+		return Funding{Balance: f.Balance, PaidFrom: f.PaidFrom, PaidTo: f.PaidTo, Vouched: f.Vouched}, nil
+	}
+
+	// The pre-vouched shape: balance, paidFrom, paidTo. Read by hand rather than by
+	// keeping a second ABI document around for the first to drift from.
+	if len(out) != 96 {
+		return Funding{}, fmt.Errorf("hintreg: getFunding returned %d bytes, which is neither shape", len(out))
+	}
+	return Funding{
+		Balance:  new(big.Int).SetBytes(out[0:32]),
+		PaidFrom: new(big.Int).SetBytes(out[32:64]).Uint64(),
+		PaidTo:   new(big.Int).SetBytes(out[64:96]).Uint64(),
+	}, nil
 }
 
 // Claimable is what a finalized claim for this asset range would pay right now.
