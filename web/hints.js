@@ -217,17 +217,46 @@ function nameNote(resolved) {
 function renderResult(out, r) {
   const { account, resolved, assets, hits, manifest } = r;
   
+  // How far behind head the answer is, and whether the digest is the chain's word or
+  // the host's. A manifest an epoch names was fixed inside a bonded publishIndex; one
+  // no epoch names was built from the daemon's live table and vouched for by nobody.
+  const head = H.head() || 0;
+  const behind = head && manifest.to_block ? head - manifest.to_block : 0;
+  const digest = manifest.keccak256 ? `${manifest.keccak256.slice(0, 6)}…${manifest.keccak256.slice(-4)}` : '';
+  const bound = (manifest.epoch_id || 0) > 0;
+  const onchain = bound ? (H.epochs() || []).find(e => e.id === manifest.epoch_id) : null;
+  const epochLabel = onchain && onchain.onchain_epoch_id != null ? `epoch ${onchain.onchain_epoch_id}` : `epoch ${manifest.epoch_id}`;
+
   out.innerHTML = `
-    <div class="kicker">the index, as of block ${H.esc(fmtInt(manifest.to_block || 0))}</div>
+    <div style="display:flex; gap:14px; flex-wrap:wrap; align-items:baseline">
+      <div class="kicker">the index, as of block ${H.esc(fmtInt(manifest.to_block || 0))}</div>
+      ${digest ? `<span class="colnote">${H.esc(manifest.name)}.xorf · digest ${H.esc(digest)}</span>` : ''}
+    </div>
     <p class="prose" style="margin:8px 0 4px">
       <strong>${H.esc(String(hits.length))}</strong> of ${H.esc(String(assets.length))} indexed
       contract${assets.length === 1 ? '' : 's'} ${hits.length === 1 ? 'has' : 'have'} a row for
       <span class="addr">${H.esc(resolved.name || account)}</span>.
     </p>
-    <p class="hint" style="margin:0 0 14px">
+    <p class="hint" style="margin:0 0 6px">
       Worked out from a file this browser already had. The daemon served the file and learned
       nothing about the address it was tested against.${nameNote(resolved)}
     </p>
+    ${behind > 0 ? `<div style="font:400 11.5px/1.5 var(--mono); color:var(--ink-65)">as of filter block
+      ${H.esc(fmtInt(manifest.to_block))} — ${H.esc(fmtInt(behind))} block${behind === 1 ? '' : 's'} behind head.
+      anything promoted since is invisible here until the next rebuild.</div>` : ''}
+    <div class="ebound" style="margin-bottom:14px">
+      <span class="ebadge ${bound ? '' : 'rolling'}">${bound ? 'epoch-bound' : 'rolling'}</span>
+      <div style="min-width:0">${bound
+        ? `This digest is not the host's word for it. The publisher computed the filter from the same snapshot
+           that produced the merkle root of ${H.esc(epochLabel)}, and named a manifest carrying that digest
+           <em>inside</em> the bonded <code>publishIndex</code> transaction — so the chain says where to look and
+           what should be found there. Fixed at a block somebody bonded, which is why it is checkable and behind.
+           <code>evmscan-verify -filter</code> is the check.`
+        : `This digest is the host's word for it. No finalized epoch names this filter yet, so it was built from
+           the daemon's live table: current, and vouched for by nobody — the same daemon states the bytes and their
+           digest, and a lying one agrees with itself. Once a publisher commits an epoch, the file served here is
+           the one that epoch named, and its digest can be checked against the chain without asking us.`}</div>
+    </div>
     <div class="scroll"><div id="private-rows"></div></div>`;
 
   const rows = $('private-rows');

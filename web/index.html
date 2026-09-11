@@ -375,6 +375,34 @@
   .unkept-row .act { display: flex; gap: 9px; align-items: center; flex: none; }
   .unkept-row .cost { font: 400 11px/1.5 var(--mono); color: var(--ink-65); text-align: right; }
   .unkept-foot { font: 400 11.5px/1.6 var(--sans); color: var(--ink-70); margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); max-width: 680px; text-wrap: pretty; }
+  /* The cross-chain sweep: one card, the disclosure before the button, rows as they land. */
+  .sweep { margin-top: 26px; border: 1px solid rgba(20,22,26,.13); border-radius: var(--r-lg); background: var(--surface); overflow: hidden; }
+  .sweep-head { padding: 12px 16px 11px; border-bottom: 1px solid var(--line); display: flex; gap: 12px; flex-wrap: wrap; align-items: baseline; }
+  .sweep-body { padding: 15px 16px 17px; }
+  .chaingrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 8px; margin-bottom: 14px; }
+  .chaintile { display: flex; gap: 10px; align-items: center; border: 1px solid rgba(20,22,26,.14); background: var(--surface); border-radius: 8px; padding: 9px 11px; min-width: 0; }
+  .chaintile:hover { border-color: rgba(20,22,26,.34); }
+  .chaintile.dim { opacity: .6; }
+  .chaintile .pick { flex: 1 1 auto; display: flex; gap: 10px; align-items: center; min-width: 0; text-align: left; background: none; border: 0; padding: 0; cursor: pointer; font-family: var(--sans); color: var(--ink); }
+  .chaintile .box { flex: none; width: 16px; height: 16px; border-radius: 4px; border: 1px solid rgba(20,22,26,.3); box-sizing: border-box; }
+  .chaintile .box.on { border: 0; background: var(--ink); color: #fff; font: 600 10px/16px var(--mono); text-align: center; }
+  .chaintile .cn { display: block; font: 500 12px/1.35 var(--sans); }
+  .chaintile .ch { display: block; font: 400 10.5px/1.4 var(--mono); color: var(--ink-65); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chaintile .set { flex: none; font: 400 10.5px/1 var(--mono); }
+  .before { display: flex; gap: 9px; align-items: flex-start; padding: 12px 13px; border: 1px solid var(--amber-line); border-radius: 8px; background: var(--amber-wash); margin-bottom: 14px; font: 400 11.5px/1.6 var(--sans); color: rgba(20,22,26,.75); }
+  .before .bb { flex: none; font: 500 9.5px/1 var(--mono); letter-spacing: .04em; text-transform: uppercase; color: var(--amber-text); border: 1px solid oklch(0.75 0.10 75); border-radius: 3px; padding: 4px 6px; margin-top: 1px; }
+  .sweep-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(120px, 220px) 110px; column-gap: 14px; align-items: center; padding: 10px 0; border-top: 1px solid rgba(20,22,26,.08); }
+  .sweep-row .cn { font: 500 12.5px/1.35 var(--sans); min-width: 0; }
+  .sweep-row .ch { font: 400 11px/1.4 var(--mono); color: var(--ink-65); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sweep-row .res { font: 400 11.5px/1.4 var(--mono); text-align: right; }
+  .sweep-row.held-row { padding: 5px 0 5px 14px; border-top: 0; }
+  .sweep-row.held-row .cn { font: 400 12px/1.35 var(--sans); }
+  .sweep-skipped { font: 400 11.5px/1.6 var(--mono); color: var(--ink-65); margin-top: 13px; padding-top: 12px; border-top: 1px solid rgba(20,22,26,.08); }
+  .sweep-foot { font: 400 11.5px/1.6 var(--sans); color: var(--ink-70); margin-top: 13px; padding-top: 13px; border-top: 1px solid var(--line); max-width: 680px; text-wrap: pretty; }
+  /* Whether the filter's digest is the chain's word or the host's. */
+  .ebound { display: flex; gap: 9px; align-items: flex-start; margin-top: 11px; padding-top: 11px; border-top: 1px solid var(--line-2); font: 400 11.5px/1.6 var(--sans); color: var(--ink-70); }
+  .ebadge { flex: none; font: 500 9.5px/1 var(--mono); letter-spacing: .04em; text-transform: uppercase; color: #fff; background: var(--blue); border-radius: 3px; padding: 4px 6px; margin-top: 1px; }
+  .ebadge.rolling { background: var(--amber); }
   /* The private panel's first card: which chain's filter is in hand. */
   .bound { border: 1px solid rgba(20,22,26,.13); border-radius: 9px; background: var(--surface); padding: 13px 14px; margin-bottom: 14px; }
   .bound-ok { font: 400 11.5px/1.6 var(--mono); color: oklch(0.36 0.09 155); }
@@ -851,21 +879,49 @@
         <span class="hint" id="spam-note"></span>
       </div>
 
-      <div id="xchain" class="block">
-        <div class="subrow">
-          <h3>Elsewhere</h3>
-          <button class="linkbtn" id="xchain-open">look on other chains</button>
+      <!-- Everything above is one chain. The sweep is client-only: viem's chain registry
+           and a CORS-open token list, then the same deployless lens call per chain. The
+           disclosure sits on the button because every endpoint reached sees the address. -->
+      <div id="xchain" class="sweep">
+        <div class="sweep-head">
+          <span class="label">everything above is one chain</span>
+          <span class="colnote">an address holds things in more places than this daemon indexes</span>
         </div>
-        <div id="xchain-panel" hidden>
-          <p class="hint" id="xchain-disclosure" style="margin:0"></p>
-          <div class="row" style="margin:12px 0">
-            <button class="btn btn-secondary btn-sm" id="xchain-all">select all</button>
-            <button class="btn btn-secondary btn-sm" id="xchain-none">clear</button>
-            <button class="btn btn-primary btn-sm" id="xchain-go">Look</button>
-            <span class="hint" id="xchain-status"></span>
+        <div class="sweep-body">
+          <p class="hint" style="margin:0 0 14px; max-width:680px; text-wrap:pretty">A sweep reads balances on every chain
+            it can reach, in your browser, one endpoint per chain, rendering rows as they land. "Every chain it can
+            reach" has to mean something that cannot hang: a chain the token list has contracts for, that has somewhere
+            to ask, and that is not a dead testnet — the lists still carry Goerli and Mumbai years on, so they are
+            listed and never swept by default.</p>
+          <div class="row" id="xchain-openrow">
+            <button class="btn btn-secondary btn-sm" id="xchain-open">Load the chain list</button>
+            <span class="hint" id="xchain-load">viem's chain registry and the token list are fetched only when asked</span>
           </div>
-          <div id="xchain-list" class="scroll" style="max-height:240px"></div>
-          <div id="xchain-results" style="margin-top:18px"></div>
+          <div id="xchain-panel" hidden>
+            <div class="subrow" style="margin-bottom:9px">
+              <span class="label">chains to ask · <span id="xchain-count">0</span> selected</span>
+              <span class="row" style="gap:7px">
+                <button class="btn btn-secondary btn-sm" id="xchain-all">All available</button>
+                <button class="btn btn-secondary btn-sm" id="xchain-own">Only my own node</button>
+                <button class="btn btn-ghost btn-sm" id="xchain-none">clear</button>
+              </span>
+            </div>
+            <div class="chaingrid" id="xchain-list"></div>
+            <div class="before"><span class="bb">before you run it</span><div id="xchain-disclosure" style="min-width:0"></div></div>
+            <div class="row" style="margin-bottom:14px">
+              <button class="btn btn-primary" id="xchain-go" disabled>Nothing selected</button>
+              <span class="hint mono" id="xchain-status" style="font-family:var(--mono); font-size:11.5px"></span>
+            </div>
+            <div id="xchain-results"></div>
+            <div class="sweep-skipped" id="xchain-skipped"></div>
+            <div class="sweep-foot">The sweep deliberately does <em>not</em> narrow each chain's list with the index
+              filter first. That looked obviously right and was badly wrong: a filter miss means "we do not index that
+              contract", which is nothing like "you hold none of it", and once the read is skipped the two are
+              indistinguishable — on a real account, narrowing took 65 holdings down to 1. Narrowing is only sound
+              where the index is authoritative for the question, which is the lookup above and not this. The cost of
+              being right: the lens returns about 920 bytes per token, so EIP-170's 24 576-byte reply ceiling caps a
+              batch at 24 and batching harder is simply not available.</div>
+          </div>
         </div>
       </div>
 
@@ -1129,10 +1185,29 @@ evmscan-verify -ens \
   &lt;hex&gt;.hints.&lt;parent&gt;</div>
       </div>
       <div class="stack">
+        <div class="card" id="filter-card">
+          <h3>Check the filter against the chain, not against us</h3>
+          <p>A file served over HTTP is vouched for by whoever served it — ask the same daemon for the bytes and
+            for their digest and a lying one agrees with itself. So <code>evmscan-verify -filter</code> downloads
+            the <code>.xorf</code>, reads the latest finalized epoch off-chain, fetches the manifest that epoch
+            named, and compares. Without that step the on-chain digest is decoration.</p>
+          <p style="margin-top:10px">You can go further and rebuild it yourself from the published snapshot — no
+            database, no node. Measured against the hosted mainnet index: 773 948 accounts and 857 417 pairs compile
+            to 974 918 bytes at 1.14 bytes per key, against 50 MB for the gzipped table it came from. Fifty-one
+            times smaller, for the one question a portfolio read actually asks.</p>
+          <p class="ceiling" style="margin-top:11px; padding-top:11px; border-top:1px solid var(--line); color:var(--amber-text)">The
+            limit is the URI scheme, and it is worth saying out loud: over <code>ipfs://</code> the URI <em>is</em>
+            the content, so the commitment fixes the document; over <code>https://</code> it fixes only the address —
+            the publisher committed to naming that URL, not to what it serves. Nothing here publishes to IPFS yet, so
+            the loop is one hop shorter, not closed. The verifier prints which one it followed.</p>
+        </div>
         <div class="card">
           <h3>Or read it with no evm-scan code at all</h3>
-          <p>The same answer is an ENS text record and an ERC-3668 gateway response. Any viem or ENS client can
-            fetch it; a gateway can withhold an answer but cannot forge one, and cannot serve a stale epoch.</p>
+          <p>The same answer is an ENS text record and an ERC-3668 gateway response — including
+            <code>evmscan.uri</code>, which hands back the committed pointer verbatim rather than parsing it, because a
+            resolver that picked documents apart would be committing itself to a format it cannot verify. Any viem or
+            ENS client can fetch it; a gateway can withhold an answer but cannot forge one, and cannot serve a stale
+            epoch.</p>
         </div>
         <div class="card">
           <h3>What we do <em>not</em> claim</h3>
@@ -3175,6 +3250,7 @@ window.evmscanHints = {
   passkeyCreate, passkeySecret, walletSecret, passwordSecret,
   api, onChain, esc, short, chainRpc, lensBalances, resolveAccount,
   chainId: activeChainID, chainName, assets: () => ASSETS, candidates: () => CANDIDATES,
+  epochs: () => EPOCHS,
 };
 
 // markUnlisted annotates rows with whether any configured token list vouches for
@@ -3381,56 +3457,56 @@ async function sweep(chains, account, onChainDone, onProgress) {
 // The cross-chain panel. Nothing here runs until someone opens it: viem's chain
 // registry and the token list are both fetched on demand, because a reader who
 // never looks elsewhere should not pay for the ability to.
-let XCHAIN = null;        // [{id, name, tokens, rpc, mine, host}], busiest first
+let XCHAIN = null;        // [{id, name, tokens, rpc, mine, host, testnet}], busiest first
 const XSELECTED = new Set();
+let XLIST = null;         // the token list's own name and version, for the disclosure
+let XSTATE = 'idle';      // idle | running | done
+let XLAST = null;         // the last sweep's totals, for the status line after it
 
 async function openXChain() {
-  const panel = $('xchain-panel');
-  panel.hidden = false;
-  $('xchain-open').hidden = true;
-  if (XCHAIN) return;
-
-  $('xchain-status').textContent = 'loading chain definitions and the token list…';
+  $('xchain-open').disabled = true;
+  $('xchain-load').textContent = 'loading chain definitions and the token list…';
   try {
     XCHAIN = await sweepableChains();
+    XLIST = await tokenList();
   } catch (e) {
-    $('xchain-status').textContent = `could not load: ${e.message}`;
+    $('xchain-open').disabled = false;
+    $('xchain-load').textContent = `could not load: ${e.message}`;
     return;
   }
-  const list = await tokenList();
-  const third = XCHAIN.filter(c => !c.mine).length;
-
-  // The disclosure belongs here, at the moment of choice, not after the sweep.
-  // Selecting every chain sends this address to every one of those endpoints.
-  $('xchain-disclosure').innerHTML =
-    `Reads run in this browser against one endpoint per chain, using `
-    + `<code>${esc(list.name)}</code> (${XCHAIN.reduce((n, c) => n + c.tokens.length, 0)} contracts `
-    + `across ${XCHAIN.length} chains). <strong>Each endpoint you select sees the address `
-    + `you are asking about.</strong> ${third} of them are public defaults from viem that this `
-    + `deployment has no relationship with; set your own below to avoid that. Nothing is sent `
-    + `to this daemon.`;
-
-  $('xchain-status').textContent = '';
+  $('xchain-openrow').hidden = true;
+  $('xchain-panel').hidden = false;
+  // Every mainnet to begin with — the same set "All available" picks — so the
+  // disclosure below has real numbers in it before anyone touches a tile.
+  for (const c of XCHAIN) if (!c.testnet) XSELECTED.add(c.id);
   renderXChainList();
 }
 
+// One tile per chain: the check, the name, and the host that will see the address.
+// The tile is a div and not a button, because the "set" link inside it is a button
+// and a button inside a button is not HTML.
 function renderXChainList() {
-  $('xchain-list').innerHTML = XCHAIN.map(c => `
-    <label class="tablerow" style="grid-template-columns:28px 1fr 90px 1fr; align-items:center; cursor:pointer">
-      <input type="checkbox" data-xchain="${c.id}" ${XSELECTED.has(c.id) ? 'checked' : ''}>
-      <span><strong>${esc(c.name)}</strong> <span class="empty">${c.id}</span>${c.testnet ? ' <span class="tag">testnet</span>' : ''}</span>
-      <span class="num">${c.tokens.length}</span>
-      <span style="min-width:0">
-        <span class="hint" title="${esc(c.rpc)}">${c.mine ? 'your endpoint' : esc(c.host)}</span>
-        <button class="linkbtn" data-xrpc="${c.id}" style="margin-left:8px">set</button>
-      </span>
-    </label>`).join('');
+  $('xchain-list').innerHTML = XCHAIN.map(c => {
+    const on = XSELECTED.has(c.id);
+    return `
+    <div class="chaintile ${c.testnet && !on ? 'dim' : ''}" data-tile="${c.id}">
+      <button class="pick" data-xchain="${c.id}" role="checkbox" aria-checked="${on}">
+        <span class="box ${on ? 'on' : ''}">${on ? '✓' : ''}</span>
+        <span style="min-width:0">
+          <span class="cn">${esc(c.name)}${c.testnet ? ' <span class="tag">testnet</span>' : ''}</span>
+          <span class="ch" title="${esc(c.rpc)}">${c.mine ? 'your endpoint · ' : ''}${esc(c.host)} · ${num(c.tokens.length)} contract${c.tokens.length === 1 ? '' : 's'}</span>
+        </span>
+      </button>
+      <button class="linkbtn set" data-xrpc="${c.id}" title="use an endpoint of your own for ${esc(c.name)}">set</button>
+    </div>`;
+  }).join('');
 
   for (const el of $('xchain-list').querySelectorAll('[data-xchain]')) {
-    el.addEventListener('change', () => {
+    el.addEventListener('click', () => {
       const id = Number(el.dataset.xchain);
-      el.checked ? XSELECTED.add(id) : XSELECTED.delete(id);
-      updateXChainStatus();
+      XSELECTED.has(id) ? XSELECTED.delete(id) : XSELECTED.add(id);
+      XSTATE = 'idle';
+      renderXChainList();
     });
   }
   for (const el of $('xchain-list').querySelectorAll('[data-xrpc]')) {
@@ -3447,62 +3523,94 @@ function renderXChainList() {
       renderXChainList();
     });
   }
+
+  const dead = XCHAIN.filter(c => c.testnet);
+  $('xchain-skipped').textContent = dead.length
+    ? `${num(dead.length)} testnet${dead.length === 1 ? ' is' : 's are'} listed and not swept by default: `
+      + `${dead.map(c => c.name).join(', ')}. The dead ones stopped answering years ago, and a sweep that waits on `
+      + `them is a sweep that hangs — pick one by hand if you mean it.`
+    : 'every chain on the list is a mainnet.';
   updateXChainStatus();
 }
 
 // The cost is worth showing before it is spent: a reader picking twelve chains
-// should know it is a few hundred requests to a dozen strangers.
+// should know it is a few hundred requests to a dozen strangers — and which ones.
 function updateXChainStatus() {
   const picked = XCHAIN.filter(c => XSELECTED.has(c.id));
-  if (!picked.length) { $('xchain-status').textContent = 'nothing selected'; return; }
+  const strangers = picked.filter(c => !c.mine).length;
+  $('xchain-count').textContent = num(picked.length);
+
   const contracts = picked.reduce((n, c) => n + c.tokens.length, 0);
   const calls = picked.reduce((n, c) => n + Math.ceil(c.tokens.length / LENS_BATCH), 0);
-  const third = picked.filter(c => !c.mine).length;
-  $('xchain-status').textContent =
-    `${picked.length} chains, ${contracts} contracts, up to ${calls} calls`
-    + (third ? ` — ${third} to endpoints that are not yours` : '');
+  const list = XLIST ? `<code>${esc(XLIST.name)}</code> lists ${num(contracts)} contracts on them, ${num(calls)} lens calls. ` : '';
+  $('xchain-disclosure').innerHTML = `Every endpoint reached sees the address — <strong>${
+      !picked.length ? 'nothing is selected, so nothing is asked'
+      : strangers === 0 ? 'none of the endpoints you selected are strangers — this sweep only asks your own node'
+      : `${num(strangers)} of the ${num(picked.length)} selected ${strangers === 1 ? 'is' : 'are'} not yours`
+    }</strong>. ${list}Switch any of them off above, or drop to your own node in one click; each result row names the
+    host that answered. None of it reaches this daemon.`;
+
+  const go = $('xchain-go');
+  go.disabled = XSTATE === 'running' || !picked.length || !WALLET_ADDR;
+  go.textContent = XSTATE === 'running' ? 'sweeping…'
+    : XSTATE === 'done' ? 'Sweep again'
+    : !picked.length ? 'Nothing selected'
+    : `Sweep ${num(picked.length)} chain${picked.length === 1 ? '' : 's'}`;
+
+  const st = $('xchain-status');
+  if (!WALLET_ADDR) st.textContent = 'look an address up above first';
+  else if (XSTATE === 'idle') st.textContent =
+    `${num(picked.length)} selected · ${Math.min(CHAIN_CONCURRENCY, picked.length)} in flight, ${CHAIN_TIMEOUT_MS / 1000} s each · a chain that fails costs its own row, not the answer`;
+  else if (XSTATE === 'done' && XLAST) st.textContent =
+    `${num(XLAST.holdings)} holding${XLAST.holdings === 1 ? '' : 's'} across ${num(XLAST.answered)} of ${num(XLAST.chains)} chains, over ${num(XLAST.calls)} calls`
+    + (XLAST.failed ? ` · ${num(XLAST.failed)} did not answer` : '');
 }
 
 async function runXChain() {
   const addr = WALLET_ADDR;
-  if (!addr) return;
+  if (!addr || XSTATE === 'running') return;
   const picked = XCHAIN.filter(c => XSELECTED.has(c.id));
   if (!picked.length) return;
 
-  $('xchain-go').disabled = true;
+  XSTATE = 'running';
+  XLAST = null;
+  updateXChainStatus();
   $('xchain-results').innerHTML = '';
-  const rows = [];
   const done = [];
+  const total = picked.length;
 
+  // One row per chain as it lands — the host that answered, and what it said — with
+  // the holdings under it. A chain that failed keeps its row and says so.
   const render = () => {
-    $('xchain-results').innerHTML = `
-      <div class="tablehead" style="grid-template-columns:1fr 1fr 140px 1fr">
-        <span>chain</span><span>asset</span><span class="num">balance</span><span>read from</span>
-      </div>`
-      + (rows.length
-        ? rows.map(h => `
-          <div class="tablerow" style="grid-template-columns:1fr 1fr 140px 1fr">
-            <span>${esc(h.chainName)}</span>
-            <span><strong>${esc(h.symbol || '')}</strong> <span class="empty">${esc(h.name || '')}</span></span>
-            <span class="num mono">${formatUnits(h.balance, h.decimals)}</span>
-            <span class="hint">${h.mine ? 'your endpoint' : esc(h.host)}</span>
-          </div>`).join('')
-        : '<div class="empty" style="padding:12px">nothing held yet</div>')
-      + done.map(r => r.error
-          ? `<div class="hint" style="padding:6px 0">${esc(r.chain.name)}: ${esc(r.error)}</div>`
-          : `<div class="hint" style="padding:6px 0">${esc(r.chain.name)}: ${r.held.length} held, `
-            + `${r.scanned} contracts read in ${r.calls} call${r.calls === 1 ? '' : 's'}</div>`).join('');
+    $('xchain-status').textContent = `${num(done.length)} of ${num(total)} answered…`;
+    $('xchain-results').innerHTML = done.map(r => {
+      const head = `<div class="sweep-row">
+          <div class="cn">${esc(r.chain.name)}</div>
+          <div class="ch" title="${esc(r.chain.rpc)}">${r.chain.mine ? 'your endpoint · ' : ''}${esc(r.chain.host)}</div>
+          <div class="res" style="color:${r.error ? 'var(--amber-text)' : r.held.length ? 'var(--ink)' : 'var(--ink-62)'}" title="${esc(r.error || `${r.scanned} contracts read in ${r.calls} call${r.calls === 1 ? '' : 's'}`)}">${
+            r.error ? 'no answer' : `${num(r.held.length)} holding${r.held.length === 1 ? '' : 's'}`}</div>
+        </div>`;
+      const rows = r.held.map(h => `<div class="sweep-row held-row">
+          <div class="cn"><strong>${esc(h.symbol || '')}</strong> <span class="empty">${esc(h.name || '')}</span></div>
+          <div class="ch">${esc(short(h.address, 4))}</div>
+          <div class="res mono">${formatUnits(h.balance, h.decimals)}</div>
+        </div>`).join('');
+      return head + rows + (r.error ? `<div class="hint" style="padding:0 0 8px; font-size:11px">${esc(r.error)}</div>` : '');
+    }).join('');
   };
-  render();
 
   try {
-    await sweep(picked, addr,
-      (r) => { done.push(r); rows.push(...r.held); rows.sort((a, b) => a.chainName.localeCompare(b.chainName)); render(); },
-      () => render());
-    $('xchain-status').textContent =
-      `${rows.length} holdings across ${done.filter(r => r.held.length).length} of ${picked.length} chains`;
+    await sweep(picked, addr, (r) => { done.push(r); render(); }, () => {});
   } finally {
-    $('xchain-go').disabled = false;
+    XSTATE = 'done';
+    XLAST = {
+      holdings: done.reduce((n, r) => n + r.held.length, 0),
+      answered: done.filter(r => !r.error).length,
+      failed: done.filter(r => r.error).length,
+      chains: total,
+      calls: done.reduce((n, r) => n + (r.calls || 0), 0),
+    };
+    updateXChainStatus();
   }
 }
 
@@ -4021,6 +4129,8 @@ function renderHoldings() {
   const shown = SHOW_SPAM ? rows : rows.filter(h => h.verdict !== 'spam');
 
   $('holdings-title').textContent = `Holdings on ${chainName()}`;
+  // The sweep button is gated on an address being on screen, so it follows the lookup.
+  if (XCHAIN) updateXChainStatus();
   $('holdings-wrap').hidden = rows.length === 0;
   $('account-empty').hidden = rows.length !== 0;
   $('account-held').hidden = !(rows.length && rows.every(h => !h.event_count));
@@ -4363,10 +4473,20 @@ $('xchain-all').addEventListener('click', () => {
   // that has somewhere to ask — not viem's whole registry, which is ~800 chains
   // this would otherwise hang on, and not the testnets, which are in the list
   // because nobody removed them rather than because anybody holds anything there.
+  XSELECTED.clear();
   for (const c of (XCHAIN || [])) if (!c.testnet) XSELECTED.add(c.id);
+  XSTATE = 'idle';
   renderXChainList();
 });
-$('xchain-none').addEventListener('click', () => { XSELECTED.clear(); renderXChainList(); });
+// "Only my own node" is the one-click way out of the disclosure: the chains whose
+// endpoint the reader set themselves, and nothing that would see the address otherwise.
+$('xchain-own').addEventListener('click', () => {
+  XSELECTED.clear();
+  for (const c of (XCHAIN || [])) if (c.mine) XSELECTED.add(c.id);
+  XSTATE = 'idle';
+  renderXChainList();
+});
+$('xchain-none').addEventListener('click', () => { XSELECTED.clear(); XSTATE = 'idle'; renderXChainList(); });
 $('xchain-go').addEventListener('click', runXChain);
 $('register').addEventListener('click', register);
 $('new-asset').addEventListener('keydown', e => { if (e.key === 'Enter') register(); });
