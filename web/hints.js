@@ -214,8 +214,15 @@ function nameNote(resolved) {
     was asked for it and answered with this address.`;
 }
 
+// The private lookup's last answer, kept so the watchlist can be built from it. The
+// hosted lookup leaves its holdings on the page; this one leaves them nowhere else,
+// and a reader who asked without naming themselves is exactly the reader who wants
+// the list that cannot be read.
+let PRIVATE_HITS = [];
+
 function renderResult(out, r) {
   const { account, resolved, assets, hits, manifest } = r;
+  PRIVATE_HITS = hits.map(a => ({ address: a.address, symbol: a.symbol || '', name: a.name || '', standard: a.standard }));
   
   // How far behind head the answer is, and whether the digest is the chain's word or
   // the host's. A manifest an epoch names was fixed inside a bonded publishIndex; one
@@ -433,21 +440,39 @@ const PROVIDERS = {
 
 const watchPanel = () => $('watch-panel');
 
-export function openWatchlist() {
-  const holdings = (window.evmscanHoldings ? window.evmscanHoldings() : []) || [];
-  // Only fungible contracts. A token list is a list of fungible tokens and a KindToken
-  // filter is keyed by one address, so NFT rows would go in and never be asked about.
-  const tokens = holdings
+// What the reader holds, from whichever lookup answered: the hosted one leaves its
+// rows on the page, the private one leaves them here. Read at click time, because a
+// reader looks up more than one account per visit.
+function watchSource() {
+  const seen = new Set();
+  const out = [];
+  const hosted = (window.evmscanHoldings ? window.evmscanHoldings() : []) || [];
+  for (const h of hosted.concat(PRIVATE_HITS)) {
+    const k = (h.address || '').toLowerCase();
+    if (!k || seen.has(k)) continue;
+    seen.add(k);
+    out.push(h);
+  }
+  return out;
+}
+
+// Only fungible contracts. A token list is a list of fungible tokens and a KindToken
+// filter is keyed by one address, so NFT rows would go in and never be asked about.
+function watchTokens() {
+  return watchSource()
     .filter(h => h.address && (!h.standard || h.standard === 'erc20'))
     .map(h => ({ address: h.address, symbol: h.symbol || '' }));
+}
+
+export function openWatchlist() {
+  const tokens = watchTokens();
 
   watchPanel().innerHTML = `
-    <p class="prose" style="margin:0 0 14px">
-      A watchlist is a filter over contracts you care about, with every key blinded under a secret
-      only you hold. It can be <em>tested</em> but never <em>read out</em>, so the file is safe
-      somewhere that has no business knowing what is in it — this daemon, a gist, IPFS. You read it
-      back by walking a public token list and testing each entry; anyone else holds the same file,
-      walks the same list, and learns nothing.
+    <p class="prose" style="margin:0 0 14px; max-width:74ch">
+      Your holdings, saved as a small file that only you can read. Each contract goes in blinded
+      under a secret you hold — a passkey, a wallet signature or a password — so the file can sit
+      anywhere, this daemon included, and reveal nothing. Open it later with the same secret and
+      the page finds your contracts again without asking anyone which ones they are.
     </p>
     <div class="row" style="gap:10px; margin-bottom:16px; flex-wrap:wrap">
       <button class="btn btn-secondary btn-sm" id="watch-tab-build">Build one</button>
@@ -457,7 +482,10 @@ export function openWatchlist() {
     <div id="watch-read" hidden></div>
     <div class="err" id="watch-err" hidden></div>`;
 
+  // Build reads the holdings when it is clicked, not when the panel opened: the panel
+  // can be open before the lookup, and the lookup can be the private one.
   $('watch-tab-build').addEventListener('click', () => {
+    renderBuild(watchTokens());
     $('watch-build').hidden = false; $('watch-read').hidden = true;
   });
   $('watch-tab-open').addEventListener('click', () => {
@@ -498,8 +526,12 @@ const pickedProvider = (idPrefix) =>
 function renderBuild(tokens) {
   const el = $('watch-build');
   if (!tokens.length) {
-    el.innerHTML = `<p class="empty">Look up an account first — its holdings are what a watchlist
-      is built from.</p>`;
+    const any = watchSource().length;
+    el.innerHTML = any
+      ? `<p class="empty">This account's holdings are all NFTs, and a watchlist holds fungible
+          contracts only — a token list has nothing to test an NFT contract against.</p>`
+      : `<p class="empty">Nothing to build from yet. Look an account up above — by name, or without
+          naming yourself — and its holdings become the list.</p>`;
     return;
   }
   el.innerHTML = `
@@ -695,7 +727,7 @@ async function readBack(f, d) {
     // it works for.
     status.textContent = 'walking the token list…';
     const candidates = new Map();
-    for (const h of (window.evmscanHoldings ? window.evmscanHoldings() : []) || []) {
+    for (const h of watchSource()) {
       if (h.address) candidates.set(h.address.toLowerCase(), { address: h.address, symbol: h.symbol || '', from: 'your holdings' });
     }
     try {
