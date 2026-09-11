@@ -145,8 +145,12 @@ shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module 
   blinds the file so only its holder can test it. **The Go writer and the JavaScript
   reader in `web/index.html` must agree byte-for-byte** — `internal/hintfilter/testdata`
   is the fixture that enforces it, regenerated with `go test ./internal/hintfilter
-  -update`, and `testdata/browser-watch.xorf` pins the reverse direction (the browser
-  builds blinded watchlists; only Go builds fuse filters). Construction is
+  -update`, and `testdata/browser-watch.xorf` (WebAuthn prf) plus
+  `testdata/browser-watch-pbkdf2.xorf` (password) pin the reverse direction (the browser
+  builds blinded watchlists; only Go builds fuse filters). A watchlist's header carries a
+  `SaltDesc` saying how to re-derive its secret — which provider, which credential, which
+  salt, and for PBKDF2 the iteration count — but never the secret, which is what lets a
+  file be opened months later. Construction is
   deterministic, so a published filter can be rebuilt and diffed. Built by
   `cmd/evmscan-hint`, served at `GET /v1/hints`, `GET /v1/hints/{name}.xorf` and
   `.json`. docs/PRIVACY.md is the threat model.
@@ -188,9 +192,16 @@ shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module 
 - `web/` is the UI, served by `http.FileServer` from `WebDir` — no build step, no bundler.
   `index.html` is one page of five tabs (wallet, overview, triage, accounts, graph);
   `graph.js` is the WebGL graph, imported the first time that tab is opened because
-  three.js is most of a megabyte and most visits never ask for a picture. Token metadata is
-  attacker-controlled text from the chain, so everything interpolated into markup goes
-  through `esc()`.
+  three.js is most of a megabyte and most visits never ask for a picture. `hints.js` is
+  imported the same way and for the same reason — the index filter is well over a
+  megabyte — and holds the two things that read one: the private lookup, which answers
+  "which indexed contracts has this account touched" from the downloaded file so the
+  daemon never learns the address, and the blinded-watchlist builder. It cannot close
+  over this file's scope, so the filter primitives are handed to it on
+  `window.evmscanHints`; there is deliberately only one implementation of the
+  arithmetic on the page, because a second one would be a second thing to keep
+  byte-identical with Go. Token metadata is attacker-controlled text from the chain, so
+  everything interpolated into markup goes through `esc()`.
 - `mirror/` is a separate TypeScript package (`make test-mirror`, own `node_modules`, not
   in the Go build): the commitment encoding ported for clients, plus a local-first mirror
   that keeps the committed rows in the client's SQLite via Evolu and rebuilds the keccak

@@ -408,21 +408,25 @@
       </div>
     </div>
 
-    <!-- A blinded filter over the reader's own set: testable by whoever holds the
-         secret, opaque to whoever stores the file. Offered here because the holdings
-         above are the natural thing to build one from. -->
-    <div id="watchlist" style="margin-top:40px">
-      <div style="display:flex; align-items:baseline; justify-content:space-between; gap:25px; flex-wrap:wrap">
-        <h3 style="font-size:26px; margin:0">Private watchlist</h3>
-        <button class="linkbtn" id="watch-open">keep this list somewhere that cannot read it</button>
-      </div>
-      <div id="watch-panel" hidden style="margin-top:14px"></div>
-    </div>
-
     <div class="row" style="margin-top:18px">
       <button class="linkbtn" id="spam-toggle" hidden></button>
       <span class="hint" id="spam-note"></span>
     </div>
+  </div>
+
+  <!-- A blinded filter over the reader's own set: testable by whoever holds the
+       secret, opaque to whoever stores the file.
+       Deliberately outside #holdings-wrap. Building one needs holdings, but *opening*
+       one needs nothing at all — and #holdings-wrap is only unhidden by the lookup
+       that names the address to the daemon. Nesting this inside it would mean a reader
+       had to disclose the account before they could open the file that exists so they
+       would not have to. -->
+  <div id="watchlist" style="margin-top:40px">
+    <div style="display:flex; align-items:baseline; justify-content:space-between; gap:25px; flex-wrap:wrap">
+      <h3 style="font-size:26px; margin:0">Private watchlist</h3>
+      <button class="linkbtn" id="watch-open">keep a list somewhere that cannot read it</button>
+    </div>
+    <div id="watch-panel" hidden style="margin-top:14px"></div>
   </div>
   <div class="empty" id="account-empty" hidden style="margin-top:20px">No indexed interactions, and no balance in any indexed asset.</div>
   <div class="hint" id="account-held" hidden style="margin-top:14px">No indexed interactions for this account — its
@@ -1809,14 +1813,21 @@ const bytesCat = (...arrs) => {
 };
 const be64 = (v) => { const o = new Uint8Array(8); new DataView(o.buffer).setBigUint64(0, BigInt(v)); return o; };
 
+// Held rather than re-imported per call. `await import()` of an already-loaded module
+// still costs about 16ms here, against 0.3ms for the keccak it is fetched for, so a
+// per-key import is fifty times the work of the hash. Eight keys never noticed; walking
+// a 400-token list to read a watchlist took 55 seconds and looked like a hang.
+let viemModule = null;
+const viem = () => (viemModule ||= import(VIEM_MODULE));
+
 async function xorfSubkey(secret, chainId, kind) {
-  const viem = await import(VIEM_MODULE);
+  const { keccak256 } = await viem();
   const buf = bytesCat(secret, new TextEncoder().encode(XORF_DOMAIN), be64(chainId), Uint8Array.of(kind));
-  return hexToBytes(viem.keccak256(buf));
+  return hexToBytes(keccak256(buf));
 }
 async function xorfKey(subkey, ...parts) {
-  const viem = await import(VIEM_MODULE);
-  const digest = hexToBytes(viem.keccak256(bytesCat(subkey, ...parts)));
+  const { keccak256 } = await viem();
+  const digest = hexToBytes(keccak256(bytesCat(subkey, ...parts)));
   return new DataView(digest.buffer).getBigUint64(0);
 }
 const tokenKey = (sub, token) => xorfKey(sub, hexToBytes(token));
@@ -3127,7 +3138,7 @@ $('watch-open').addEventListener('click', async () => {
   const p = $('watch-panel');
   p.hidden = !p.hidden;
   $('watch-open').textContent = p.hidden
-    ? 'keep this list somewhere that cannot read it'
+    ? 'keep a list somewhere that cannot read it'
     : 'hide the watchlist';
   if (p.hidden) return;
   p.innerHTML = '<span class="empty">loading…</span>';

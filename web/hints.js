@@ -166,6 +166,15 @@ async function run(m) {
       throw new Error(`${m.name}.xorf is a ${f.kind === 1 ? 'token' : `kind-${f.kind}`} filter, not the (account, contract) one this reads`);
     }
 
+    // The manifest was resolved when the panel opened; the network chip can have moved
+    // since. Testing this chain's filter against another chain's assets misses every
+    // probe and reports "0 of N" — a false negative with a confident sentence around
+    // it, which is worse than an error. The filter is right about its own chain, so
+    // the mismatch is the one thing to refuse.
+    if (Number(f.chainId) !== Number(H.chainId())) {
+      throw new Error(`this filter is for chain ${f.chainId} and the page is now on chain ${H.chainId()}; reopen the panel`);
+    }
+
     // Every asset the index covers, tested locally. Eight keccaks and eight array
     // probes: the cost of this is not the test, it is the download above, which is
     // why the download is the thing that happens once and is cached.
@@ -419,6 +428,10 @@ export function openWatchlist() {
 
   renderBuild(tokens);
   renderRead();
+  // With nothing to build from, open on the half that works. Reading a watchlist needs
+  // no account and no lookup, and landing on "look up an account first" would suggest
+  // otherwise to the one reader who came here holding a file.
+  if (!tokens.length) $('watch-tab-open').click();
 }
 
 function watchErr(e) {
@@ -522,7 +535,10 @@ async function build(tokens) {
     const a = document.createElement('a');
     a.href = url;
     a.download = `watchlist-${chainId}-${new Date().toISOString().slice(0, 10)}.xorf`;
+    // Attached before the click: Chrome fires it on a detached node, Firefox does not.
+    document.body.appendChild(a);
     a.click();
+    a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 10000);
     status.innerHTML = `${H.esc(String(tokens.length))} contracts, ${H.esc(String(bytes.length))} bytes,
       blinded under ${H.esc(desc.kdf)}. Saved.`;
@@ -608,7 +624,16 @@ async function deriveForRead(kind, d, status) {
   }
   if (kind === 'wallet') {
     status.textContent = 'sign the message in your wallet…';
-    return (await H.walletSecret()).secret;
+    const { secret, account } = await H.walletSecret();
+    // A different account signs a different message and derives a different secret,
+    // and the file would then report nothing found — which is the same thing it says
+    // for a wrong password, and which here has a knowable cause. The descriptor
+    // recorded who built it, so say so rather than letting the reader conclude their
+    // watchlist is empty.
+    if (d.account && account && d.account.toLowerCase() !== account.toLowerCase()) {
+      throw new Error(`this file was built by ${H.short(d.account)}, but your wallet is offering ${H.short(account)} — switch accounts and try again`);
+    }
+    return secret;
   }
   const pw = $('watch-read-pw').value;
   if (!pw) throw new Error('type the password it was built with');
