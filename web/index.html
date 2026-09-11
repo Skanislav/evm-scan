@@ -135,7 +135,56 @@
     padding: 6px 12px; font: 400 11.5px/1 var(--mono); color: var(--blue-deep); cursor: pointer;
   }
   .try .ex:hover { border-color: rgba(20,22,26,.4); }
-  .quietrow { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 18px; font-size: 12.5px; color: var(--ink-62); }
+  /* How to ask: two modes side by side, the lit one dark. The private mode unfolds
+     what leaves the browser and what stays, in numbered steps — grey for the public
+     files, green for the part that never becomes a request. */
+  .howto { margin-top: 30px; border: 1px solid rgba(20,22,26,.13); border-radius: var(--r-xl); background: var(--surface); overflow: hidden; }
+  .howto-head {
+    padding: 12px 16px 11px; border-bottom: 1px solid var(--line);
+    font: 500 10px/1 var(--mono); letter-spacing: .09em; text-transform: uppercase; color: var(--ink-65);
+  }
+  .howto-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+  .mode {
+    display: block; width: 100%; text-align: left; border: 0; background: var(--surface); color: var(--ink);
+    padding: 15px 16px 16px; cursor: pointer; font-family: var(--sans);
+  }
+  .mode + .mode { border-left: 1px solid var(--line); }
+  .mode:hover { background: var(--card); }
+  .mode.on { background: var(--ink); color: #fff; cursor: default; }
+  .mode-t { display: flex; align-items: center; gap: 8px; font: 500 13px/1.3 var(--sans); margin-bottom: 6px; }
+  .mode-dot { width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid rgba(20,22,26,.3); box-sizing: border-box; flex: none; }
+  .mode.on .mode-dot { border: 0; background: oklch(0.72 0.13 250); }
+  .mode-d { font: 400 11.5px/1.55 var(--mono); color: var(--ink-65); }
+  .mode.on .mode-d { color: rgba(255,255,255,.72); }
+  .howto-body { padding: 16px; border-top: 1px solid var(--line); background: var(--card); }
+  .steps { max-width: 680px; margin-bottom: 16px; display: flex; flex-direction: column; gap: 10px; }
+  .stepcard { border: 1px solid rgba(20,22,26,.13); border-radius: var(--r-lg); background: var(--surface); overflow: hidden; }
+  .stepcard-head {
+    padding: 10px 14px; border-bottom: 1px solid var(--line); background: var(--bg-2);
+    font: 500 10px/1.4 var(--mono); letter-spacing: .07em; text-transform: uppercase; color: var(--ink-65);
+  }
+  .stepcard.green { border-color: oklch(0.80 0.07 155); background: oklch(0.985 0.014 155); }
+  .stepcard.green .stepcard-head { background: transparent; border-color: oklch(0.88 0.05 155); color: oklch(0.36 0.09 155); }
+  .steplist { padding: 13px 14px; display: flex; flex-direction: column; gap: 11px; }
+  .step { display: flex; gap: 11px; align-items: flex-start; }
+  .step > div { min-width: 0; }
+  .stepn {
+    flex: none; width: 19px; height: 19px; border-radius: 50%; background: rgba(20,22,26,.08); color: var(--ink);
+    font: 500 10.5px/19px var(--mono); text-align: center;
+  }
+  .stepn.green { background: oklch(0.55 0.10 155); color: #fff; }
+  .step-t { font: 400 12.5px/1.5 var(--sans); color: var(--ink-80); }
+  .step-d { font: 400 11px/1.5 var(--mono); color: var(--ink-65); }
+  .why { max-width: 680px; margin-bottom: 16px; padding: 14px 15px; border-left: 2px solid var(--ink); background: var(--surface); }
+  .why-t { font: 600 12.5px/1.4 var(--sans); margin-bottom: 7px; }
+  .why p { font: 400 12.5px/1.6 var(--sans); color: rgba(20,22,26,.72); margin: 0 0 8px; text-wrap: pretty; }
+  .why p:last-child { margin-bottom: 0; }
+  .worth {
+    display: flex; flex-direction: column; gap: 7px; margin-bottom: 15px; padding: 13px 14px;
+    border: 1px solid oklch(0.82 0.07 75); border-radius: 8px; background: var(--amber-wash);
+    font: 400 12px/1.55 var(--sans); color: rgba(20,22,26,.72);
+  }
+  .worth-head { font: 500 11px/1 var(--mono); letter-spacing: .07em; text-transform: uppercase; color: oklch(0.38 0.10 66); margin-bottom: 3px; }
 
   /* ── Controls shared by every panel, including the ones hints.js draws ─── */
   .btn {
@@ -484,29 +533,83 @@
       <div class="hint" id="rpc-note" hidden style="margin-top:10px"></div>
       <div class="err" id="account-err" hidden></div>
 
-      <!-- The same question, asked without the address leaving the browser. "Look up"
-           above puts it in a URL; this works it out from a file every visitor downloads
-           identically. Offered beside the button rather than instead of it, because it
-           answers a narrower question and costs a 1.4 MB download to do it. -->
-      <div class="quietrow">
-        <button class="linkbtn" id="private-open">or ask the index without naming the address</button>
-        <span>·</span>
-        <button class="linkbtn" id="chain-rpc-open">read balances through your own RPC</button>
-      </div>
-      <div class="row" id="chain-rpc-row" hidden style="margin-top:12px">
-        <input class="input" type="text" id="chain-rpc" style="flex:1 1 320px" spellcheck="false" autocomplete="off" placeholder="https://… your own RPC for the indexed chain">
-        <button class="btn btn-secondary" id="chain-rpc-save">Use it</button>
-        <button class="btn btn-ghost" id="chain-rpc-clear">Use the daemon</button>
-      </div>
       <div class="row" id="name-rpc-row" hidden style="margin-top:12px">
         <input class="input" type="text" id="name-rpc" style="flex:1 1 320px" spellcheck="false" autocomplete="off" placeholder="https://… mainnet RPC for the name library (offchain names, .gwei, .wei)">
         <button class="btn btn-secondary" id="name-rpc-save">Save</button>
         <button class="btn btn-ghost" id="name-rpc-reset">Default</button>
       </div>
-    </div>
-    <div class="panel" id="private" hidden>
-      <h3>Private lookup</h3>
-      <div id="private-body"><span class="empty">loading…</span></div>
+
+      <!-- The same question, two ways of asking it. "Ask by name" puts the address in
+           a URL and gets the complete answer back. "Ask without naming yourself" works
+           the narrower answer out of a file every visitor downloads identically, so no
+           endpoint learns the address — and the card says what leaves the browser and
+           what stays, step by step, because the privacy is in the mechanism and not in
+           a promise. The Look up button follows whichever is lit. -->
+      <div class="howto">
+        <div class="howto-head">how to ask</div>
+        <div class="howto-grid" role="radiogroup" aria-label="how to ask">
+          <button class="mode on" id="mode-hosted" data-mode="hosted" role="radio" aria-checked="true">
+            <div class="mode-t"><span class="mode-dot"></span>Ask by name</div>
+            <div class="mode-d">one request to /v1/accounts/{address} · complete, with balances · the daemon reads your address out of the path</div>
+          </button>
+          <button class="mode" id="mode-private" data-mode="private" role="radio" aria-checked="false">
+            <div class="mode-t"><span class="mode-dot"></span>Ask without naming yourself</div>
+            <div class="mode-d">a published filter, tested in your tab · membership only, as of its block · no endpoint is told who you are</div>
+          </button>
+        </div>
+
+        <div class="howto-body" id="private" hidden>
+          <div class="steps">
+            <div class="stepcard">
+              <div class="stepcard-head">what leaves your browser · three public files, identical for every visitor</div>
+              <div class="steplist">
+                <div class="step"><span class="stepn">1</span><div><div class="step-t">Ask which filters exist.</div><div class="step-d">GET /v1/hints · the same list everybody gets</div></div></div>
+                <div class="step"><span class="stepn">2</span><div><div class="step-t">Download the index filter, and check the bytes are the bytes it promised.</div><div class="step-d">GET /v1/hints/<span id="step-filter-name">index-…</span>.xorf · digest must match the manifest · if the ETag disagrees it was rebuilt mid-download, so ask again</div></div></div>
+                <div class="step"><span class="stepn">3</span><div><div class="step-t">Download the list of contracts this index covers.</div><div class="step-d">GET /v1/assets · already public</div></div></div>
+              </div>
+            </div>
+            <div class="stepcard green">
+              <div class="stepcard-head">what stays in your browser · your address never goes into a request</div>
+              <div class="steplist">
+                <div class="step"><span class="stepn green">4</span><div><div class="step-t">For each covered contract, hash it together with your address into one key, and ask the filter whether it holds that key.</div><div class="step-d"><span id="step-pairs">…</span> pair keys · ~20 ms · no network</div></div></div>
+                <div class="step"><span class="stepn green">5</span><div><div class="step-t">The keys that hit are the contracts with a row for you.</div><div class="step-d">the answer is now on screen, and no server was asked for it</div></div></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="why">
+            <div class="why-t">Why that makes it private</div>
+            <p>Every request above asked for a file that is the same for everyone, so the only thing this host
+              learns is that somebody downloaded the filter — which it learns from every visitor anyway. Your
+              address is used only as an input to a hash, in your tab, and never travels.</p>
+            <p>Compare the usual routes: the address sits in a URL path (<code>/v1/accounts/0x…</code>), in
+              gateway calldata, or in an <code>eth_call</code> to whoever runs the RPC. Any of those is
+              unforgeable — and never unobservable. Turning the question inside out is what removes the
+              observer, not a promise in a privacy policy.</p>
+          </div>
+
+          <div class="worth">
+            <div class="worth-head">what this is and is not worth</div>
+            <div>A miss means <em>nobody here indexes that contract</em> — never "you hold none of it". The index covers promoted assets, not the chain.</div>
+            <div>The filter is true as of its block, not as of head. That is the one way this answer can be a false negative.</div>
+            <div>A hit is wrong about roughly one pair in 256, which is what the live balance read below is for.</div>
+          </div>
+
+          <div class="label" style="margin-bottom:9px">then read balances at head from</div>
+          <div class="row" id="chain-rpc-row" style="margin-bottom:10px">
+            <input class="input" type="text" id="chain-rpc" style="flex:1 1 260px; min-width:0; height:42px" spellcheck="false" autocomplete="off" placeholder="http://127.0.0.1:8545">
+            <button class="btn btn-secondary" id="chain-rpc-save" style="height:42px">Re-run here</button>
+            <button class="btn btn-ghost" id="chain-rpc-clear" style="height:42px">Use the daemon</button>
+          </div>
+          <p class="hint" style="margin:0 0 18px; max-width:640px">One <code>eth_call</code> to whatever node you trust —
+            membership says where to look, the read says what is there. Two honest caveats: that endpoint does see
+            the address, and typing an ENS name rather than an address resolves through it too. Disclosure, but to
+            someone you picked.</p>
+
+          <!-- hints.js draws the filter's own numbers, the button and the answer here. -->
+          <div id="private-body"><span class="empty">loading the filter's numbers…</span></div>
+        </div>
+      </div>
     </div>
   </div>
 </section>
@@ -1649,6 +1752,7 @@ let ASSETS_SHOWN = ASSETS_PAGE;
 function renderAssets() {
   const assets = ASSETS;
   $('asset-count').textContent = num(assets.length);
+  $('step-pairs').textContent = num(assets.length);
   const floor = STATUS ? STATUS.history_floor : 0;
   const head = HEAD || (STATUS && STATUS.head_block) || 0;
   const shown = assets.slice(0, ASSETS_SHOWN);
@@ -3013,10 +3117,13 @@ function showRpcNote(html, warn) {
   $('chain-rpc-edit').addEventListener('click', openChainRpc);
 }
 
+// The RPC field lives in the private mode's card, because reading balances from a
+// node of your own is the second half of not naming yourself to anyone else.
 function openChainRpc() {
+  setMode('private');
   $('chain-rpc').value = chainRpc();
-  $('chain-rpc-row').hidden = false;
-  $('chain-rpc').focus();
+  $('chain-rpc').focus({ preventScroll: true });
+  $('chain-rpc').scrollIntoView({ block: 'center', behavior: 'smooth' });
 }
 
 function openNameRpc() {
@@ -3727,7 +3834,7 @@ async function loadExamples() {
     ).join('');
     el.querySelectorAll('[data-example]').forEach(b => b.addEventListener('click', () => {
       $('account').value = b.dataset.example;
-      lookup();
+      runLookup();
     }));
   } catch {
     el.hidden = true; // the box works without examples
@@ -3751,25 +3858,45 @@ async function buildEpoch() {
 // Wiring
 // --------------------------------------------------------------------------
 
-$('lookup').addEventListener('click', lookup);
+$('lookup').addEventListener('click', runLookup);
 
 // The private lookup lives in its own module for the same reason the graph does: the
 // filter it reads is 1.4 MB and the code that reads it is dead weight on every visit
 // that never opens this panel. Nothing is fetched until somebody asks.
 let hintsLoaded = false;
-$('private-open').addEventListener('click', () => {
-  const p = $('private');
-  p.hidden = !p.hidden;
-  $('private-open').textContent = p.hidden
-    ? 'or ask the index without naming the address'
-    : 'hide the private lookup';
-  if (p.hidden || hintsLoaded) return;
+let MODE = 'hosted';
+function setMode(mode) {
+  MODE = mode;
+  for (const b of document.querySelectorAll('.mode')) {
+    const on = b.dataset.mode === mode;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-checked', String(on));
+  }
+  $('private').hidden = mode !== 'private';
+  if (mode !== 'private') return;
+  $('step-filter-name').textContent = `index-${activeChainID()}`;
+  $('step-pairs').textContent = num((ASSETS || []).length);
+  $('chain-rpc').value = chainRpc();
+  if (hintsLoaded) return;
   hintsLoaded = true;
   loadHints().catch(e => {
     hintsLoaded = false;
     $('private-body').innerHTML = `<span class="err">could not load the private lookup: ${esc(e.message)}</span>`;
   });
-});
+}
+document.querySelectorAll('.mode').forEach(b => b.addEventListener('click', () => setMode(b.dataset.mode)));
+
+// Look up does whatever the lit mode says. Hosted names the address to the daemon and
+// gets the whole answer; private hands the typed address to the filter test hints.js
+// drew, which never sends it anywhere.
+function runLookup() {
+  if (MODE !== 'private') { lookup(); return; }
+  if (!$('account').value.trim()) return;
+  const go = $('private-go');
+  if (go && !go.disabled) { go.click(); return; }
+  // The panel has not drawn yet: wait for the module, then ask.
+  loadHints().then(() => { const b = $('private-go'); if (b) b.click(); }).catch(() => {});
+}
 
 // The watchlist builder is in the same module, for the same reason and behind the
 // same import — it needs the filter arithmetic, and a visit that never opens either
@@ -3796,7 +3923,7 @@ $('watch-open').addEventListener('click', async () => {
 // The holdings the builder offers to save. Read at click time rather than captured,
 // because a reader looks up more than one account per visit.
 window.evmscanHoldings = () => HOLDINGS;
-$('account').addEventListener('keydown', e => { if (e.key === 'Enter') lookup(); });
+$('account').addEventListener('keydown', e => { if (e.key === 'Enter') runLookup(); });
 $('spam-toggle').addEventListener('click', () => { SHOW_SPAM = !SHOW_SPAM; renderHoldings(); });
 
 // The hint panel holds both registration paths: the daemon's own, and the paid
@@ -3847,20 +3974,20 @@ $('op-token-save').addEventListener('click', () => {
   $('op-token').value = '';
   $('op-token-row').hidden = true;
 });
-$('chain-rpc-open').addEventListener('click', openChainRpc);
+// "Re-run here": keep the endpoint and ask again the way the lit mode asks.
 $('chain-rpc-save').addEventListener('click', () => {
   setChainRpc($('chain-rpc').value.trim());
   nameCache.clear(); reverseCache.clear();
-  $('chain-rpc-row').hidden = true;
-  if (WALLET_ADDR) lookup();
+  if ($('account').value.trim()) runLookup();
 });
 $('chain-rpc-clear').addEventListener('click', () => {
   setChainRpc('');
+  $('chain-rpc').value = '';
   nameCache.clear(); reverseCache.clear();
-  $('chain-rpc-row').hidden = true;
   $('rpc-note').hidden = true;
-  if (WALLET_ADDR) lookup();
+  if ($('account').value.trim()) runLookup();
 });
+$('chain-rpc').addEventListener('keydown', e => { if (e.key === 'Enter') $('chain-rpc-save').click(); });
 $('name-rpc-save').addEventListener('click', () => {
   setNameRpc($('name-rpc').value.trim());
   nameCache.clear(); reverseCache.clear();

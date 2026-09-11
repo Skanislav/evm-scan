@@ -88,26 +88,14 @@ async function render() {
     return;
   }
 
-  const assets = H.assets() || [];
+  // The card around this already says what leaves the browser, what stays, and what
+  // the answer is and is not worth. This part is the file's own numbers — which the
+  // card cannot know, because they come from whatever this deployment publishes —
+  // and the button.
   body.innerHTML = `
-    <p class="prose" style="margin:6px 0 16px">
-      The daemon publishes one membership filter over every <em>(account, contract)</em> pair it has
-      indexed. It is a static file, the same bytes for every visitor, so downloading it says nothing
-      about who downloaded it — and the test runs in this tab. Nothing here tells the daemon which
-      address you asked about.
-    </p>
-    <div class="kvgrid" id="private-facts" style="gap:28px; margin-bottom:18px"></div>
-    <p class="hint" style="max-width:74ch; margin-bottom:6px">
-      <strong>What this can and cannot say.</strong> The index covers
-      ${assets.length ? `the ${H.esc(String(assets.length))} contract${assets.length === 1 ? '' : 's'} this deployment has promoted`
-                      : 'only the contracts this deployment has promoted'},
-      not the chain — so a contract missing below is one nobody here indexes, which is a different
-      thing from a balance of zero. The file is true as of block
-      ${H.esc(fmtInt(m.to_block || 0))}; anything newer than that is not in it yet. And roughly one
-      hit in 256 is the filter guessing, which is why every hit is confirmed by reading the balance
-      on chain.
-    </p>
-    <div class="row" style="gap:10px; margin:16px 0 0; flex-wrap:wrap">
+    <div class="label" style="margin-bottom:10px">the filter this deployment publishes</div>
+    <div class="kvgrid" id="private-facts" style="gap:22px; margin-bottom:16px"></div>
+    <div class="row" style="gap:10px; margin:0; flex-wrap:wrap">
       <button class="btn btn-primary btn-sm" id="private-go">Ask the filter</button>
       <span class="hint" id="private-status"></span>
     </div>
@@ -121,9 +109,9 @@ async function render() {
   ];
   $('private-facts').innerHTML = facts.map(([v, k, note]) => `
     <div>
-      <div style="font-size:26px; font-variant-numeric:tabular-nums">${H.esc(v)}</div>
-      <div class="kicker" style="margin-top:4px">${H.esc(k)}</div>
-      <div class="hint" style="margin-top:2px">${H.esc(note)}</div>
+      <div class="k">${H.esc(k)}</div>
+      <div class="v" style="font-size:20px">${H.esc(v)}</div>
+      <div class="hint" style="margin-top:3px; font-size:11.5px">${H.esc(note)}</div>
     </div>`).join('');
 
   $('private-go').addEventListener('click', () => run(m).catch(e => {
