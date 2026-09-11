@@ -495,7 +495,9 @@
   .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; align-items: start; }
   .stack { display: flex; flex-direction: column; gap: 14px; }
   .cmd { background: var(--dark-2); }
-  .cmd .label { color: rgba(255,255,255,.55); margin-bottom: 13px; }
+  .cmd .label { font-size: 9.5px; color: rgba(255,255,255,.55); margin-bottom: 13px; }
+  /* A Solidity identifier inside an uppercase label keeps its own case: VERIFYINCLUSION is not a function anyone can call. */
+  .label .ident { text-transform: none; }
   .cmd .code { font: 400 11.5px/1.9 var(--mono); color: var(--dark-ink); word-break: break-all; white-space: pre-wrap; }
   .split-rail { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 22px; align-items: start; }
   .rail .label { margin-bottom: 10px; }
@@ -1084,7 +1086,7 @@
       has to be believed — which is exactly why publishing it permissionlessly is safe.</p>
     <div class="grid2">
       <div class="dark cmd">
-        <div class="label">recompute the leaf, replay the proof, call verifyInclusion on-chain</div>
+        <div class="label">recompute the leaf, replay the proof, call <span class="ident">verifyInclusion</span> on-chain</div>
         <div class="code" id="verify-cmd">evmscan-verify -epoch &lt;id&gt; \
   -account &lt;0x…&gt;
 
@@ -1175,7 +1177,6 @@ evmscan-verify -ens \
 
     <div class="foot">
       <span id="footer-counts">evm-scan · permissionless asset indexing for the access layer, built on your own node</span>
-      <span>keys · a promote · s spam · k skip · u undo</span>
     </div>
   </div>
 </section>
@@ -1431,12 +1432,11 @@ async function loadStatus() {
     renderStages(c);
     renderEnsCard();
 
-    const spam = c.candidates_spam ?? 0;
-    const ready = c.candidates_promotable ?? 0;
+    // The counts live in the stages above; the foot only says which chain and block
+    // the page is true for, so the tagline stays legible at the end of the scroll.
     $('footer-counts').textContent =
-      `evm-scan · ${esc(c.name || 'chain ' + c.chain_id)} · block ${num(c.head_block)} · ` +
-      `${num(c.assets)} indexed · ${num(spam)} spam · ${num(ready)} awaiting a verdict · ` +
-      `${num(c.accounts)} accounts · ${num(c.interactions)} interactions`;
+      'evm-scan · permissionless asset indexing for the access layer, built on your own node · ' +
+      `${c.name || 'chain ' + c.chain_id} · block ${num(c.head_block)}`;
     renderClaims();
 
     const p = c.pricing || {};
@@ -1533,7 +1533,9 @@ function renderClaims() {
 
   const fromEpoch = fin || EPOCHS[0];
   const acct = WALLET_ADDR || '<0x…>';
-  const ens = (WALLET_HINT || '<hex>.hints.<parent>');
+  // Before a lookup the name is a shape; the parent is still real when the daemon has one.
+  const parent = REG && REG.ens_parent;
+  const ens = WALLET_HINT || (parent ? `<hex>.hints.${parent}` : '<hex>.hints.<parent>');
   $('verify-cmd').textContent =
     `evmscan-verify -epoch ${fromEpoch ? (fromEpoch.onchain_epoch_id ?? fromEpoch.id) : '<id>'} \\\n  -account ${acct}\n\n` +
     `evmscan-verify -ens \\\n  ${ens}`;
