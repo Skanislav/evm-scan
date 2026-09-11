@@ -196,6 +196,11 @@ type Discovery struct {
 type Pricing struct {
 	// Enabled defaults to true. Pricing that has no source at all is inert anyway.
 	Enabled *bool `yaml:"enabled"`
+	// Note is why this chain has no prices, in the operator's words, for a chain
+	// where pricing is off or has nothing to read. /v1/status carries it and the
+	// page shows it where a value would otherwise be, so an empty column reads as
+	// a decision rather than a gap. Ignored when pricing has sources.
+	Note string `yaml:"note"`
 	// UseDefaults merges the chain's built-in sources under this config. Default true.
 	UseDefaults *bool `yaml:"use_defaults"`
 	// FeedRegistry is Chainlink's Feed Registry (mainnet only).

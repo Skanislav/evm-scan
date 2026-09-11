@@ -326,7 +326,11 @@
       Name it and the <code>on.eth</code> registry answers with its chain id — one
       <code>eth_call</code> on mainnet, no gateway. The registry deliberately publishes no
       endpoints, because an endpoint URL is where an API key lives, so that part stays yours
-      to supply.
+      to supply. Starting a network is an operator’s action: the request carries the bearer
+      token kept on the accounts tab (<code>EVMSCAN_API_TOKEN</code> on the deployment), and
+      without one the daemon answers 401 and this page asks for it. A network added this way
+      starts <strong>unverified</strong> and stays out of every commitment until an operator
+      says otherwise.
     </p>
     <div class="row">
       <input class="input" type="text" id="chain-name" style="flex:1 1 280px" spellcheck="false"
@@ -364,7 +368,9 @@
         you say so deliberately.</div>
     </div>
   </div>
-  <div class="hint" id="add-chain-off" hidden style="margin-top:14px">This deployment does not allow adding networks at runtime.</div>
+  <div class="hint" id="add-chain-off" hidden style="margin-top:14px">This deployment cannot add networks at
+    runtime: it runs without the supervisor that dials and starts one, so <code>POST /v1/chains</code> answers
+    501 here.</div>
 
   <div id="holdings-wrap" hidden>
     <div style="display:flex; align-items:baseline; justify-content:space-between; gap:25px; flex-wrap:wrap; margin-top:40px">
@@ -881,11 +887,13 @@ async function loadStatus() {
       : `<strong>Heads up:</strong> this node is remote (<code>${esc(c.node_transport)}</code>), so a third party sees every query.`)
       + (p.enabled
         ? ` Prices are discovered on-chain from ${sources}, against ${p.quote_tokens} quote token${p.quote_tokens === 1 ? '' : 's'}.`
-        : ' No on-chain price sources are configured for this chain, so nothing here is valued.');
+        : ` Nothing here is valued: ${esc(pricingWhy(p))}`);
 
-    $('price-line').textContent = p.enabled
+    const line = $('price-line');
+    line.textContent = p.enabled
       ? `prices read on-chain · ${p.twap_window || ''} TWAP window · history floor ${num(c.history_floor)}`
-      : `no price sources on this chain · history floor ${num(c.history_floor)}`;
+      : `not priced on this deployment · history floor ${num(c.history_floor)}`;
+    line.title = p.enabled ? '' : pricingWhy(p);
 
     renderRequestSection();
   } catch (e) { showErr('cand-err', e); }
@@ -935,7 +943,9 @@ function renderChains() {
         return `<button class="chip ${c.chain_id === active ? 'on' : ''} ${c.running ? '' : 'down'}"
             data-chain="${c.chain_id}" title="${esc(why)}">
           ${esc(c.name || 'chain ' + c.chain_id)}
-          <span class="trust ${esc(c.trust)}">${esc(c.trust)}</span>
+          <span class="trust ${esc(c.trust)}" title="${c.trust === 'verified'
+            ? 'a node this deployment runs, or a light client that verifies what it serves: its logs may back an on-chain commitment'
+            : 'served by somebody else’s RPC: indexed and queryable, never committed on-chain; an operator promotes it with PATCH /v1/chains/{id} {&quot;trust&quot;:&quot;verified&quot;}'}">${esc(c.trust)}</span>
           <span class="sub">${c.chain_id}${c.head_block ? ' · head ' + num(c.head_block) : ''}${c.running ? '' : ' · stopped'}</span>
         </button>`;
       }).join('')
@@ -2440,13 +2450,23 @@ async function heldBalances(addr, addrs) {
     });
 }
 
+// Why a chain carries no prices: the operator's own words when they left any, the
+// daemon's derived reason otherwise. Both arrive on /v1/status; neither is guessed here.
+function pricingWhy(p) {
+  return (p && (p.note || p.reason)) || 'no on-chain price sources are configured for this chain';
+}
+
 function renderWalletTotals() {
   const v = VALUATION || {};
   const unpriced = HOLDINGS.filter(h => !(h.price && h.price.usd)).length;
+  const p = STATUS && STATUS.pricing;
+  const off = p && !p.enabled;
   $('wallet-totals').innerHTML = [
-    [v.total_usd !== undefined ? usd(v.total_usd) : '—', 'valuation',
-      v.confidence ? `weakest confidence: ${esc(v.confidence)}` : 'nothing priced'],
-    [`${unpriced} of ${HOLDINGS.length}`, 'without a price', 'reported, never guessed'],
+    off
+      ? ['not priced', 'valuation', esc(pricingWhy(p))]
+      : [v.total_usd !== undefined ? usd(v.total_usd) : '—', 'valuation',
+        v.confidence ? `weakest confidence: ${esc(v.confidence)}` : 'nothing priced'],
+    [`${unpriced} of ${HOLDINGS.length}`, 'without a price', off ? 'prices are off on this deployment' : 'reported, never guessed'],
     [num(v.as_of_block || (STATUS && STATUS.head_block)), 'as of block', 'read at head, not derived'],
   ].map(([val, label, note]) => `<div>
       <div class="figure" style="font-size:32px">${val}</div>
