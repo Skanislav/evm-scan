@@ -2711,6 +2711,21 @@ async function resolveViaUR(name) {
 // act on. The Universal Resolver first; the mainnet library only for a name it reported
 // as offchain or an endpoint that could not answer — and never for a name it said does
 // not exist, because a second opinion on a definite "no" would just be a slower "no".
+// GNS (.gwei) and WNS (.wei) are not ENS. The Universal Resolver has never heard of
+// them and answers "no such name" for every one, which the rule above then takes as
+// final — so skas.gwei came back "does not resolve to an address" while the library
+// that does know GNS resolved it perfectly well and was never asked.
+//
+// The rule is right and its scope was wrong: ENS's "no" is definite about a name ENS
+// serves, and out of scope for one it does not. So these go straight to the library,
+// which is both correct and one round trip shorter than asking anyway.
+//
+// Hardcoded rather than read from the library's RESERVED_SUFFIXES, because the point
+// is to decide *before* importing it. The library stays the authority on what it can
+// resolve; this is only the routing.
+const NON_ENS_SUFFIXES = ['.gwei', '.wei'];
+const isNonENSName = (n) => NON_ENS_SUFFIXES.some(s => n.toLowerCase().endsWith(s));
+
 async function resolveAccount(input) {
   if (ADDRESS_RE.test(input)) return { address: input };
   if (!/\./.test(input)) throw new Error(`"${input}" is neither an address nor a name`);
@@ -2720,7 +2735,7 @@ async function resolveAccount(input) {
 
   let offchain = false, fellBack = null;
   try {
-    const r = await resolveViaUR(input);
+    const r = isNonENSName(input) ? null : await resolveViaUR(input);
     if (r) {
       nameCache.set(key, r);
       $('name-rpc-row').hidden = true;
