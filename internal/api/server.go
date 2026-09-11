@@ -57,7 +57,11 @@ type Deps struct {
 	StopChain func(ctx context.Context, chainID uint64) error
 	// ENS resolves chain names through the on.eth registry. Nil where the
 	// deployment has no Ethereum mainnet endpoint to ask.
-	ENS               *ens.Resolver
+	ENS *ens.Resolver
+	// ENSParent is the name a HintResolver serves the index under (docs/ENS.md).
+	// Set, it lets account responses carry the account's hint name; the daemon
+	// never resolves anything through it.
+	ENSParent         string
 	Registry          *hintreg.Client
 	RegistryChainID   uint64
 	Publisher         *hintreg.Publisher

@@ -2,6 +2,7 @@ package chain
 
 import (
 	"context"
+	"fmt"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum"
@@ -26,9 +27,27 @@ type Sender interface {
 
 var _ Sender = (*Node)(nil)
 
+// PendingNonceAt asks for the account's nonce at the pending block and, when the
+// node cannot answer for that tag, at the latest one.
+//
+// The fallback exists for Helios, which has no mempool and maps the pending tag to
+// no block at all ("block not found"), so the default nonce lookup of every wallet
+// library fails before a transaction is ever sent. Latest is the
+// right answer for this daemon regardless: it is the only sender from its key and
+// never starts a submission while one is in flight, so nothing of its own can be
+// waiting in a mempool for latest to miss.
 func (n *Node) PendingNonceAt(ctx context.Context, account common.Address) (uint64, error) {
 	n.meter.add("eth_getTransactionCount")
-	return n.eth.PendingNonceAt(ctx, account)
+	nonce, err := n.eth.PendingNonceAt(ctx, account)
+	if err == nil || ctx.Err() != nil {
+		return nonce, err
+	}
+	n.meter.add("eth_getTransactionCount")
+	latest, lerr := n.eth.NonceAt(ctx, account, nil)
+	if lerr != nil {
+		return 0, fmt.Errorf("pending nonce: %w (latest: %v)", err, lerr)
+	}
+	return latest, nil
 }
 
 func (n *Node) SuggestGasPrice(ctx context.Context) (*big.Int, error) {

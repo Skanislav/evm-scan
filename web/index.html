@@ -399,7 +399,7 @@
     <button class="btn btn-ghost" id="chain-rpc-clear">Use the daemon</button>
   </div>
   <div class="row" id="name-rpc-row" hidden style="margin-top:10px">
-    <input class="input" type="text" id="name-rpc" style="flex:1 1 320px" spellcheck="false" autocomplete="off" placeholder="https://… mainnet RPC for name resolution">
+    <input class="input" type="text" id="name-rpc" style="flex:1 1 320px" spellcheck="false" autocomplete="off" placeholder="https://… mainnet RPC for the name library (offchain names, .gwei, .wei)">
     <button class="btn btn-secondary" id="name-rpc-save">Save</button>
     <button class="btn btn-ghost" id="name-rpc-reset">Default</button>
   </div>
@@ -522,8 +522,9 @@
   <div class="split split-rail">
     <div>
       <p class="prose" style="margin:0">Accounts are keyed by address; the index holds no names for them.
-        A reverse ENS record is resolved in your browser for the rows on screen, and stands in for the
-        address only once the forward record agrees with it.</p>
+        A reverse ENS record is resolved in your browser for the rows on screen — through the Universal
+        Resolver on your RPC, or a public one for this chain — and stands in for the address only once the
+        forward record agrees with it.</p>
       <div class="row" style="margin-top:22px">
         <input class="input" type="text" id="accounts-q" style="flex:0 1 300px" spellcheck="false"
                autocomplete="off" placeholder="0x… address, or a prefix">
@@ -1575,7 +1576,12 @@ async function rpc(url, method, params) {
   });
   if (!res.ok) throw new Error(`${method}: ${res.status} ${res.statusText}`);
   const body = await res.json();
-  if (body.error) throw new Error(`${method}: ${body.error.message || JSON.stringify(body.error)}`);
+  if (body.error) {
+    // Revert data rides along so a caller can tell a resolver's "no such name" from
+    // an endpoint that fell over, by selector rather than by message text.
+    throw Object.assign(new Error(`${method}: ${body.error.message || JSON.stringify(body.error)}`),
+      { data: body.error.data });
+  }
   return body.result;
 }
 
@@ -1639,10 +1645,19 @@ function openNameRpc() {
 // --------------------------------------------------------------------------
 // Names
 //
-// ENS, GNS (.gwei) and WNS (.wei) all live on Ethereum mainnet, so this asks a mainnet
-// RPC regardless of which chain the deployment indexes — the one query on this page
-// that leaves the daemon's own node, which is why it is disclosed next to the result.
-// Loaded lazily and pinned: nothing is fetched until someone types a name or opens the
+// Resolved here, in the browser, never by the daemon. A name only ever becomes an
+// address before this page asks the API anything, and the API has no endpoint that
+// takes one.
+//
+// Both directions go through ENS's Universal Resolver — the same contract at the same
+// address on mainnet (ENSv1) and on Sepolia (ENSv2 beta), speaking the same interface
+// — as one eth_call on the reader's RPC: the endpoint they named for the lens, else a
+// public one for the active chain. So a Sepolia deployment resolves Sepolia names and
+// a mainnet one mainnet names, and nothing about a name leaves the node the reader
+// chose. Only when a name lives behind a CCIP-Read gateway, or that RPC cannot answer,
+// does this fall back to the mainnet library, which also knows GNS (.gwei) and WNS
+// (.wei); the result line says which path answered and through which host. Libraries
+// load lazily and pinned: nothing is fetched until someone types a name or opens the
 // accounts tab, and an unpinned CDN import would be a moving dependency in the page.
 // --------------------------------------------------------------------------
 const NAMES_MODULE = 'https://esm.sh/@1001-digital/ethereum-names@0.6.0';
@@ -1651,6 +1666,25 @@ const NAME_RPC_KEY = 'evmscan.name-rpc';
 const DEFAULT_NAME_RPC = 'https://ethereum-rpc.publicnode.com';
 const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
 
+// ENS deploys the Universal Resolver at one address everywhere it exists. Public
+// endpoints per chain are the fallback when the reader has not named their own.
+const UNIVERSAL_RESOLVER = '0xeEeEEEeE14D718C2B47D9923Deab1335E144EeEe';
+const PUBLIC_RPC = {
+  1: 'https://ethereum-rpc.publicnode.com',
+  11155111: 'https://ethereum-sepolia-rpc.publicnode.com',
+};
+// ENSIP-19: mainnet and its testnets use coin type 60; every other chain derives one.
+function coinTypeFor(chainId) {
+  return (chainId === 1 || chainId === 11155111) ? 60n : (0x80000000n | BigInt(chainId));
+}
+// The RPC the Universal Resolver is asked on: the reader's own, else a public one for
+// the active chain. Null means the chain has no ENS this page knows how to reach.
+function namesRpc() {
+  return chainRpc() || PUBLIC_RPC[activeChainID()] || null;
+}
+
+// The mainnet library's endpoint, kept apart from the lens RPC because it must be
+// mainnet whatever chain is being indexed.
 function nameRpc() {
   try { return localStorage.getItem(NAME_RPC_KEY) || DEFAULT_NAME_RPC; } catch { return DEFAULT_NAME_RPC; }
 }
@@ -1677,19 +1711,112 @@ async function resolver() {
   return names;
 }
 
+// NFC + lowercase, one trailing dot trimmed, no empty or blank labels. Deliberately the
+// same transform as internal/ens.Normalize and the mirror's normalizeName, and
+// deliberately not ENSIP-15: the form actually hashed is echoed in the result line so a
+// name that the ENS app would render differently is visible rather than silent.
+function normalizeName(name) {
+  const n = name.trim().replace(/\.$/, '').normalize('NFC').toLowerCase();
+  if (!n) throw new Error('empty name');
+  const labels = n.split('.');
+  if (labels.some(l => !l || /\s/.test(l))) throw new Error(`"${name}" has an empty or blank label`);
+  return n;
+}
+
+// Universal Resolver profile calls, as `resolve(bytes name, bytes data)` wants them.
+const UR_ABI = [
+  { type: 'function', name: 'resolve', stateMutability: 'view',
+    inputs: [{ name: 'name', type: 'bytes' }, { name: 'data', type: 'bytes' }],
+    outputs: [{ name: 'result', type: 'bytes' }, { name: 'resolver', type: 'address' }] },
+  { type: 'function', name: 'reverse', stateMutability: 'view',
+    inputs: [{ name: 'lookupAddress', type: 'bytes' }, { name: 'coinType', type: 'uint256' }],
+    outputs: [{ name: 'primary', type: 'string' }, { name: 'resolver', type: 'address' }, { name: 'reverseResolver', type: 'address' }] },
+  { type: 'function', name: 'addr', stateMutability: 'view',
+    inputs: [{ name: 'node', type: 'bytes32' }], outputs: [{ name: '', type: 'address' }] },
+];
+// Revert selectors the Universal Resolver raises; matched against the revert data a
+// node returns (rpc() surfaces it as err.data) with the message as a fallback.
+const SEL_RESOLVER_NOT_FOUND = '0x77209fe8';
+const SEL_OFFCHAIN_LOOKUP = '0x556f1830';
+const SEL_REVERSE_MISMATCH = '0xef9c03ce';
+function revertHas(e, sel) {
+  const d = String((e && e.data) || '');
+  return d.startsWith(sel) || String((e && e.message) || '').includes(sel);
+}
+
+// DNS wire format plus namehash, the two encodings a Universal Resolver call needs.
+function dnsEncode(viem, norm) {
+  const enc = new TextEncoder();
+  let dns = '0x';
+  for (const l of norm.split('.')) {
+    const b = enc.encode(l);
+    if (b.length > 63) throw new Error(`label "${l}" is longer than 63 bytes`);
+    dns += b.length.toString(16).padStart(2, '0') + viem.toHex(b).slice(2);
+  }
+  return dns + '00';
+}
+function namehash(viem, norm) {
+  let node = '0x' + '00'.repeat(32);
+  for (const l of norm.split('.').reverse()) {
+    node = viem.keccak256(viem.concat([node, viem.keccak256(viem.stringToBytes(l))]));
+  }
+  return node;
+}
+
+// Forward resolution through the Universal Resolver on namesRpc(). Returns null when
+// there is no RPC to ask for this chain; throws with `notFound` or `offchain` set when
+// the resolver said so, and plainly when the endpoint itself failed.
+async function resolveViaUR(name) {
+  const url = namesRpc();
+  if (!url) return null;
+  const viem = await import(VIEM_MODULE);
+  const norm = normalizeName(name);
+  const inner = viem.encodeFunctionData({ abi: UR_ABI, functionName: 'addr', args: [namehash(viem, norm)] });
+  const data = viem.encodeFunctionData({ abi: UR_ABI, functionName: 'resolve', args: [dnsEncode(viem, norm), inner] });
+  const notFound = () => Object.assign(new Error(`${norm} does not resolve to an address`), { notFound: true });
+  let out;
+  try {
+    out = await rpc(url, 'eth_call', [{ to: UNIVERSAL_RESOLVER, data }, 'latest']);
+  } catch (e) {
+    if (revertHas(e, SEL_RESOLVER_NOT_FOUND)) throw notFound();
+    if (revertHas(e, SEL_OFFCHAIN_LOOKUP)) throw Object.assign(new Error(`${norm} resolves offchain`), { offchain: true });
+    throw e;
+  }
+  const [result] = viem.decodeFunctionResult({ abi: UR_ABI, functionName: 'resolve', data: out });
+  if (!result || result.length < 66) throw notFound();
+  const address = viem.getAddress('0x' + result.slice(-40));
+  if (/^0x0{40}$/.test(address)) throw notFound();
+  return { address, name: norm, via: 'rpc', rpc: url, chain: activeChainID() };
+}
+
 // Returns the address for whatever was typed, or throws with something a person can
-// act on. `resolve()` would be the shorter call, but it answers null both for a name
-// that does not exist and for an RPC that cannot serve the universal resolver —
-// reporting a broken endpoint as "no such name" is a wrong answer, not a slow one.
-// `lookup()` keeps the two apart, so this uses that.
+// act on. The Universal Resolver first; the mainnet library only for a name it reported
+// as offchain or an endpoint that could not answer — and never for a name it said does
+// not exist, because a second opinion on a definite "no" would just be a slower "no".
 async function resolveAccount(input) {
   if (ADDRESS_RE.test(input)) return { address: input };
   if (!/\./.test(input)) throw new Error(`"${input}" is neither an address nor a name`);
 
-  const url = nameRpc();
-  const key = `${url}|${input.toLowerCase()}`;
+  const key = `${activeChainID()}|${namesRpc()}|${nameRpc()}|${input.toLowerCase()}`;
   if (nameCache.has(key)) return nameCache.get(key);
 
+  let offchain = false, fellBack = null;
+  try {
+    const r = await resolveViaUR(input);
+    if (r) {
+      nameCache.set(key, r);
+      $('name-rpc-row').hidden = true;
+      return r;
+    }
+  } catch (e) {
+    if (e.notFound) throw e;
+    if (e.offchain) offchain = true; else fellBack = e;
+  }
+
+  // `lookup()` rather than `resolve()`: the latter answers null both for a name that
+  // does not exist and for an RPC that cannot serve the universal resolver, and
+  // reporting a broken endpoint as "no such name" is a wrong answer, not a slow one.
+  const url = nameRpc();
   let r;
   try {
     r = await (await resolver()).lookup(input);
@@ -1701,13 +1828,15 @@ async function resolveAccount(input) {
     throw new Error(`${input} does not resolve to an address`);
   }
   if (r.status !== 'resolved' || !r.address) {
-    // Not the same as not-found: this endpoint could not answer. Offer the way out
-    // rather than only naming the problem.
     const why = (r.matches && r.matches.find(m => m.error)?.error?.shortMessage) || r.status;
     openNameRpc();
     throw new Error(`could not resolve ${input} through ${new URL(url).host}: ${why}. Try another mainnet RPC below.`);
   }
-  const out = { address: r.address, name: r.name || input, system: r.system, verified: r.verified, rpc: url };
+  const out = {
+    address: r.address, name: r.name || input, system: r.system, verified: r.verified,
+    via: 'library', rpc: url, chain: 1, offchain,
+    fellBack: fellBack ? String(fellBack.message || fellBack) : null,
+  };
   nameCache.set(key, out);
   $('name-rpc-row').hidden = true;
   return out;
@@ -1715,43 +1844,85 @@ async function resolveAccount(input) {
 
 // The other direction, for the accounts table. A reverse record is a claim the address
 // makes about itself and anyone can point one at a name they do not control, so the
-// forward record has to agree before the name stands in for the address.
+// forward record has to agree before the name stands in for the address. The Universal
+// Resolver's reverse() checks that itself and reverts ReverseAddressMismatch when it
+// fails; the library path checks it by hand.
 //
 // Four answers, and they are different things. `cached` — reverse answered and forward
 // points back. `no record` — nothing claimed. `failed` — a claim the forward record
 // contradicts, so the address stands for itself. `unavailable` — the endpoint could
 // not say, which is not the same as an absent name.
 async function reverseName(addr) {
-  const key = `${nameRpc()}|${addr.toLowerCase()}`;
+  const key = `${activeChainID()}|${namesRpc()}|${nameRpc()}|${addr.toLowerCase()}`;
   if (reverseCache.has(key)) return reverseCache.get(key);
-  let out;
-  try {
-    await resolver();
-    const name = await viemClient.getEnsName({ address: addr });
-    if (!name) {
-      out = { state: 'no record' };
-    } else {
-      const fwd = await viemClient.getEnsAddress({ name });
-      out = (fwd && fwd.toLowerCase() === addr.toLowerCase())
-        ? { state: 'cached', name }
-        : { state: 'failed', name };
+  let out = null;
+
+  const url = namesRpc();
+  if (url) {
+    try {
+      const viem = await import(VIEM_MODULE);
+      const data = viem.encodeFunctionData({ abi: UR_ABI, functionName: 'reverse', args: [addr, coinTypeFor(activeChainID())] });
+      const res = await rpc(url, 'eth_call', [{ to: UNIVERSAL_RESOLVER, data }, 'latest']);
+      const [primary] = viem.decodeFunctionResult({ abi: UR_ABI, functionName: 'reverse', data: res });
+      out = primary ? { state: 'cached', name: primary } : { state: 'no record' };
+    } catch (e) {
+      if (revertHas(e, SEL_REVERSE_MISMATCH)) out = { state: 'failed', name: '' };
+      else if (revertHas(e, SEL_RESOLVER_NOT_FOUND)) out = { state: 'no record' };
+      // Anything else: the endpoint could not say; let the library try.
     }
-  } catch {
-    out = { state: 'unavailable' };
+  }
+
+  if (!out) {
+    try {
+      await resolver();
+      const name = await viemClient.getEnsName({ address: addr });
+      if (!name) {
+        out = { state: 'no record' };
+      } else {
+        const fwd = await viemClient.getEnsAddress({ name });
+        out = (fwd && fwd.toLowerCase() === addr.toLowerCase())
+          ? { state: 'cached', name }
+          : { state: 'failed', name };
+      }
+    } catch {
+      out = { state: 'unavailable' };
+    }
   }
   reverseCache.set(key, out);
   return out;
 }
 
+function chainLabel(id) {
+  return { 1: 'mainnet', 11155111: 'sepolia', 8453: 'base', 10: 'optimism', 42161: 'arbitrum' }[id] || `chain ${id}`;
+}
+
+// The line under the search box: what was typed, what it became, and through which
+// path — plus, when the deployment has a HintResolver attached, the ENS name under
+// which this account's index can be read by any ENS client.
 function showResolved(r) {
   const note = $('name-note');
-  if (!r || !r.name) { note.hidden = true; note.textContent = ''; return; }
-  note.innerHTML = `<strong>${esc(r.name)}</strong> → <span class="addr">${esc(r.address)}</span> · `
-    + `${esc((r.system || 'ens').toUpperCase())} on mainnet via <code>${esc(new URL(r.rpc).host)}</code>`
-    + `${r.verified ? '' : ' <span class="empty">(unverified: the name does not point back at this address)</span>'}`
-    + ` <button class="btn btn-ghost btn-sm" id="name-rpc-edit">change RPC</button>`;
+  if (!r || (!r.name && !r.hintName)) { note.hidden = true; note.textContent = ''; return; }
+  const parts = [];
+  if (r.name) {
+    let where;
+    if (r.via === 'rpc') {
+      where = `${esc(chainLabel(r.chain))} via <code>${esc(new URL(r.rpc).host)}</code>, in your browser`;
+    } else {
+      where = `${esc((r.system || 'ens').toUpperCase())} on mainnet via <code>${esc(new URL(r.rpc).host)}</code>`
+        + (r.offchain ? ' <span class="empty">(an offchain name: the library followed its CCIP-Read gateway)</span>' : '')
+        + (r.fellBack ? ` <span class="empty">(the chain RPC could not answer: ${esc(r.fellBack)})</span>` : '');
+    }
+    parts.push(`<strong>${esc(r.name)}</strong> → <span class="addr">${esc(r.address)}</span> · ${where}`
+      + `${r.verified === false ? ' <span class="empty">(unverified: the name does not point back at this address)</span>' : ''}`
+      + (r.via === 'library' ? ' <button class="btn btn-ghost btn-sm" id="name-rpc-edit">change RPC</button>' : ''));
+  }
+  if (r.hintName) {
+    parts.push(`as an ENS record: <code>${esc(r.hintName)}</code> (text key <code>evmscan.contracts</code>, verified on-chain)`);
+  }
+  note.innerHTML = parts.join('<br>');
   note.hidden = false;
-  $('name-rpc-edit').addEventListener('click', openNameRpc);
+  const edit = document.getElementById('name-rpc-edit');
+  if (edit) edit.addEventListener('click', openNameRpc);
 }
 
 // --------------------------------------------------------------------------
@@ -1801,6 +1972,8 @@ async function lookup() {
     showResolved(resolved.name ? resolved : null);
 
     const r = await api(onChain(`/v1/accounts/${addr}?prices=true`));
+    // The daemon formats the hint name from registry.ens_parent; it resolves nothing.
+    if (r.hint_name) { resolved.hintName = r.hint_name; showResolved(resolved); }
     const indexed = r.assets || [];
     VALUATION = indexed.length ? r.valuation : null;
 
@@ -1998,7 +2171,7 @@ function renderAccounts() {
   $('ens-line').textContent = ACCOUNTS.length ? `${named} named of ${ACCOUNTS.length} shown` : '';
 }
 
-// Reverse lookups are round trips against a public mainnet RPC, so they are done one
+// Reverse lookups are round trips against an RPC the page does not own, so they are done one
 // at a time, only for the rows on screen, and only once per address; the table
 // re-renders as each lands rather than waiting for all of them.
 let resolving = false;
@@ -2129,11 +2302,13 @@ $('op-token-save').addEventListener('click', () => {
 $('chain-rpc-open').addEventListener('click', openChainRpc);
 $('chain-rpc-save').addEventListener('click', () => {
   setChainRpc($('chain-rpc').value.trim());
+  nameCache.clear(); reverseCache.clear();
   $('chain-rpc-row').hidden = true;
   if (WALLET_ADDR) lookup();
 });
 $('chain-rpc-clear').addEventListener('click', () => {
   setChainRpc('');
+  nameCache.clear(); reverseCache.clear();
   $('chain-rpc-row').hidden = true;
   $('rpc-note').hidden = true;
   if (WALLET_ADDR) lookup();

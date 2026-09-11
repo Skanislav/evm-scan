@@ -99,6 +99,10 @@ type Registry struct {
 	AutoPublishInterval Duration `yaml:"auto_publish_interval"`
 	// CommitmentURI is recorded alongside a published root, pointing at the full table.
 	CommitmentURI string `yaml:"commitment_uri"`
+	// ENSParent is the ENS name a HintResolver is bound under (e.g. "evmscan.eth"),
+	// so the API and the page can print each account's hint name
+	// <hex>.hints.<parent>. Informational: nothing resolves through it here.
+	ENSParent string `yaml:"ens_parent"`
 	// Publisher controls how commitments reach the chain.
 	Publisher PublisherCfg `yaml:"publisher"`
 }

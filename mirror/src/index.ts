@@ -15,6 +15,7 @@
  * - `state` — what a mirror stores: immutable `(account, sinceEpoch)` versions.
  * - `verify` — rebuilding a past epoch's roots and comparing with the chain.
  * - `registry` — reading the finalized commitment through an injected `eth_call`.
+ * - `names` — ENS names to addresses (and back) through the same `eth_call`.
  * - `ingest` — snapshot in, version rows out, on the publisher's side.
  * - `store` — the persistence seam, and a `MemoryStore`.
  * - `evolu` — the sync binding. The only Evolu-aware file; see docs/LOCALFIRST.md.
@@ -73,6 +74,28 @@ export {
   type EthCall,
   type LatestFinalized,
 } from "./registry.js";
+
+export {
+  coinTypeFor,
+  decodeResolveAddr,
+  decodeReverse,
+  dnsEncode,
+  encodeResolveAddr,
+  encodeReverse,
+  NameNotFoundError,
+  namehash,
+  normalizeName,
+  OffchainNameError,
+  resolveName,
+  ResolverError,
+  revertData,
+  ReverseMismatchError,
+  reverseName,
+  UNIVERSAL_RESOLVER,
+  type Resolved,
+  type ResolveOptions,
+  type Reversed,
+} from "./names.js";
 
 export {
   fetchSnapshot,

@@ -27,6 +27,7 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/crypto"
 )
 
 // Method and callback names in HintRegistry.
@@ -105,17 +106,20 @@ type Lookup struct {
 	ExtraData []byte
 }
 
-// ParseLookup decodes revert data as OffchainLookup. ok is false when the data is
-// some other error.
-func ParseLookup(regABI abi.ABI, revertData []byte) (*Lookup, bool, error) {
-	ev, found := regABI.Errors[ErrorName]
-	if !found {
-		return nil, false, errors.New("ccip: ABI has no OffchainLookup error")
-	}
-	if len(revertData) < 4 || !bytes.Equal(revertData[:4], ev.ID[:4]) {
+// OffchainLookup's shape is fixed by ERC-3668, so it can be decoded without any
+// contract's ABI. The selector is derived from the signature, never pasted.
+var (
+	offchainLookupArgs     = mustArgs("address", "string[]", "bytes", "bytes4", "bytes")
+	OffchainLookupSelector = [4]byte(crypto.Keccak256([]byte("OffchainLookup(address,string[],bytes,bytes4,bytes)"))[:4])
+)
+
+// ParseOffchainLookup decodes revert data as ERC-3668 OffchainLookup from any
+// contract. ok is false when the data is some other error.
+func ParseOffchainLookup(revertData []byte) (*Lookup, bool, error) {
+	if len(revertData) < 4 || !bytes.Equal(revertData[:4], OffchainLookupSelector[:]) {
 		return nil, false, nil
 	}
-	vals, err := ev.Inputs.Unpack(revertData[4:])
+	vals, err := offchainLookupArgs.Unpack(revertData[4:])
 	if err != nil {
 		return nil, false, fmt.Errorf("ccip: decode OffchainLookup: %w", err)
 	}
@@ -126,6 +130,19 @@ func ParseLookup(regABI abi.ABI, revertData []byte) (*Lookup, bool, error) {
 	l.Callback, _ = vals[3].([4]byte)
 	l.ExtraData, _ = vals[4].([]byte)
 	return l, true, nil
+}
+
+// ParseLookup decodes revert data as OffchainLookup, checking the selector against
+// the contract's own ABI. ok is false when the data is some other error.
+func ParseLookup(contractABI abi.ABI, revertData []byte) (*Lookup, bool, error) {
+	ev, found := contractABI.Errors[ErrorName]
+	if !found {
+		return nil, false, errors.New("ccip: ABI has no OffchainLookup error")
+	}
+	if len(revertData) < 4 || !bytes.Equal(revertData[:4], ev.ID[:4]) {
+		return nil, false, nil
+	}
+	return ParseOffchainLookup(revertData)
 }
 
 // RevertData pulls the raw revert bytes out of an eth_call error, which both
@@ -203,7 +220,12 @@ func Fetch(ctx context.Context, hc *http.Client, template string, sender common.
 // (override with urls, which win over the contract's list when non-empty), then
 // call back and return the callback's raw result. A call that does not revert is
 // returned as is.
-func Resolve(ctx context.Context, call Caller, regABI abi.ABI, to common.Address, callData []byte, hc *http.Client, urls []string) ([]byte, error) {
+//
+// The callback is looked up in contractABI by the selector the revert named, so the
+// same client serves any ERC-3668 contract whose callback takes
+// (bytes response, bytes extraData): HintRegistry.contractsOfCallback and
+// HintResolver.resolveCallback alike.
+func Resolve(ctx context.Context, call Caller, contractABI abi.ABI, to common.Address, callData []byte, hc *http.Client, urls []string) ([]byte, error) {
 	out, err := call(ctx, to, callData)
 	if err == nil {
 		return out, nil
@@ -212,7 +234,7 @@ func Resolve(ctx context.Context, call Caller, regABI abi.ABI, to common.Address
 	if !ok {
 		return nil, err
 	}
-	lookup, ok, perr := ParseLookup(regABI, revert)
+	lookup, ok, perr := ParseLookup(contractABI, revert)
 	if perr != nil {
 		return nil, perr
 	}
@@ -221,6 +243,10 @@ func Resolve(ctx context.Context, call Caller, regABI abi.ABI, to common.Address
 	}
 	if lookup.Sender != to {
 		return nil, fmt.Errorf("ccip: lookup sender %s is not the callee %s", lookup.Sender.Hex(), to.Hex())
+	}
+	method, err := contractABI.MethodById(lookup.Callback[:])
+	if err != nil {
+		return nil, fmt.Errorf("ccip: contract asked for callback %x, which the ABI does not have", lookup.Callback)
 	}
 	if len(urls) == 0 {
 		urls = lookup.URLs
@@ -236,12 +262,9 @@ func Resolve(ctx context.Context, call Caller, regABI abi.ABI, to common.Address
 			errs = append(errs, ferr)
 			continue
 		}
-		cb, err := regABI.Pack(MethodCallback, resp, lookup.ExtraData)
+		cb, err := contractABI.Pack(method.Name, resp, lookup.ExtraData)
 		if err != nil {
-			return nil, fmt.Errorf("ccip: pack callback: %w", err)
-		}
-		if !bytes.Equal(cb[:4], lookup.Callback[:]) {
-			return nil, fmt.Errorf("ccip: contract asked for callback %x, ABI has %x", lookup.Callback, cb[:4])
+			return nil, fmt.Errorf("ccip: pack callback %s: %w", method.Name, err)
 		}
 		return call(ctx, to, cb)
 	}

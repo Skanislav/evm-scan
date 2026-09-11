@@ -42,6 +42,10 @@ registry:
   # Set > 0 to build and post a commitment on a timer. Identical roots are skipped.
   auto_publish_interval: 0
   commitment_uri: ""
+  # The ENS name a HintResolver is attached under (docs/ENS.md), e.g. "evmscan.eth".
+  # Set, account responses carry the account's hint name <hex>.hints.<parent>.
+  # Informational only: nothing resolves through it here.
+  # ens_parent: ""
   # How commitments reach the chain. "eoa" signs with publisher_key and pays its own
   # gas; the registry pays it back per block of funded coverage once an epoch finalizes
   # and its coverage is claimed.

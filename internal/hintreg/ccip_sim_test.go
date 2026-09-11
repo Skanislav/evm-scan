@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"math/big"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -130,7 +129,7 @@ func TestContractsOfResolvesThroughCCIP(t *testing.T) {
 		}
 		return nil, nil
 	}
-	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/"), "/")
 		if len(parts) != 2 {
 			http.Error(w, "bad path", 400)
@@ -157,8 +156,13 @@ func TestContractsOfResolvesThroughCCIP(t *testing.T) {
 			return
 		}
 		_ = json.NewEncoder(w).Encode(map[string]string{"data": hexutil.Encode(resp)})
-	}))
-	defer gw.Close()
+	})
+	// Served through the client's transport rather than a socket, so the test runs
+	// where binding a port is not allowed.
+	gw := struct {
+		URL    string
+		Client func() *http.Client
+	}{URL: "http://gateway.test", Client: func() *http.Client { return &http.Client{Transport: inProcess{handler}} }}
 	template := gw.URL + "/{sender}/{data}.json"
 
 	data, _ := regABI.Pack("setGateways", []string{template})

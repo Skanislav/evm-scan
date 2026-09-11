@@ -31,6 +31,7 @@ import (
 	"github.com/Skanislav/evm-scan/contracts"
 	"github.com/Skanislav/evm-scan/internal/ccip"
 	"github.com/Skanislav/evm-scan/internal/chain"
+	"github.com/Skanislav/evm-scan/internal/ens"
 	"github.com/Skanislav/evm-scan/internal/hintreg"
 	"github.com/Skanislav/evm-scan/internal/merkle"
 )
@@ -63,8 +64,24 @@ func main() {
 		gateway  = flag.String("gateway", "", "gateway URL template to use with -ccip (default: the registry's own list)")
 		chainID  = flag.Uint64("chain", 0, "chain the index is about, for -ccip (default: the node's own chain)")
 		snap     = flag.String("snapshot", "", "verify a published index table (path, URL, or - for stdin) against the epoch it claims")
+		ensName  = flag.String("ens", "", "resolve a hint name (<hex>.hints.<name>.eth) through ENS and verify its contracts record on-chain")
+		ur       = flag.String("universal-resolver", "0xeEeEEEeE14D718C2B47D9923Deab1335E144EeEe", "Universal Resolver to ask with -ens")
+		textKey  = flag.String("key", "evmscan.contracts", "text record to read with -ens")
 	)
 	flag.Parse()
+
+	// -ens needs a node and a name; the registry is an optional cross-check, so it is
+	// dispatched before the flags the epoch modes require.
+	if *ensName != "" {
+		if *nodeURL == "" {
+			flag.Usage()
+			os.Exit(2)
+		}
+		if err := runENS(*nodeURL, *ensName, *ur, *textKey, *registry, *gateway); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 
 	// -snapshot checks a published table against the chain and proves nothing about
 	// one account, so it wants neither -account nor, strictly, a node: without one it
@@ -96,6 +113,117 @@ func main() {
 	if err := run(*apiURL, *nodeURL, *registry, *epoch, *account); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// runENS reads the index through ENS. The Universal Resolver finds HintResolver for
+// the name, the resolver reverts OffchainLookup at the registry's gateways, and its
+// callback hands the answer to HintRegistry for verification against the latest
+// finalized root. With -registry it also runs contractsOf directly and insists the
+// two lists agree. As with -ccip, nothing here trusts the API.
+func runENS(nodeURL, name, urHex, key, registryAddr, gatewayURL string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	if !common.IsHexAddress(urHex) {
+		return fmt.Errorf("%q is not an address", urHex)
+	}
+	node, err := chain.Dial(ctx, nodeURL, false)
+	if err != nil {
+		return err
+	}
+	defer node.Close()
+	call := func(ctx context.Context, to common.Address, data []byte) ([]byte, error) {
+		return node.CallAtHead(ctx, ethereum.CallMsg{To: &to, Data: data})
+	}
+
+	resolver, node0, offset, err := ens.FindResolver(ctx, call, common.HexToAddress(urHex), name)
+	if err != nil {
+		return fmt.Errorf("findResolver(%s): %w", name, err)
+	}
+	if resolver == (common.Address{}) {
+		return fmt.Errorf("%s has no resolver on its path", name)
+	}
+	fmt.Printf("name       %s\n", name)
+	fmt.Printf("namehash   %s\n", node0.Hex())
+	fmt.Printf("resolver   %s (%d label(s) up)\n", resolver.Hex(), offset)
+
+	art, err := contracts.Load("HintResolver")
+	if err != nil {
+		return err
+	}
+	resABI, err := art.Parsed()
+	if err != nil {
+		return err
+	}
+	var urls []string
+	if gatewayURL != "" {
+		urls = []string{gatewayURL}
+	}
+	text, err := ens.ResolveText(ctx, call, resABI, resolver, name, key, http.DefaultClient, urls)
+	if err != nil {
+		return fmt.Errorf("text(%s, %q): %w", name, key, err)
+	}
+	if key != "evmscan.contracts" {
+		fmt.Printf("%s = %q\n", key, text)
+		return nil
+	}
+	list, err := ens.SplitContracts(text)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("evmscan.contracts: %d contract(s), verified on-chain against the latest finalized epoch\n", len(list))
+	for _, a := range list {
+		fmt.Printf("  %s\n", a.Hex())
+	}
+
+	if registryAddr == "" {
+		return nil
+	}
+	// Cross-check: the registry's own contractsOf must agree with what ENS served.
+	if !common.IsHexAddress(registryAddr) {
+		return fmt.Errorf("%q is not an address", registryAddr)
+	}
+	account, chainID, hasChain, ok := ens.ParseHintName(name)
+	if !ok {
+		return fmt.Errorf("%s does not start with a hex account label", name)
+	}
+	if !hasChain {
+		out, err := call(ctx, resolver, resABI.Methods["defaultChainId"].ID)
+		if err != nil {
+			return err
+		}
+		vals, err := resABI.Unpack("defaultChainId", out)
+		if err != nil {
+			return err
+		}
+		chainID = vals[0].(uint64)
+	}
+	regABI, err := contracts.HintRegistryABI()
+	if err != nil {
+		return err
+	}
+	callData, err := ccip.ContractsOfCallData(regABI, chainID, account)
+	if err != nil {
+		return err
+	}
+	out, err := ccip.Resolve(ctx, call, regABI, common.HexToAddress(registryAddr), callData, http.DefaultClient, urls)
+	if err != nil {
+		return fmt.Errorf("contractsOf cross-check: %w", err)
+	}
+	direct, err := ccip.DecodeContractsOf(regABI, out)
+	if err != nil {
+		return err
+	}
+	if len(direct) != len(list) {
+		return fmt.Errorf("MISMATCH: ENS served %d contracts, contractsOf %d", len(list), len(direct))
+	}
+	for i := range direct {
+		if direct[i] != list[i] {
+			return fmt.Errorf("MISMATCH at %d: ENS %s, contractsOf %s", i, list[i].Hex(), direct[i].Hex())
+		}
+	}
+	fmt.Printf("contractsOf(%d, %s) agrees: same %d contract(s)\n", chainID, account.Hex(), len(direct))
+	return nil
 }
 
 // runCCIP asks the contract itself. contractsOf reverts with an ERC-3668

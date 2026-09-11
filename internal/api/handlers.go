@@ -365,6 +365,9 @@ func (s *Server) accountAssets(w http.ResponseWriter, r *http.Request) {
 		"as_of_block": head,
 		"assets":      out,
 	}
+	if h := s.hintName(account, chainID); h != "" {
+		resp["hint_name"] = h
+	}
 	if p := s.pricerFor(chainID); p != nil && r.URL.Query().Get("prices") != "false" {
 		resp["valuation"] = s.valueAssets(ctx, p, rows, out)
 	}
@@ -450,13 +453,17 @@ func (s *Server) accountContracts(w http.ResponseWriter, r *http.Request) {
 	}
 
 	head, _ := src.HeadBlock(ctx)
-	writeJSON(w, http.StatusOK, map[string]any{
+	resp := map[string]any{
 		"account":     account.Hex(),
 		"chain_id":    chainID,
 		"as_of_block": head,
 		"contracts":   hints,
 		"disclaimer":  "discovery hint over registered assets only; verify against the chain",
-	})
+	}
+	if h := s.hintName(account, chainID); h != "" {
+		resp["hint_name"] = h
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // --------------------------------------------------------------------------

@@ -376,6 +376,17 @@ reverts with an ERC-3668 `OffchainLookup`, any gateway returns the leaf and proo
 withhold an answer but cannot forge one, and cannot serve a stale epoch. The daemon is
 one such gateway (`/ccip/…`); `evmscan-verify -ccip` is a client for it.
 
+The same answer is also an ENS record. `HintResolver.sol` is an ENSIP-10 wildcard
+resolver bound to a HintRegistry: under `<hex-address>.hints.<yourname>.eth` it serves
+`evmscan.contracts` (the account's contracts, verified on-chain through the callback
+above), `evmscan.epoch`, `evmscan.range` and `evmscan.root`, read from the registry at
+call time. Any ENS client — viem, ens-cli, the ENS app — reads the index by name with no
+evm-scan code; `cmd/evmscan-ens` deploys the resolver and hangs it under an ENSv2 name,
+and `evmscan-verify -ens` checks the record against `contractsOf`. Names go the other way
+only in the client: the page resolves a typed `vitalik.eth` through ENS's Universal
+Resolver on the reader's own RPC, the mirror does the same through its injected
+`eth_call`, and the daemon takes addresses only. [docs/ENS.md](docs/ENS.md) is the design.
+
 Commitments are optimistic and served as soon as they are posted. `GET /v1/epochs/{id}`
 reports `onchain_status` and `challenge_deadline`, so a consumer can decide for itself
 whether "proposed" is good enough.
@@ -406,7 +417,7 @@ epoch that made verifying it in practice too expensive to bother with.
 | `GET` | `/v1/decisions` | The verdicts passed on discovered contracts, newest first. |
 | `GET` | `/v1/epochs` · `POST /v1/epochs` | List / build + publish commitments (`force` to repost an unchanged root). |
 | `GET` | `/v1/epochs/{id}/proof?account=` | Inclusion proof for `verifyInclusion`. |
-| `GET` | `/ccip/{sender}/{data}.json` · `POST /ccip` | ERC-3668 gateway for `HintRegistry.contractsOf`: leaf and proof for the latest finalized epoch, verified on-chain by the callback. |
+| `GET` | `/ccip/{sender}/{data}.json` · `POST /ccip` | ERC-3668 gateway for `HintRegistry.contractsOf` and for `HintResolver`'s `evmscan.contracts` record: leaf and proof for the latest finalized epoch, verified on-chain by the callback. |
 | `GET` | `/v1/status` · `/v1/health` | Sync state, node locality, index size, registry economics. Health is 503 when a node, the database or an indexer is down. |
 
 Every account response carries `as_of_block` so a caller can pin what it saw.
@@ -425,10 +436,12 @@ internal/store/      PostgreSQL: rollup, pending buffer, commitments
 internal/merkle/     commitment tree; must match HintRegistry byte-for-byte
 internal/hintreg/    registry mirror (pull hints) + publisher (push commitments)
 internal/api/        HTTP surface
+internal/ens/        on.eth chain names for the daemon; the hint-name scheme and ENSv2 ABIs for the tools
 cmd/evmscand/        the daemon
 cmd/evmscan-demo/    devnet bootstrapper
 cmd/evmscan-verify/  independent proof checker
 cmd/evmscan-deploy/  registry deployer: fixes the adjudication mode, prints it, seeds requests
+cmd/evmscan-ens/     deploys HintResolver and attaches it under an ENSv2 name
 deploy/              container entrypoint and hosted config (Railway)
 mirror/              TypeScript: the commitment encoding client-side, and the Evolu mirror
 ```
@@ -470,6 +483,10 @@ Being explicit about what this does *not* do:
 - **Only identity-carrying token events are decoded** (`Transfer`, `Approval`,
   `ApprovalForAll`, `TransferSingle`, `TransferBatch`). A contract whose interactions
   never surface an address in an indexed topic will not produce hints.
+- **Name normalization is NFC + lowercase, not ENSIP-15.** The page, the mirror and the
+  CLI agree with each other, but a name with emoji sequences or confusable scripts may
+  hash differently from the ENS app's rendering. Each echoes the form it hashed so a
+  mismatch is visible rather than silent.
 - **ERC-1155 balances are not reported by the index-driven views.** Balance there is
   per token id and the index tracks contracts, not ids. Reporting nothing beats
   reporting a misleading zero. The portfolio endpoint *will* return per-id balances,
