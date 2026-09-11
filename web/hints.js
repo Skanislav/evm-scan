@@ -959,11 +959,54 @@ async function enumerableList(chainId) {
 // symmetry: on the account this was measured against it recovered two real balances the
 // per-lookup cap had dropped.
 export async function vouchedBy(seed, chainId) {
-  if (!seed || seed.empty) return { tokens: [], scanned: 0, list: '' };
+  if (!seed || seed.empty) return { tokens: [], scanned: 0, list: '', dense: false, noise: 0 };
   const { tokens, name } = await enumerableList(chainId);
+
+  // A hint that is too full to be worth walking a list with.
+  //
+  // The bloom is a fixed 1024 bits, so its error rate is a function of how many
+  // contracts went in, and it does not degrade gently. Measured against the mainnet
+  // deployment's 5,862-contract list, with the sizing in buildSlotHint:
+  //
+  //	 holdings   k   false positives
+  //	       27  24     2   (0.03%)
+  //	       50  14     4   (0.07%)
+  //	       65  11    15   (0.26%)
+  //	      100   7    41   (0.70%)
+  //	      130   5   143   (2.44%)
+  //	      200   4   564   (9.62%)
+  //
+  // Every one of those is a balance read of a contract the account does not hold. At
+  // 27 that is two wasted slots in a batch and worth it for the two real holdings it
+  // recovered; at 200 it is 564, which is not a hint any more, it is a shuffle.
+  //
+  // So the walk is skipped when the noise it would produce exceeds the signal it could
+  // possibly produce — expected false positives over the list against the number of
+  // contracts in the hint, which is its hard ceiling on true ones. Both numbers come
+  // out of the file's own header, so this is arithmetic and not a threshold anybody
+  // has to keep tuned. It lands between 100 and 130 holdings, which is where the table
+  // says it should.
+  //
+  // This is a refusal to ADD, never a removal: skipping it leaves exactly the behaviour
+  // of not having a hint at all, and the ordering half above still runs.
+  const noise = seed.sources.reduce((n, src) => n + fpRate(src.filter) * tokens.length, 0);
+  const ceiling = seed.sources.reduce((n, src) => n + src.count, 0);
+  if (tokens.length && noise > ceiling) {
+    return { tokens: [], scanned: tokens.length, list: name, dense: true, noise: Math.round(noise) };
+  }
+
   const out = [];
   for (const t of tokens) if (await seed.has(chainId, t)) out.push(t);
-  return { tokens: out, scanned: tokens.length, list: name };
+  return { tokens: out, scanned: tokens.length, list: name, dense: false, noise: Math.round(noise) };
+}
+
+// A bloom's false-positive rate, from the parameters it carries: (1 - e^(-kn/m))^k.
+// Every term is in the header, which is the reason the header carries m and k rather
+// than letting a reader re-derive them.
+function fpRate(f) {
+  if (f.structure !== 3 || !f.k || !f.m) return 0;
+  const n = Number(f.count);
+  return Math.pow(1 - Math.exp(-(f.k * n) / f.m), f.k);
 }
 
 // mark returns the lowercased subset of `addrs` the hint recognises.

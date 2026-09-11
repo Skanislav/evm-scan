@@ -2943,7 +2943,11 @@ async function lookup() {
     // so both are asked about either way.
     const known = new Set(indexed.map(a => a.address.toLowerCase()));
     HINT_USE = await spendHint(await seedP, r.chain_id, known);
-    const ask = HINT_USE.vouched.concat(walletTokens(HINT_USE.hinted))
+    // What the index offered first, what the hint guessed after. Nothing downstream
+    // truncates this today — both balance paths batch — but the ordering is the same
+    // rule as everywhere else here: if anything ever does cut the list, it has to cut
+    // guesses before it cuts the index's own answer.
+    const ask = walletTokens(HINT_USE.hinted).concat(HINT_USE.vouched)
       .filter(a => !known.has(a.toLowerCase()));
     const extra = ask.length ? await heldBalances(addr, ask) : [];
     HINT_USE.asked = ask.length;
@@ -3171,6 +3175,8 @@ async function spendHint(seed, chainId, known) {
   const v = await m.vouchedBy(seed, chainId);
   use.scanned = v.scanned;
   use.list = v.list;
+  use.dense = v.dense;
+  use.noise = v.noise;
   const dup = new Set([...use.hinted, ...ASSETS.map(a => a.address.toLowerCase())]);
   use.vouched = v.tokens.filter(a => {
     const k = a.toLowerCase();
@@ -3209,6 +3215,11 @@ function renderHintUse() {
       parts.push(`${num(u.vouched.length)} of them the index never offered: your hint recognised them out of the
         ${num(u.scanned)} contracts in ${where}, tested here in your browser against a file every visitor gets
         byte for byte. ${num(u.held)} of the rows above are held contracts your hint already knew about.`);
+    } else if (u.dense) {
+      parts.push(`Your hint was not walked against this deployment&rsquo;s ${num(u.scanned)}-contract token list:
+        it holds enough contracts that the 1,024-bit filter would have guessed about ${num(u.noise)} of them
+        wrongly, which is more than it could possibly have found. So the list was left alone — the same as
+        having no hint, not less. The ordering above still used it.`);
     } else if (u.scanned) {
       parts.push(`It named nothing the index was not already going to ask about, out of the ${num(u.scanned)}
         contracts in this deployment&rsquo;s token list.`);
@@ -3260,7 +3271,7 @@ function renderHoldings() {
           <span class="sym">${h.symbol ? esc(h.symbol) : '<span class="empty">unknown</span>'}</span>
           <span class="nm">${esc(h.name || '')}</span>
           ${h.unlisted ? '<span class="tag" title="no token list this deployment loaded vouches for this contract. Checked in your browser, against a filter already downloaded — the daemon was not asked.">unlisted</span>' : ''}
-          ${h.hinted ? '<span class="tag" title="your hint already knew about this contract, so it was asked about first. The balance beside it was still read from the chain just now — the hint says where to look and never what is there.">in your hint</span>' : ''}
+          ${h.hinted && !h.aside ? '<span class="tag" title="your hint already knew about this contract, so it was asked about first. The balance beside it was still read from the chain just now — the hint says where to look and never what is there.">in your hint</span>' : ''}
           ${h.aside ? '<span class="tag" title="you set this aside, in this browser. It stays out of your hint and it is still read from the chain on every lookup — setting aside decides what your hint spends itself on, not what exists.">set aside</span>' : ''}
         </div>
         <div class="addr">${esc(h.address)}
