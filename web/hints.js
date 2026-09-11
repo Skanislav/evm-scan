@@ -696,3 +696,273 @@ async function readBack(f, d) {
     btn.disabled = false;
   }
 }
+
+
+// ---------------------------------------------------------------------------
+// What happens after a lookup
+//
+// Two things, and they answer the same question from opposite ends: a balance read
+// at head is true for one moment and belongs to nobody once the tab closes.
+//
+//   - The set is remembered here, as a bloom, automatically. No file, no prompt. On
+//     the next visit it is the fast path: the contracts this account has actually
+//     held, asked about immediately, instead of walking a token list to rediscover
+//     them. It is deliberately NOT blinded. The balances are public on chain, so a
+//     hint that only saves someone the work they could already do leaks nothing —
+//     and a secret that has to be re-derived on every page load to read a cache is a
+//     secret that makes the cache slower than not having one. Blinding stays for the
+//     watchlist above, which is a set the reader chose rather than one the chain
+//     already shows.
+//
+//   - The holdings the index does not keep get offered the on-chain action, which is
+//     the only thing here that outlives the browser: requestIndexing funds the asset,
+//     the publisher commits it to a root, and HintRegistry answers for it from then
+//     on — through the ENS resolver, to any client, with this daemon out of the path.
+// ---------------------------------------------------------------------------
+
+const KIND_INTEROP = 3;
+
+// A bloom sized to one EVM storage slot.
+//
+// The reader for this lives in index.html and the writer is here, which is the one
+// direction that is safe to implement twice: a builder that is wrong produces a file
+// whose own reader rejects it, loudly, rather than one that quietly answers no. The
+// probe has to match internal/hintfilter/bloom.go exactly all the same —
+// testdata/public-bloom-interop.xorf is what holds the three of them together.
+//
+// Only the bloom is built here. The fuse filter needs a peeling loop with retries and
+// a second implementation of that in a second language is a bad trade at this size;
+// a bloom is an OR.
+const SLOT_BITS = 256;
+
+function bloomK(m, n) {
+  if (n <= 0) return 1;
+  return Math.min(24, Math.max(1, Math.round((m / n) * Math.LN2)));
+}
+
+// Kirsch-Mitzenmacher, in the same order Go does it: uint32 wrap first, then mod m.
+function bloomProbe(key, i, m) {
+  const h1 = Number(key & 0xffffffffn);
+  const h2 = Number((key >> 32n) & 0xffffffffn) | 1;
+  return ((h1 + Math.imul(i, h2)) >>> 0) % m;
+}
+
+function bloomAdd(bitmap, key, k, m) {
+  for (let i = 0; i < k; i++) {
+    const p = bloomProbe(key, i, m);
+    bitmap[p >>> 3] |= 0x80 >> (p & 7);
+  }
+}
+
+// buildSlotHint returns { bytes, bitmap, k, hex } for a set of (chainId, token)
+// pairs. `bytes` is the whole .xorf; `hex` is the bare 32 bytes that go in a slot.
+async function buildSlotHint(pairs) {
+  const sub = await H.interopSubkey(new Uint8Array(0));
+  const keys = [];
+  for (const p of pairs) keys.push(await H.interopKey(sub, p.chainId, p.address));
+  const uniq = [...new Set(keys.map(String))].map(BigInt);
+
+  const m = SLOT_BITS;
+  const k = bloomK(m, uniq.length);
+  const bitmap = new Uint8Array(m / 8);
+  for (const key of uniq) bloomAdd(bitmap, key, k, m);
+
+  // The .xorf wrapper, matching internal/hintfilter/codec.go. chainId 0 because the
+  // chain is inside every preimage; epochId -1 because nothing vouches for this.
+  const out = new Uint8Array(34 + 8 + 5 + bitmap.length);
+  const dv = new DataView(out.buffer);
+  out.set(new TextEncoder().encode('XORF'), 0);
+  out[4] = 1;
+  out[5] = 0;            // not blinded
+  out[6] = 3;            // StructureBloom
+  dv.setBigUint64(7, 0n);
+  out[15] = KIND_INTEROP;
+  dv.setBigInt64(16, -1n);
+  dv.setBigUint64(24, 0n);
+  dv.setUint16(32, 0);   // no descriptor
+  dv.setBigUint64(34, BigInt(uniq.length));
+  dv.setUint32(42, m);
+  out[46] = k;
+  out.set(bitmap, 47);
+
+  const hex = '0x' + [...bitmap].map(b => b.toString(16).padStart(2, '0')).join('');
+  return { bytes: out, bitmap, k, m, hex, count: uniq.length };
+}
+
+const CACHE_PREFIX = 'evmscan.seen.';
+const cacheKey = (account) => `${CACHE_PREFIX}${account.toLowerCase()}`;
+
+// Stored as the filter's own bytes, base64, so what sits in localStorage is the same
+// artifact that gets published. One representation, not two that can disagree.
+function storeSeen(account, bytes) {
+  try {
+    localStorage.setItem(cacheKey(account), H.bytesToB64url(bytes));
+  } catch { /* private window, or full; a cache that cannot be written is not an error */ }
+}
+
+export function loadSeen(account) {
+  try {
+    const s = localStorage.getItem(cacheKey(account));
+    if (!s) return null;
+    const bytes = H.b64urlToBytes(s);
+    return { bytes, filter: H.decode(bytes.buffer) };
+  } catch { return null; }
+}
+
+export async function afterLookup(account, holdings, indexed) {
+  const chainId = H.chainId();
+  const pairs = (holdings || [])
+    .filter(h => h.address && (!h.standard || h.standard === 'erc20'))
+    .map(h => ({ chainId, address: h.address }));
+
+  // Rebuilt from scratch rather than merged. A filter cannot be enumerated, so the
+  // old one cannot be read back to add to it — and the holdings on screen are the
+  // better answer anyway. (Merging is possible for a bloom, by OR-ing; it is not
+  // done here because it would keep sold tokens forever, and this set is cheap to
+  // rebuild.)
+  let hint = null;
+  if (pairs.length) {
+    try {
+      hint = await buildSlotHint(pairs);
+      storeSeen(account, hint.bytes);
+    } catch { /* the cache is an optimisation; losing it costs a slower next visit */ }
+  }
+
+  renderPreserve(account, holdings, indexed, hint);
+}
+
+// ---------------------------------------------------------------------------
+// The on-chain action
+// ---------------------------------------------------------------------------
+
+// Which of these does the index actually keep? `indexed` is what /v1/accounts
+// returned, which is the index's own answer — not the filter's. A filter says where
+// to look and is allowed to be wrong; this decides whether to spend money, so it
+// asks the thing that knows.
+function unkept(holdings, indexed) {
+  const kept = new Set((indexed || []).map(a => (a.address || '').toLowerCase()));
+  return (holdings || []).filter(h => h.address && !kept.has(h.address.toLowerCase()));
+}
+
+const KIND_BY_STANDARD = { erc20: 20, erc721: 21, erc1155: 55 };
+
+function renderPreserve(account, holdings, indexed, hint) {
+  const section = $('preserve');
+  const body = $('preserve-body');
+  if (!section || !body) return;
+
+  const rows = unkept(holdings, indexed);
+  const reg = H.registry() || {};
+  section.hidden = false;
+
+  const hintLine = hint ? `
+    <p class="hint" style="margin:14px 0 0; max-width:74ch">
+      This browser now holds a ${H.esc(String(hint.m / 8))}-byte hint over the
+      ${H.esc(String(hint.count))} contract${hint.count === 1 ? '' : 's'} above, keyed by
+      <a href="https://eips.ethereum.org/EIPS/eip-7930">ERC-7930</a> so one filter covers every
+      chain. Next visit asks about these first instead of walking a token list.
+      It is not secret — these balances are public on chain, so a hint that saves someone work
+      they could already do gives away nothing.
+      <br><code style="word-break:break-all">${H.esc(hint.hex)}</code>
+      <button class="linkbtn" id="preserve-copy">copy</button>
+    </p>` : '';
+
+  if (!rows.length) {
+    $('preserve-count').textContent = '';
+    body.innerHTML = `<p class="hint" style="max-width:74ch">Everything above is already an indexed
+      asset, so it is committed to a root and served from the registry — this deployment could stop
+      running and the answer would still be there.</p>${hintLine}`;
+    wireCopy(hint);
+    return;
+  }
+
+  if (!reg.address) {
+    $('preserve-count').textContent = '';
+    body.innerHTML = `<p class="hint" style="max-width:74ch">${H.esc(String(rows.length))} of these were
+      found by reading the chain just now and are not in the index. This deployment names no registry,
+      so there is nowhere to make that permanent from here.</p>${hintLine}`;
+    wireCopy(hint);
+    return;
+  }
+
+  const minWei = BigInt(reg.min_funding_wei || 0);
+  $('preserve-count').textContent = `${rows.length} read live, not kept by the index`;
+  body.innerHTML = `
+    <p class="prose" style="margin:0 0 6px; max-width:74ch">
+      These came from reading the chain at head a moment ago. Nothing stores them: close the tab and
+      the only way back is to read the chain again. Paying for one registers it in
+      <code>HintRegistry</code> on chain ${H.esc(String(reg.chain_id ?? '—'))}, which funds the backfill
+      and puts it in the next committed root — after which the registry answers for it directly, to any
+      ENS client, with this daemon out of the path.
+    </p>
+    <p class="hint" style="margin:0 0 14px; max-width:74ch">
+      The deposit is not refundable and the transaction is yours, from your own wallet — the daemon only
+      says where the registry is and what it costs. Minimum ${H.esc(H.weiToEth(reg.min_funding_wei))} ETH
+      each, which buys a fixed number of blocks of coverage rather than a subscription. Paying puts a
+      contract in the index; it does not put it at the top of anyone's list.
+    </p>
+    <div class="scroll"><div id="preserve-rows"></div></div>
+    <div class="err" id="preserve-err" hidden></div>${hintLine}`;
+
+  $('preserve-rows').innerHTML = rows.map(h => `
+    <div class="tablerow" data-token="${H.esc(h.address)}" style="grid-template-columns: 2fr 1.2fr 1fr">
+      <span>
+        <strong>${H.esc(h.symbol || '—')}</strong>
+        <span class="hint" style="margin-left:8px">${H.esc(h.name || '')}</span>
+        <div class="addr">${H.esc(h.address)}</div>
+      </span>
+      <span class="hint num" data-state>${H.esc(h.standard || 'erc20')}</span>
+      <span class="num">
+        <button class="btn btn-secondary btn-sm" data-keep="${H.esc(h.address)}"
+                data-kind="${KIND_BY_STANDARD[h.standard] || 20}">Keep it</button>
+      </span>
+    </div>`).join('');
+
+  for (const btn of body.querySelectorAll('[data-keep]')) {
+    btn.addEventListener('click', () => keep(btn, minWei).catch(e => {
+      const el = $('preserve-err');
+      el.hidden = false;
+      el.textContent = e.message || String(e);
+    }));
+  }
+  wireCopy(hint);
+}
+
+function wireCopy(hint) {
+  const btn = $('preserve-copy');
+  if (!btn || !hint) return;
+  btn.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(hint.hex);
+      btn.textContent = 'copied';
+    } catch {
+      btn.textContent = 'could not copy — select it by hand';
+    }
+  });
+}
+
+async function keep(btn, minWei) {
+  $('preserve-err').hidden = true;
+  const token = btn.dataset.keep;
+  const kind = btn.dataset.kind;
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'confirm in wallet…';
+  try {
+    // From the head this node can actually serve, not from genesis. A fromBlock below
+    // the history floor buys range the light client cannot answer for, and the deposit
+    // does not come back. requestIndexing re-checks it; this is so the common case
+    // does not have to fail first.
+    const head = H.head() || 0;
+    const from = Math.max(0, head - 4000);
+    const tx = await H.requestIndexing(token, kind, String(from), minWei);
+    btn.textContent = 'submitted';
+    const row = btn.closest('[data-token]');
+    const state = row.querySelector('[data-state]');
+    if (state) state.innerHTML = `registered · <code>${H.esc(String(tx).slice(0, 12))}…</code>`;
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = label;
+    throw e;
+  }
+}
