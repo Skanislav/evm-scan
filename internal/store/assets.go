@@ -65,6 +65,19 @@ func (s *Store) UpsertChain(ctx context.Context, chainID uint64, name string) er
 	return err
 }
 
+// ChainName returns the configured label for a chain — "mainnet", "base", whatever the
+// operator called it. Empty when the chain has no row yet, which is only true before
+// the indexer's first tick.
+func (s *Store) ChainName(ctx context.Context, chainID uint64) (string, error) {
+	var name string
+	err := s.pool.QueryRow(ctx,
+		`SELECT name FROM chains WHERE chain_id = $1`, int64(chainID)).Scan(&name)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	return name, err
+}
+
 // SetChainHead records the latest observed head, for the status endpoint.
 func (s *Store) SetChainHead(ctx context.Context, chainID, block uint64, hash common.Hash) error {
 	_, err := s.pool.Exec(ctx, `

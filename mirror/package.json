@@ -1,0 +1,19 @@
+{
+  "name": "@evm-scan/mirror",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local-first verifiable mirror of an evm-scan index commitment.",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@noble/hashes": "1.7.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.24",
+    "typescript": "5.7.3",
+    "vitest": "2.1.9"
+  }
+}

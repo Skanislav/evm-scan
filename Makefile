@@ -3,7 +3,7 @@ BIN     := bin
 SOLC    ?= 0.8.28
 PKGS    := ./...
 
-.PHONY: all build test test-evm vet fmt lint contracts clean devchain demo run tidy check docker-build docker-run
+.PHONY: all build test test-evm test-mirror vet fmt lint contracts clean devchain demo run tidy check docker-build docker-run
 
 all: build
 
@@ -33,6 +33,17 @@ tidy:
 ## test-evm: run the lens against a real EVM (own module: heavy, test-only deps)
 test-evm:
 	cd contracts/evmtest && $(GO) test ./...
+
+## test-mirror: run the TypeScript mirror's suite (needs node; own dependencies)
+##
+## Not part of `check`: it needs an npm install, while the Go tests already assert
+## that mirror/testdata is in step with the encoding that generated it — which is
+## the drift that would actually break a client.
+test-mirror:
+	@command -v npm >/dev/null || { echo "npm is required to test the mirror; see docs/LOCALFIRST.md"; exit 1; }
+	@test -d mirror/node_modules || npm --prefix mirror install --no-audit --no-fund
+	npm --prefix mirror run typecheck
+	npm --prefix mirror test
 
 ## check: what CI runs
 check: fmt vet test test-evm

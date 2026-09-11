@@ -16,11 +16,16 @@ func TestAuthorizedGuardsOnlySpendingEndpoints(t *testing.T) {
 		{http.MethodGet, "/v1/epochs"},
 		{http.MethodGet, "/v1/accounts/0x0/contracts"},
 		{http.MethodGet, "/v1/chains"},
+		{http.MethodGet, "/v1/decisions"},
+		{http.MethodGet, "/v1/accounts"},
 		// Resolving a name costs one eth_call and reports what anybody could read
 		// off mainnet themselves. Gating it would only make the UI worse.
 		{http.MethodGet, "/v1/chains/resolve"},
-		// The gateway is the whole point of the index being public.
+		// The gateway is the whole point of the index being public — and since the
+		// guard is now "everything that is not a read, except this one", this pair
+		// of assertions is the thing keeping it reachable.
 		{http.MethodGet, "/ccip/0x0/0x0"},
+		{http.MethodPost, "/ccip"},
 	}
 	for _, r := range reads {
 		if !s.authorized(httptest.NewRequest(r.method, r.path, nil)) {
@@ -35,6 +40,8 @@ func TestAuthorizedGuardsOnlySpendingEndpoints(t *testing.T) {
 		{http.MethodPost, "/v1/epochs"},
 		{http.MethodPost, "/v1/assets"},
 		{http.MethodPost, "/v1/candidates/0xabc/promote"},
+		{http.MethodPost, "/v1/candidates/0xabc/spam"},
+		{http.MethodPost, "/v1/candidates/0xabc/unspam"},
 		{http.MethodPost, "/v1/chains"},
 		{http.MethodPatch, "/v1/chains/8453"},
 		{http.MethodDelete, "/v1/chains/8453"},
@@ -63,9 +70,18 @@ func TestAuthorizedGuardsOnlySpendingEndpoints(t *testing.T) {
 
 func TestNoTokenConfiguredLeavesEverythingOpen(t *testing.T) {
 	s := &Server{d: Deps{}}
-	for _, p := range []string{"/v1/epochs", "/v1/assets", "/v1/candidates/0xabc/promote"} {
-		if !s.authorized(httptest.NewRequest(http.MethodPost, p, nil)) {
-			t.Errorf("POST %s should be open when no token is configured", p)
+	for _, sp := range []struct{ method, path string }{
+		{http.MethodPost, "/v1/epochs"},
+		{http.MethodPost, "/v1/assets"},
+		{http.MethodPost, "/v1/candidates/0xabc/promote"},
+		{http.MethodPost, "/v1/candidates/0xabc/spam"},
+		{http.MethodPost, "/v1/candidates/0xabc/unspam"},
+		{http.MethodPost, "/v1/chains"},
+		{http.MethodPatch, "/v1/chains/8453"},
+		{http.MethodDelete, "/v1/chains/8453"},
+	} {
+		if !s.authorized(httptest.NewRequest(sp.method, sp.path, nil)) {
+			t.Errorf("%s %s should be open when no token is configured", sp.method, sp.path)
 		}
 	}
 }

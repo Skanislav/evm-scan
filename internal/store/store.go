@@ -23,6 +23,11 @@ import (
 // ErrNotFound is returned when a lookup matches no row.
 var ErrNotFound = errors.New("store: not found")
 
+// ErrAlreadyPromoted is returned when a verdict is asked of a candidate that is already
+// an indexed asset. It is a different answer from ErrNotFound: the contract exists, the
+// verdict is just no longer the candidate's to give.
+var ErrAlreadyPromoted = errors.New("store: candidate already promoted")
+
 // Store owns a Postgres connection pool.
 type Store struct {
 	pool *pgxpool.Pool

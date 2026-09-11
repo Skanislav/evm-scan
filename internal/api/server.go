@@ -99,6 +99,7 @@ func New(d Deps) *Server {
 	s.mux.HandleFunc("POST /v1/assets", s.registerAsset)
 	s.mux.HandleFunc("GET /v1/assets/{address}", s.getAsset)
 	s.mux.HandleFunc("GET /v1/assets/{address}/accounts", s.assetAccounts)
+	s.mux.HandleFunc("GET /v1/accounts", s.listAccounts)
 	s.mux.HandleFunc("GET /v1/accounts/{address}", s.accountAssets)
 	s.mux.HandleFunc("GET /v1/accounts/{address}/contracts", s.accountContracts)
 	s.mux.HandleFunc("GET /v1/accounts/{address}/portfolio", s.accountPortfolio)
@@ -107,6 +108,9 @@ func New(d Deps) *Server {
 	s.mux.HandleFunc("GET /v1/lens", s.listLenses)
 	s.mux.HandleFunc("GET /v1/candidates", s.listCandidates)
 	s.mux.HandleFunc("POST /v1/candidates/{address}/promote", s.promoteCandidate)
+	s.mux.HandleFunc("POST /v1/candidates/{address}/spam", s.markCandidateSpam)
+	s.mux.HandleFunc("POST /v1/candidates/{address}/unspam", s.clearCandidateSpam)
+	s.mux.HandleFunc("GET /v1/decisions", s.listDecisions)
 	s.mux.HandleFunc("GET /v1/epochs", s.listEpochs)
 	s.mux.HandleFunc("POST /v1/epochs", s.createEpoch)
 	s.mux.HandleFunc("GET /v1/epochs/{id}", s.getEpoch)
@@ -144,33 +148,35 @@ func (s *Server) withMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// spendsSomething reports whether a request would cost the deployment money or
-// quota: publishing an epoch is the publisher's gas, and promoting or registering
-// an asset is a backfill against a paid RPC. Reads are never guarded — the whole
-// point of the index is that anyone can query it.
+// guarded reports whether a request has to carry the operator's token.
 //
-// Adding a chain is the largest of these by some way. An epoch or a promotion is
-// one bounded spend; a chain is a per-block RPC bill from then on. And a PATCH
-// that sets trust to "verified" is larger still, because it puts the publisher's
-// bond behind logs served by a node we do not run — the only call here that can
-// lose money that gas and quota cannot. Both are behind the token.
-func spendsSomething(r *http.Request) bool {
-	p := r.URL.Path
+// Everything that is not a read is guarded, because each of them costs the deployment
+// something it cannot get back: publishing an epoch is the publisher's gas, promoting
+// or registering an asset is a backfill against a paid RPC, and a verdict writes an
+// operator's judgement into the index. Adding a chain is the largest by some way — an
+// epoch or a promotion is one bounded spend, a chain is a per-block RPC bill from then
+// on — and a PATCH that sets trust to "verified" is larger still, because it puts the
+// publisher's bond behind logs served by a node we do not run.
+//
+// The rule is "every mutating method, minus an allowlist" rather than a list of guarded
+// paths. The two fail in opposite directions: a path forgotten from a guard list leaves
+// a new mutation open, while a route forgotten from an exception list only makes one too
+// strict, and someone notices immediately. The single exception is the ERC-3668
+// callback, which a resolver anywhere on the internet has to be able to reach.
+//
+// Reads are never guarded — the whole point of the index is that anyone can query it.
+func guarded(r *http.Request) bool {
 	switch r.Method {
-	case http.MethodPost:
-		return p == "/v1/epochs" || p == "/v1/assets" || p == "/v1/chains" ||
-			strings.HasSuffix(p, "/promote")
-	case http.MethodPatch, http.MethodDelete:
-		return strings.HasPrefix(p, "/v1/chains/")
-	default:
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
 		return false
 	}
+	return r.URL.Path != "/ccip"
 }
 
-// authorized checks the bearer token on the endpoints that spend. With no token
+// authorized checks the bearer token on the endpoints that mutate. With no token
 // configured everything stays open, which is what a laptop and the demo want.
 func (s *Server) authorized(r *http.Request) bool {
-	if s.d.AuthToken == "" || !spendsSomething(r) {
+	if s.d.AuthToken == "" || !guarded(r) {
 		return true
 	}
 	const prefix = "Bearer "
@@ -290,7 +296,10 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 }
 
 type chainStatus struct {
-	ChainID       uint64 `json:"chain_id"`
+	ChainID uint64 `json:"chain_id"`
+	// Name is the operator's label for the chain, so a UI can say "chain 1 · mainnet"
+	// without carrying its own table of well-known ids.
+	Name          string `json:"name,omitempty"`
 	Node          string `json:"node"`
 	NodeTransport string `json:"node_transport"`
 	NodeLocal     bool   `json:"node_local"`
@@ -306,6 +315,7 @@ type chainStatus struct {
 	BackfillDone    int    `json:"assets_backfilled"`
 	Candidates      int64  `json:"candidates_observed"`
 	CandidatesReady int64  `json:"candidates_promotable"`
+	CandidatesSpam  int64  `json:"candidates_spam"`
 	// Pricing says where this chain's prices come from, or that they do not.
 	Pricing *pricingStatus `json:"pricing,omitempty"`
 	// RPC is what this chain has asked its endpoint for, and what that costs.
@@ -435,11 +445,15 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		if cur, err := s.d.Store.DiscoveryCursor(ctx, id); err == nil {
 			cs.DiscoveryCursor = cur
 		}
+		if name, err := s.d.Store.ChainName(ctx, id); err == nil {
+			cs.Name = name
+		}
 		if w, ok := s.d.Chains.Worker(id); ok {
 			cs.HistoryFloor = w.HistoryFloor()
 			minEvents, minBlocks := w.DiscoveryThresholds()
 			if cst, err := s.d.Store.CandidateStats(ctx, id, minEvents, minBlocks); err == nil {
 				cs.Candidates, cs.CandidatesReady = cst.Observed, cst.Promotable
+				cs.CandidatesSpam = cst.Spam
 			}
 		}
 		cs.RPC = s.rpcUsage(src)

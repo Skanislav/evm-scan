@@ -1,193 +1,13 @@
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>evm-scan — interaction graph</title>
-<style>
-  :root {
-    --bg: #fbfbfa; --panel: #fff; --ink: #1a1a18; --muted: #6b6b66;
-    --line: #e4e4e0; --accent: #2f5d50; --accent-ink: #fff;
-    --warn: #8a5a1b; --warn-bg: #fdf6ec; --ok: #2f6d4f;
-    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    /* The scene has its own ground: a graph reads better against something a
-       shade away from the page, so depth cueing has somewhere to fade to. */
-    --scene: #f2f2ef; --scene-fog: #f2f2ef;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #16171a; --panel: #1e2024; --ink: #e9e9e6; --muted: #9a9a94;
-      --line: #2e3138; --accent: #6fbfa4; --accent-ink: #12241d;
-      --warn: #e0b070; --warn-bg: #2a2115; --ok: #7fc6a0;
-      --scene: #101114; --scene-fog: #101114;
-    }
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; background: var(--bg); color: var(--ink);
-    font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  }
-  a { color: var(--accent); }
-  .wrap { max-width: 1280px; margin: 0 auto; padding: 24px 20px 40px; }
-  header { border-bottom: 1px solid var(--line); padding-bottom: 16px; margin-bottom: 18px; }
-  h1 { margin: 0 0 6px; font-size: 24px; letter-spacing: -0.02em; }
-  h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
-       color: var(--muted); margin: 0 0 10px; font-weight: 600; }
-  .sub { color: var(--muted); margin: 0; max-width: 74ch; }
-  .controls { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 14px; }
-  .ctl { display: flex; flex-direction: column; gap: 4px; }
-  .ctl label { font-size: 11px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); }
-  .ctl input[type=range] { width: 150px; accent-color: var(--accent); }
-  .ctl .val { font-variant-numeric: tabular-nums; font-size: 12px; color: var(--muted); }
-  button {
-    padding: 9px 15px; border: 0; border-radius: 7px; background: var(--accent);
-    color: var(--accent-ink); font-weight: 600; font-size: 14px; cursor: pointer;
-  }
-  button.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
-  button:disabled { opacity: .5; cursor: progress; }
-
-  .stage { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; }
-  @media (max-width: 860px) { .stage { grid-template-columns: minmax(0, 1fr); } }
-
-  #canvas-holder {
-    position: relative; height: 640px; min-height: 360px;
-    border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--scene);
-  }
-  @media (max-width: 860px) { #canvas-holder { height: 460px; } }
-  #canvas-holder canvas { display: block; width: 100%; height: 100%; }
-  .overlay {
-    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-    text-align: center; padding: 24px; color: var(--muted); font-size: 14px;
-    background: var(--scene); pointer-events: none;
-  }
-  .overlay.gone { display: none; }
-  .hud {
-    position: absolute; left: 12px; bottom: 12px; font-size: 11.5px; color: var(--muted);
-    font-family: var(--mono); pointer-events: none; text-shadow: 0 0 6px var(--scene);
-  }
-  .tip {
-    position: absolute; pointer-events: none; padding: 5px 9px; border-radius: 6px;
-    background: var(--panel); border: 1px solid var(--line); font-family: var(--mono);
-    font-size: 11.5px; white-space: nowrap; transform: translate(10px, -50%); display: none;
-  }
-
-  aside section { background: var(--panel); border: 1px solid var(--line);
-                  border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; }
-  .kv { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; padding: 3px 0; }
-  .kv .k { color: var(--muted); }
-  .kv .v { font-variant-numeric: tabular-nums; }
-  .mono { font-family: var(--mono); font-size: 12px; }
-  .addr { font-family: var(--mono); font-size: 11px; letter-spacing: -.2px; user-select: all; word-break: break-all; }
-  .legend { max-height: 300px; overflow-y: auto; margin: 0; padding: 0; list-style: none; }
-  .legend li {
-    display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 5px;
-    cursor: pointer; font-size: 12.5px;
-  }
-  .legend li:hover, .legend li.on { background: var(--bg); }
-  .legend li.on { outline: 1px solid var(--line); }
-  .swatch { width: 10px; height: 10px; border-radius: 3px; flex: 0 0 auto; }
-  .legend .nm { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .legend .ct { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 11.5px; }
-  .tag { display: inline-block; padding: 1px 7px; border-radius: 20px; font-size: 11px;
-         background: var(--bg); border: 1px solid var(--line); color: var(--muted); margin: 0 4px 4px 0; }
-  .note { background: var(--warn-bg); border-left: 3px solid var(--warn); padding: 10px 14px;
-          border-radius: 0 6px 6px 0; color: var(--muted); font-size: 13px; margin-top: 12px; }
-  .err { color: #b3261e; font-size: 13.5px; margin-top: 10px; }
-  .empty { color: var(--muted); font-style: italic; }
-  .hint { color: var(--muted); font-size: 12.5px; }
-</style>
-</head>
-<body>
-<div class="wrap">
-
-<header>
-  <h1>Interaction graph</h1>
-  <p class="sub">
-    Every node is an <strong>account</strong>; every edge is a <strong>contract both of its
-    ends touched</strong>. The index is a membership table — it folds events per
-    <code>(account, asset)</code> and keeps no counterparties — so an edge here means
-    co-membership, never a transfer between the two accounts.
-    Weight is <strong>event count, not token amount</strong>: the decoder reads only
-    indexed topics and never event data, so no transferred value exists in the index
-    to draw. <a href="index.html">Back to the index</a>.
-  </p>
-</header>
-
-<div class="controls">
-  <div class="ctl">
-    <label for="assets">Contracts per load</label>
-    <input type="range" id="assets" min="5" max="400" step="5" value="40">
-    <span class="val" id="assets-val">40</span>
-  </div>
-  <div class="ctl">
-    <label for="holders">Accounts per contract</label>
-    <input type="range" id="holders" min="2" max="40" step="1" value="10">
-    <span class="val" id="holders-val">10 → 45 edges each</span>
-  </div>
-  <div class="ctl">
-    <button id="more" class="ghost" disabled>Load more</button>
-    <span class="val" id="paging"></span>
-  </div>
-  <div class="ctl">
-    <button id="reload">Redraw</button>
-  </div>
-  <div class="ctl">
-    <button id="recenter" class="ghost">Recenter</button>
-  </div>
-</div>
-
-<div class="stage">
-  <div id="canvas-holder">
-    <div class="overlay" id="overlay">loading three.js and the index…</div>
-    <div class="hud" id="hud"></div>
-    <div class="tip" id="tip"></div>
-  </div>
-
-  <aside>
-    <section>
-      <h2>Selection</h2>
-      <div id="sel"><span class="empty">Click an account to inspect it.</span></div>
-    </section>
-    <section>
-      <h2>Contracts <span class="hint" id="legend-count"></span></h2>
-      <ul class="legend" id="legend"></ul>
-      <div class="hint" style="margin-top:8px">Accounts drawn · events indexed.
-        Hover a contract to isolate it; click to fly to it.</div>
-    </section>
-    <section>
-      <h2>What this is</h2>
-      <div class="hint">
-        Contracts arrive busiest-first, a page at a time — <strong>Load more</strong>
-        appends the next page without disturbing what is already placed. Only the
-        busiest accounts of each contract are drawn, and a contract with <em>k</em> of
-        them draws <em>k(k−1)/2</em> edges, so widening that slider makes the picture
-        denser rather than more complete.
-      </div>
-      <div class="hint" style="margin-top:10px">
-        <strong>What the weights mean.</strong> A node's size is that account's total
-        indexed events; an edge's brightness is the <em>smaller</em> of its two ends'
-        event counts on that contract — the most the pair can have in common there.
-        Both are counts of events, never sums of tokens: <code>internal/evmlog</code>
-        decodes participants from indexed topics and ignores event data, which is
-        where an ERC-20 <code>Transfer</code> keeps its value. Counts are mapped
-        through a log scale, because a router has millions of events where an
-        ordinary account has three.
-      </div>
-      <div class="err" id="err"></div>
-    </section>
-  </aside>
-</div>
-
-</div>
-
-<script type="module">
-// three.js is pinned and loaded here rather than vendored: this page is the one
-// place in the UI that needs it, and an unpinned import would be a moving
-// dependency. esm.sh resolves the addon's bare `three` to this same build, so
-// there is only ever one copy in the page.
-// The version appears twice because a static import takes a literal, and both must
-// stay in step — esm.sh resolves the addon's bare `three` to this same build, which
-// is what keeps one copy of it in the page.
+// The interaction graph, drawn in WebGL.
+//
+// Loaded as a module the moment the graph tab is first opened, and never before:
+// three.js is most of a megabyte, and most visits never ask for a picture. Import
+// alone is what starts it — everything below the scene setup runs on load, against
+// the markup the tab already holds.
+//
+// three.js is pinned rather than vendored. The version appears twice because a
+// static import takes a literal and both must stay in step; esm.sh resolves the
+// addon's bare `three` to this same build, which is what keeps one copy in the page.
 import * as THREE from 'https://esm.sh/three@0.180.0';
 import { OrbitControls } from 'https://esm.sh/three@0.180.0/examples/jsm/controls/OrbitControls.js';
 
@@ -198,8 +18,16 @@ const short = a => a.slice(0, 6) + '…' + a.slice(-4);
 // being responsive, so the extra edges are dropped and the HUD says how many.
 const MAX_EDGES = 40000;
 
+// The host page owns which chain is selected; this asks it rather than keeping a
+// second copy that could drift.
+function onChain(path) {
+  const id = window.evmscanChainID ? window.evmscanChainID() : 0;
+  if (!id) return path;
+  return path + (path.includes('?') ? '&' : '?') + 'chain_id=' + id;
+}
+
 async function api(path) {
-  const r = await fetch(path, { headers: { accept: 'application/json' } });
+  const r = await fetch(onChain(path), { headers: { accept: 'application/json' } });
   const body = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(body.error || body.detail || `${r.status} ${r.statusText}`);
   return body;
@@ -214,7 +42,9 @@ function hueOf(addr) {
   for (let i = 2; i < addr.length; i++) h = (h * 31 + addr.charCodeAt(i)) >>> 0;
   return (h % 360) / 360;
 }
-const DARK = matchMedia('(prefers-color-scheme: dark)').matches;
+// The page commits to one palette — printed ink on paper — so the scene does too.
+// Reading the OS preference here would drop a dark canvas into a white page.
+const DARK = false;
 function colorOf(addr) {
   return new THREE.Color().setHSL(hueOf(addr), DARK ? 0.62 : 0.68, DARK ? 0.62 : 0.46);
 }
@@ -651,7 +481,14 @@ function select(i) {
     <div id="bal-head" class="hint" style="margin:8px 0 2px">reading balances at head…</div>
     ${own.map(row).join('')}
     <div id="bal-total"></div>
-    <a href="index.html?account=${n.addr}" style="display:inline-block;margin-top:8px">Look this account up →</a>`;
+    <a href="#" data-open-wallet="${n.addr}" style="display:inline-block;margin-top:8px">Open in the wallet view →</a>`;
+  const open = $('sel').querySelector('[data-open-wallet]');
+  if (open) {
+    open.addEventListener('click', ev => {
+      ev.preventDefault();
+      window.evmscanOpenWallet(open.dataset.openWallet);
+    });
+  }
 
   loadBalances(n.addr, ++selectToken);
 }
@@ -771,7 +608,7 @@ async function load({ append = false } = {}) {
   const label = btn.textContent;
   btn.textContent = 'loading…';
   try {
-    const page = +$('assets').value, nHolders = +$('holders').value;
+    const page = +$('assets-range').value, nHolders = +$('holders').value;
     if (!append) { loaded = []; nextOffset = 0; }
     const data = await api(`/v1/graph?assets=${page}&offset=${nextOffset}&holders=${nHolders}`);
     const got = data.assets || [];
@@ -838,7 +675,7 @@ function updatePaging(data) {
   const more = data ? data.has_more : drawn < total;
   $('more').disabled = !more;
   $('more').textContent = more
-    ? `Load ${Math.min(+$('assets').value, total - drawn)} more`
+    ? `Load ${Math.min(+$('assets-range').value, total - drawn)} more`
     : (drawn ? 'All contracts loaded' : 'Load more');
   $('paging').textContent = total
     ? `${drawn.toLocaleString()} of ${total.toLocaleString()} contracts drawn`
@@ -863,7 +700,7 @@ renderer.setAnimationLoop(() => {
   renderer.render(scene, camera);
 });
 
-$('assets').addEventListener('input', e => {
+$('assets-range').addEventListener('input', e => {
   $('assets-val').textContent = e.target.value;
   updatePaging();   // the page size is also the size of the next Load more
 });
@@ -878,6 +715,8 @@ $('holders').dispatchEvent(new Event('input'));
 
 resize();
 load();
-</script>
-</body>
-</html>
+
+// The host calls this when the selected chain changes: the scene is about one
+// chain's index, and keeping the old one on screen under a new chain's name would
+// be the worst of both.
+window.evmscanGraphReload = () => { loaded = []; nextOffset = 0; load(); };

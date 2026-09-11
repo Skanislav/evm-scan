@@ -736,6 +736,12 @@ type candidateJSON struct {
 	Promoted        bool    `json:"promoted"`
 	PromotedAt      *string `json:"promoted_at,omitempty"`
 	PromotionReason string  `json:"promotion_reason,omitempty"`
+	Spam            bool    `json:"spam"`
+	SpamAt          *string `json:"spam_at,omitempty"`
+	SpamReason      string  `json:"spam_reason,omitempty"`
+	// Verdict collapses the two marks into the one string a UI renders as a badge:
+	// "approved", "spam", or absent for a contract nobody has judged.
+	Verdict string `json:"verdict,omitempty"`
 	// Symbol and Name are read at head, not stored: discovery counts events and
 	// never probes metadata, so a candidate row has none. They are best-effort —
 	// a token that does not answer, or a node that will not run the batch, leaves
@@ -757,9 +763,11 @@ func (s *Server) listCandidates(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	rows, err := s.d.Store.ListCandidates(ctx, chainID,
-		r.URL.Query().Get("include_promoted") == "true",
-		intParam(r, "limit", 50, 1, 500))
+	rows, err := s.d.Store.ListCandidates(ctx, chainID, store.CandidateFilter{
+		IncludePromoted: r.URL.Query().Get("include_promoted") == "true",
+		IncludeSpam:     r.URL.Query().Get("include_spam") == "true",
+		Limit:           intParam(r, "limit", 50, 1, 500),
+	})
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "query failed", err)
 		return
@@ -772,35 +780,9 @@ func (s *Server) listCandidates(w http.ResponseWriter, r *http.Request) {
 
 	out := make([]candidateJSON, len(rows))
 	for i, c := range rows {
-		out[i] = candidateJSON{
-			Address:         c.Address.Hex(),
-			Standard:        standardName(c.Standard),
-			FirstSeenBlock:  c.FirstSeenBlock,
-			LastSeenBlock:   c.LastSeenBlock,
-			EventCount:      c.EventCount,
-			BlocksSeen:      c.BlocksSeen,
-			Promotable:      c.EventCount >= minEvents && c.BlocksSeen >= minBlocks,
-			Promoted:        c.PromotedAt != nil,
-			PromotionReason: c.PromotionReason,
-		}
-		if c.PromotedAt != nil {
-			ts := c.PromotedAt.UTC().Format(time.RFC3339)
-			out[i].PromotedAt = &ts
-		}
+		out[i] = candidateView(c, minEvents, minBlocks)
 	}
-
-	if src, ok := s.d.Chains.Source(chainID); ok {
-		addrs := make([]common.Address, len(out))
-		for i := range out {
-			addrs[i] = common.HexToAddress(out[i].Address)
-		}
-		meta := s.meta.lookup(ctx, src, chainID, addrs)
-		for i := range out {
-			if m, ok := meta[common.HexToAddress(out[i].Address)]; ok {
-				out[i].Symbol, out[i].Name, out[i].Decimals = m.Symbol, m.Name, m.Decimals
-			}
-		}
-	}
+	s.decorateCandidates(ctx, chainID, out)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"chain_id":   chainID,
@@ -860,4 +842,194 @@ func (s *Server) promoteCandidate(w http.ResponseWriter, r *http.Request) {
 		"reason":   reason,
 		"asset":    s.assetView(ctx, a),
 	})
+}
+
+// candidateView renders one observed contract. Promotable is a live question, not a
+// stored flag: it is the thresholds the worker is running with right now, and a
+// contract someone has already judged is never offered again.
+func candidateView(c store.Candidate, minEvents, minBlocks uint64) candidateJSON {
+	out := candidateJSON{
+		Address:         c.Address.Hex(),
+		Standard:        standardName(c.Standard),
+		FirstSeenBlock:  c.FirstSeenBlock,
+		LastSeenBlock:   c.LastSeenBlock,
+		EventCount:      c.EventCount,
+		BlocksSeen:      c.BlocksSeen,
+		Promotable:      c.SpamAt == nil && c.PromotedAt == nil && c.EventCount >= minEvents && c.BlocksSeen >= minBlocks,
+		Promoted:        c.PromotedAt != nil,
+		PromotionReason: c.PromotionReason,
+		Spam:            c.SpamAt != nil,
+		SpamReason:      c.SpamReason,
+	}
+	if c.PromotedAt != nil {
+		ts := c.PromotedAt.UTC().Format(time.RFC3339)
+		out.PromotedAt, out.Verdict = &ts, "approved"
+	}
+	if c.SpamAt != nil {
+		ts := c.SpamAt.UTC().Format(time.RFC3339)
+		out.SpamAt, out.Verdict = &ts, "spam"
+	}
+	return out
+}
+
+// decorateCandidates fills in symbol/name/decimals from the head, in one batched call
+// for the whole page. Best-effort by design: a token that will not answer leaves the
+// fields empty rather than failing the listing.
+func (s *Server) decorateCandidates(ctx context.Context, chainID uint64, out []candidateJSON) {
+	src, ok := s.d.Chains.Source(chainID)
+	if !ok || len(out) == 0 {
+		return
+	}
+	addrs := make([]common.Address, len(out))
+	for i := range out {
+		addrs[i] = common.HexToAddress(out[i].Address)
+	}
+	meta := s.meta.lookup(ctx, src, chainID, addrs)
+	for i := range out {
+		if m, ok := meta[common.HexToAddress(out[i].Address)]; ok {
+			out[i].Symbol, out[i].Name, out[i].Decimals = m.Symbol, m.Name, m.Decimals
+		}
+	}
+}
+
+// markCandidateSpam records that a contract is not worth indexing. Unlike a promotion
+// this spends nothing — it only stops discovery from offering the contract again — but
+// it is still an operator's judgement written into the index, so it is guarded.
+func (s *Server) markCandidateSpam(w http.ResponseWriter, r *http.Request) {
+	s.candidateVerdict(w, r, true)
+}
+
+// clearCandidateSpam is the undo. A POST rather than a DELETE on the same path: the
+// CORS preflight this server answers allows GET, POST and OPTIONS only, and the auth
+// guard covers POSTs, so a DELETE would be both unreachable cross-origin and
+// unauthenticated where it did arrive.
+func (s *Server) clearCandidateSpam(w http.ResponseWriter, r *http.Request) {
+	s.candidateVerdict(w, r, false)
+}
+
+func (s *Server) candidateVerdict(w http.ResponseWriter, r *http.Request, spam bool) {
+	chainID, _, err := s.chainOf(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad chain", err)
+		return
+	}
+	addr, err := parseAddress(r.PathValue("address"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad address", err)
+		return
+	}
+
+	var req promoteRequest
+	if r.ContentLength > 0 {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req); err != nil {
+			writeErr(w, http.StatusBadRequest, "bad request body", err)
+			return
+		}
+	}
+	reason := req.Reason
+	if reason == "" {
+		reason = "manual: marked spam via API"
+	}
+
+	ctx := r.Context()
+	if spam {
+		err = s.d.Store.MarkCandidateSpam(ctx, chainID, addr, reason)
+	} else {
+		err = s.d.Store.ClearCandidateSpam(ctx, chainID, addr)
+	}
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		writeErr(w, http.StatusNotFound, "no such candidate", nil)
+		return
+	case errors.Is(err, store.ErrAlreadyPromoted):
+		writeErr(w, http.StatusConflict, "already promoted",
+			errors.New("the contract is an indexed asset; revoke the asset instead"))
+		return
+	case err != nil:
+		writeErr(w, http.StatusInternalServerError, "verdict failed", err)
+		return
+	}
+
+	// Answer with the row as it now stands, so a caller can patch it in place instead
+	// of refetching the whole listing.
+	c, err := s.d.Store.GetCandidate(ctx, chainID, addr)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "query failed", err)
+		return
+	}
+	var minEvents, minBlocks uint64
+	if wk, ok := s.d.Chains.Worker(chainID); ok {
+		minEvents, minBlocks = wk.DiscoveryThresholds()
+	}
+	out := []candidateJSON{candidateView(c, minEvents, minBlocks)}
+	s.decorateCandidates(ctx, chainID, out)
+	writeJSON(w, http.StatusOK, out[0])
+}
+
+// --------------------------------------------------------------------------
+// Decisions: the ledger of verdicts passed on discovered contracts
+// --------------------------------------------------------------------------
+
+type decisionJSON struct {
+	Address  string `json:"address"`
+	Standard string `json:"standard"`
+	Symbol   string `json:"symbol,omitempty"`
+	Name     string `json:"name,omitempty"`
+	Verdict  string `json:"verdict"`
+	At       string `json:"at"`
+	Reason   string `json:"reason,omitempty"`
+}
+
+// listDecisions returns recent verdicts, newest first.
+//
+// Scoped to contracts *discovery* found: a hint someone paid to register on-chain
+// enters the index through the registry mirror without ever becoming a candidate, so it
+// has no verdict to report here. The ledger answers "what has the curator ruled", not
+// "what is in the index".
+func (s *Server) listDecisions(w http.ResponseWriter, r *http.Request) {
+	chainID, _, err := s.chainOf(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad chain", err)
+		return
+	}
+	ctx := r.Context()
+	rows, err := s.d.Store.RecentDecisions(ctx, chainID, intParam(r, "limit", 50, 1, 500))
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "query failed", err)
+		return
+	}
+
+	out := make([]decisionJSON, len(rows))
+	for i, d := range rows {
+		out[i] = decisionJSON{
+			Address:  d.Address.Hex(),
+			Standard: standardName(d.Standard),
+			Symbol:   d.Symbol,
+			Name:     d.Name,
+			Verdict:  d.Verdict,
+			At:       d.At.UTC().Format(time.RFC3339),
+			Reason:   d.Reason,
+		}
+	}
+
+	// Only the rows the join left blank — spam contracts, which were never probed —
+	// need the head. Promotions already carry their metadata.
+	if src, ok := s.d.Chains.Source(chainID); ok {
+		var missing []common.Address
+		for i := range out {
+			if out[i].Symbol == "" && out[i].Name == "" {
+				missing = append(missing, common.HexToAddress(out[i].Address))
+			}
+		}
+		if len(missing) > 0 {
+			meta := s.meta.lookup(ctx, src, chainID, missing)
+			for i := range out {
+				if m, ok := meta[common.HexToAddress(out[i].Address)]; ok {
+					out[i].Symbol, out[i].Name = m.Symbol, m.Name
+				}
+			}
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"chain_id": chainID, "decisions": out})
 }

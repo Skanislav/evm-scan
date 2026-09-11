@@ -97,6 +97,16 @@ it shows up with `source: discovered`. Promote one by hand instead with:
 curl -XPOST localhost:8080/v1/candidates/0xADDR/promote -d '{"reason":"looks useful"}'
 ```
 
+The other verdict is spam, for a contract not worth the backfill. It leaves the ranking,
+stops being offered to auto-promote, and is reversible:
+
+```bash
+curl -XPOST localhost:8080/v1/candidates/0xADDR/spam -d '{"reason":"airdrop burst"}'
+curl 'localhost:8080/v1/decisions'                    # what has been ruled, newest first
+curl 'localhost:8080/v1/candidates?include_spam=true' # the ruled-out ones are still counted
+curl -XPOST localhost:8080/v1/candidates/0xADDR/unspam
+```
+
 Production configs should set `auto_promote: false` and let the on-chain registry decide;
 the demo turns it on so there is something to watch.
 
