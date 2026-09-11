@@ -2479,8 +2479,15 @@ function openNameRpc() {
 // load lazily and pinned: nothing is fetched until someone types a name or opens the
 // accounts tab, and an unpinned CDN import would be a moving dependency in the page.
 // --------------------------------------------------------------------------
-const NAMES_MODULE = 'https://esm.sh/@1001-digital/ethereum-names@0.6.0';
-const VIEM_MODULE = 'https://esm.sh/viem@2.56.3';
+// ?bundle on both, for the reason VIEM_CHAINS_MODULE above already avoids the barrel.
+// esm.sh serves an unbundled module graph by default: importing plain viem fans out into
+// 239 separate requests, and on a cold cache against a cold edge that measured 26 seconds
+// before the first name resolved — a first visit that looks like a page which does not
+// work, because the only thing on screen is a disabled button. Bundled it is one request
+// and about 200ms. The first client to ask for a given ?bundle URL pays esm.sh's build
+// cost once and every client after that gets it from the CDN.
+const NAMES_MODULE = 'https://esm.sh/@1001-digital/ethereum-names@0.6.0?bundle';
+const VIEM_MODULE = 'https://esm.sh/viem@2.56.3?bundle';
 const NAME_RPC_KEY = 'evmscan.name-rpc';
 const DEFAULT_NAME_RPC = 'https://ethereum-rpc.publicnode.com';
 const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
