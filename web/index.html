@@ -169,6 +169,16 @@
   .split-rail { grid-template-columns: minmax(0, 1fr) 330px; }
   .sticky { position: sticky; top: 40px; min-width: 0; overflow-wrap: anywhere; }
   pre.wrap { white-space: pre-wrap; word-break: break-all; }
+  /* A folded card: one row that says the answer, everything behind it on a click. */
+  .fold > summary {
+    display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: baseline; cursor: pointer; list-style: none;
+    padding: 10px 0; border-top: 1px solid var(--color-divider); border-bottom: 1px solid var(--color-divider);
+  }
+  .fold > summary::-webkit-details-marker { display: none; }
+  .fold > summary .fold-more { margin-left: auto; font-size: 11.5px; color: var(--color-neutral-600); white-space: nowrap; }
+  .fold > summary .fold-more::after { content: 'details ▾'; }
+  .fold[open] > summary .fold-more::after { content: 'hide ▴'; }
+  .fold-body { padding-top: 12px; }
   .checks { display: grid; gap: 6px; font-size: 13.5px; line-height: 1.4; }
   .checks > div { display: grid; grid-template-columns: 14px minmax(0, 1fr); gap: 8px; align-items: baseline; }
   .checks .addr { display: block; margin-top: 1px; }
@@ -590,21 +600,28 @@
       <!-- evmscan-verify, in the browser: the proof this server hands out is recomputed from
            the account and its asset list, replayed to the root, then put to HintRegistry on the
            reader's RPC. The API's hashes are shown beside the recomputed ones, never trusted. -->
-      <div class="colhead" id="proof-head" hidden style="margin-top:30px">inclusion proof · checked in your browser</div>
-      <div id="proof-card" hidden style="margin-top:10px">
-        <div id="proof-verdict"></div>
-        <div class="kvgrid" id="proof-facts" style="margin-top:14px; gap:10px 18px; grid-template-columns:repeat(2, minmax(0,1fr))"></div>
-        <div class="checks" id="proof-steps" style="margin-top:14px"></div>
-        <div class="hint" id="proof-epoch" style="margin-top:10px"></div>
-        <details id="proof-repro" hidden style="margin-top:12px">
-          <summary class="hint" style="cursor:pointer">reproduce in a shell</summary>
-          <pre id="proof-how" class="wrap"></pre>
-        </details>
-        <details style="margin-top:8px">
-          <summary class="hint" style="cursor:pointer">the proof as served</summary>
-          <pre id="proof" class="wrap"></pre>
-        </details>
-      </div>
+      <details class="fold" id="proof-card" hidden style="margin-top:30px">
+        <summary>
+          <span class="colhead">inclusion proof</span>
+          <span id="proof-verdict-chip"></span>
+          <span class="fold-more"></span>
+        </summary>
+        <div class="fold-body">
+          <div id="proof-verdict-text"></div>
+          <div class="kvgrid" id="proof-facts" style="margin-top:14px; gap:10px 18px; grid-template-columns:repeat(2, minmax(0,1fr))"></div>
+          <div class="checks" id="proof-steps" style="margin-top:14px"></div>
+          <div class="hint" id="proof-epoch" style="margin-top:10px"></div>
+          <details id="proof-repro" hidden style="margin-top:12px">
+            <summary class="hint" style="cursor:pointer">reproduce in a shell</summary>
+            <pre id="proof-how" class="wrap"></pre>
+          </details>
+          <details style="margin-top:8px">
+            <summary class="hint" style="cursor:pointer">the proof as served</summary>
+            <pre id="proof" class="wrap"></pre>
+          </details>
+          <div class="hint" style="margin-top:10px">Checked in your browser on your RPC; this server’s hashes were recomputed, not believed.</div>
+        </div>
+      </details>
     </div>
   </div>
 </section>
@@ -2789,14 +2806,13 @@ function renderAccountRail() {
 // earned it is the checklist under it, and the API's hashes are never trusted — where
 // the two disagree, the chain wins and the card says so.
 async function loadProof(addr) {
-  $('proof-head').hidden = false;
   $('proof-card').hidden = false;
   $('proof').textContent = '';
   const set = (id, html) => { $(id).innerHTML = html; };
-  set('proof-verdict', ''); set('proof-facts', ''); set('proof-steps', ''); set('proof-epoch', '');
+  showVerdict({ chip: '', note: '' }); set('proof-facts', ''); set('proof-steps', ''); set('proof-epoch', '');
   $('proof-repro').hidden = true;
-  if (!EPOCHS.length) { set('proof-verdict', proofVerdict('v-none', 'nothing to prove yet', 'No commitment has been built on this deployment.')); return; }
-  set('proof-verdict', '<span class="empty">checking…</span>');
+  if (!EPOCHS.length) { showVerdict(proofVerdict('v-none', 'nothing to prove yet', 'No commitment has been built on this deployment.')); return; }
+  showVerdict({ chip: '<span class="empty">checking…</span>', note: '' });
 
   // 1. Which epoch. The registry's latest finalized one when it can be asked — that is
   //    the one the gateway serves and the one a reader would check against. Anything
@@ -2817,7 +2833,7 @@ async function loadProof(addr) {
 
   const facts = [['epoch', `#${e.id}${e.onchain_epoch_id != null ? ` · on-chain #${e.onchain_epoch_id}` : ''}`]];
   const finish = (verdict, extraFacts = []) => {
-    set('proof-verdict', verdict);
+    showVerdict(verdict);
     set('proof-facts', facts.concat(extraFacts).map(([k, v]) =>
       `<div><div class="k">${esc(k)}</div><div class="v" style="font-size:15px">${v}</div></div>`).join(''));
     set('proof-epoch', why ? esc(why) : '');
@@ -2938,10 +2954,17 @@ function proofStep(ok, label, got, served) {
     : '';
   return `<div><span class="verdict ${ok ? 'v-approved' : 'v-spam'}">${ok ? '✓' : '✗'}</span><span>${label}${value}</span></div>`;
 }
-// The headline: a chip and one sentence a reader can act on.
+// The headline: a chip that sits in the folded row, and one sentence a reader can
+// act on, which is the first thing they see when they open it.
 function proofVerdict(cls, label, note) {
-  return `<span class="verdict ${cls}" style="font-size:12.5px">${esc(label)}</span>`
-    + (note ? `<div style="font-size:15px; line-height:1.45; margin-top:6px">${note}</div>` : '');
+  return {
+    chip: `<span class="verdict ${cls}" style="font-size:12px">${esc(label)}</span>`,
+    note: note ? `<div style="font-size:15px; line-height:1.45">${note}</div>` : '',
+  };
+}
+function showVerdict(v) {
+  $('proof-verdict-chip').innerHTML = v.chip;
+  $('proof-verdict-text').innerHTML = v.note;
 }
 function hostOf(url) { try { return new URL(url).host; } catch { return url; } }
 // The same check from a shell, so nobody has to take the chip's word for it either.
