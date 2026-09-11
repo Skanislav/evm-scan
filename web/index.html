@@ -167,7 +167,11 @@
   .split { display: grid; gap: 56px; align-items: start; }
   .split-main { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); }
   .split-rail { grid-template-columns: minmax(0, 1fr) 330px; }
-  .sticky { position: sticky; top: 40px; }
+  .sticky { position: sticky; top: 40px; min-width: 0; overflow-wrap: anywhere; }
+  pre.wrap { white-space: pre-wrap; word-break: break-all; }
+  .checks { display: grid; gap: 6px; font-size: 13.5px; line-height: 1.4; }
+  .checks > div { display: grid; grid-template-columns: 14px minmax(0, 1fr); gap: 8px; align-items: baseline; }
+  .checks .addr { display: block; margin-top: 1px; }
 
   .tablehead, .tablerow { display: grid; gap: 18px; align-items: center; }
   .tablehead {
@@ -587,14 +591,18 @@
            the account and its asset list, replayed to the root, then put to HintRegistry on the
            reader's RPC. The API's hashes are shown beside the recomputed ones, never trusted. -->
       <div class="colhead" id="proof-head" hidden style="margin-top:30px">inclusion proof · checked in your browser</div>
-      <div id="proof-card" hidden style="margin-top:8px">
-        <div class="hint" id="proof-epoch"></div>
-        <div id="proof-steps" style="margin-top:10px; display:grid; gap:7px; font-size:13px; line-height:1.4"></div>
-        <div id="proof-verdict" style="margin-top:12px"></div>
-        <div class="hint" id="proof-how" style="margin-top:10px"></div>
-        <details style="margin-top:10px">
+      <div id="proof-card" hidden style="margin-top:10px">
+        <div id="proof-verdict"></div>
+        <div class="kvgrid" id="proof-facts" style="margin-top:14px; gap:10px 18px; grid-template-columns:repeat(2, minmax(0,1fr))"></div>
+        <div class="checks" id="proof-steps" style="margin-top:14px"></div>
+        <div class="hint" id="proof-epoch" style="margin-top:10px"></div>
+        <details id="proof-repro" hidden style="margin-top:12px">
+          <summary class="hint" style="cursor:pointer">reproduce in a shell</summary>
+          <pre id="proof-how" class="wrap"></pre>
+        </details>
+        <details style="margin-top:8px">
           <summary class="hint" style="cursor:pointer">the proof as served</summary>
-          <pre id="proof"></pre>
+          <pre id="proof" class="wrap"></pre>
         </details>
       </div>
     </div>
@@ -2777,33 +2785,43 @@ function renderAccountRail() {
 
 // evmscan-verify, in the browser. The proof this server hands out is recomputed from
 // the account and its asset list, replayed to the root, then put to HintRegistry on
-// the reader's RPC. The API's hashes are shown beside the recomputed ones and never
-// trusted; where the two disagree, the chain wins and the page says so.
+// the reader's RPC. The verdict comes first and in one sentence; the arithmetic that
+// earned it is the checklist under it, and the API's hashes are never trusted — where
+// the two disagree, the chain wins and the card says so.
 async function loadProof(addr) {
   $('proof-head').hidden = false;
   $('proof-card').hidden = false;
   $('proof').textContent = '';
   const set = (id, html) => { $(id).innerHTML = html; };
-  set('proof-steps', ''); set('proof-verdict', ''); set('proof-how', '');
-  if (!EPOCHS.length) { set('proof-epoch', '<span class="empty">no commitments built yet</span>'); return; }
-  set('proof-epoch', '<span class="empty">choosing an epoch…</span>');
+  set('proof-verdict', ''); set('proof-facts', ''); set('proof-steps', ''); set('proof-epoch', '');
+  $('proof-repro').hidden = true;
+  if (!EPOCHS.length) { set('proof-verdict', proofVerdict('v-none', 'nothing to prove yet', 'No commitment has been built on this deployment.')); return; }
+  set('proof-verdict', '<span class="empty">checking…</span>');
 
   // 1. Which epoch. The registry's latest finalized one when it can be asked — that is
-  //    the one the gateway serves and the one a reader would check against.
+  //    the one the gateway serves and the one a reader would check against. Anything
+  //    else is a fallback, and the card says which and why.
   let e = null, why = '';
   if (regRpc() && STATUS) {
     try {
       const [found, id] = await regCall('latestFinalizedEpoch', [BigInt(STATUS.chain_id)]);
       if (found) {
         e = EPOCHS.find(x => x.onchain_epoch_id === Number(id)) || null;
-        why = e ? `the registry’s latest finalized commitment for chain ${STATUS.chain_id}`
-          : `the registry’s latest finalized epoch is on-chain #${id}, older than this list; the newest here instead`;
-      } else why = 'nothing is finalized on chain for this chain yet; the newest here instead';
-    } catch (err) { why = `the registry could not be asked (${err.message}); the newest here instead`; }
+        if (!e) why = `The registry’s latest finalized epoch is on-chain #${id}, which is older than the list on the left; this is the newest one here instead.`;
+      } else why = 'Nothing is finalized on chain for this chain yet, so this is the newest epoch here.';
+    } catch (err) { why = `The registry could not be asked which epoch is final (${err.message}), so this is the newest one here.`; }
+  } else if (!regRpc()) {
+    why = 'Without an RPC for the registry’s chain the page cannot ask which epoch is final; this is the newest one here.';
   }
   if (!e) e = EPOCHS.find(x => x.status === 'finalized') || EPOCHS[0];
-  set('proof-epoch', `Epoch <strong>#${e.id}</strong>${e.onchain_epoch_id != null ? ` (on-chain #${e.onchain_epoch_id})` : ''}`
-    + `${why ? ' — ' + esc(why) : ''}`);
+
+  const facts = [['epoch', `#${e.id}${e.onchain_epoch_id != null ? ` · on-chain #${e.onchain_epoch_id}` : ''}`]];
+  const finish = (verdict, extraFacts = []) => {
+    set('proof-verdict', verdict);
+    set('proof-facts', facts.concat(extraFacts).map(([k, v]) =>
+      `<div><div class="k">${esc(k)}</div><div class="v" style="font-size:15px">${v}</div></div>`).join(''));
+    set('proof-epoch', why ? esc(why) : '');
+  };
 
   // 2. The proof, as served.
   let p;
@@ -2811,12 +2829,11 @@ async function loadProof(addr) {
     p = await api(`/v1/epochs/${e.id}/proof?account=${encodeURIComponent(addr)}`);
   } catch (err) {
     if (err.status === 410) {
-      set('proof-verdict', proofVerdict('v-none', 'table pruned',
-        'this epoch’s leaves were pruned here; the root is still on chain, so a mirrored snapshot can prove it and this server no longer can'));
+      finish(proofVerdict('v-none', 'table pruned', 'This epoch’s leaves were pruned from this server after a newer commitment finalized. The root is still on chain, so a mirrored snapshot can still prove it.'));
     } else if (err.status === 404) {
-      set('proof-verdict', proofVerdict('v-none', 'not in this commitment', esc(err.message)));
+      finish(proofVerdict('v-none', 'not in this commitment', 'The index had no row for this account when the epoch was built. ' + esc(err.message)));
     } else {
-      set('proof-verdict', proofVerdict('v-spam', 'proof unavailable', esc(err.message)));
+      finish(proofVerdict('v-spam', 'proof unavailable', esc(err.message)));
     }
     return;
   }
@@ -2834,18 +2851,19 @@ async function loadProof(addr) {
     [{ type: 'address' }, { type: 'uint64' }, { type: 'bytes32' }], [account, chainId, assetsHash]));
   const hashPair = (a, b) => viem.keccak256(viem.concat(a <= b ? [a, b] : [b, a]));
   let node = leaf.toLowerCase();
-  for (const sib of p.proof || []) node = hashPair(node, sib.toLowerCase());
+  const siblings = p.proof || [];
+  for (const sib of siblings) node = hashPair(node, sib.toLowerCase());
   const same = (a, b) => String(a || '').toLowerCase() === String(b || '').toLowerCase();
-  const steps = [
-    proofStep(same(assetsHash, p.assets_hash), `digest over ${assets.length} contract${assets.length === 1 ? '' : 's'}`, assetsHash, p.assets_hash),
-    proofStep(same(leaf, p.leaf), `leaf for chain ${chainId}`, leaf, p.leaf),
-    proofStep(same(node, p.epoch.merkle_root), `${(p.proof || []).length} sibling${(p.proof || []).length === 1 ? '' : 's'} replayed to the root`, node, p.epoch.merkle_root),
+  const checks = [
+    [same(assetsHash, p.assets_hash), `digest of ${assets.length} contract${assets.length === 1 ? '' : 's'} recomputed`, assetsHash, p.assets_hash],
+    [same(leaf, p.leaf), 'leaf recomputed', leaf, p.leaf],
+    [same(node, p.epoch.merkle_root), `root replayed from ${siblings.length} sibling${siblings.length === 1 ? '' : 's'}`, node, p.epoch.merkle_root],
   ];
-  const localOk = same(assetsHash, p.assets_hash) && same(leaf, p.leaf) && same(node, p.epoch.merkle_root);
-  set('proof-steps', steps.join(''));
+  const localOk = checks.every(c => c[0]);
+  const render = () => set('proof-steps', checks.map(c => proofStep(...c)).join(''));
   if (!localOk) {
-    set('proof-verdict', proofVerdict('v-spam', 'does not recompute',
-      'a hash this server reported is not what its own inputs produce; nothing on chain needs to be asked to reject this proof'));
+    render();
+    finish(proofVerdict('v-spam', 'does not recompute', 'A hash this server served is not what its own inputs produce. Nothing on chain needs asking to reject this.'));
     return;
   }
 
@@ -2853,57 +2871,82 @@ async function loadProof(addr) {
   //    from the epoch's own chain id, so a built-but-unposted epoch has nothing to ask.
   const url = regRpc();
   if (p.onchain_epoch_id == null) {
-    set('proof-verdict', proofVerdict('v-none', 'recomputes · not posted',
-      'the hashes hold, but this epoch is not on chain yet, so there is no contract to ask'));
+    render();
+    finish(proofVerdict('v-none', 'recomputes · not on chain', 'The hashes hold, but this epoch has not been posted, so there is no contract to ask yet.'));
     return;
   }
+  const how = castLine(p, assetsHash, url);
   if (!url) {
-    set('proof-verdict', proofVerdict('v-none', 'recomputes · contract not asked',
-      `the hashes hold; add an RPC for chain ${esc(REG ? REG.chain_id : '?')} above to run <code>verifyInclusion</code> as well`));
-    set('proof-how', castLine(p, assetsHash, null));
+    render();
+    finish(proofVerdict('v-none', 'recomputes · contract not asked',
+      `The hashes hold. Add an RPC for chain ${esc(REG ? REG.chain_id : '?')} in the wallet tab to run <code>verifyInclusion</code> as well.`));
+    $('proof-how').textContent = how; $('proof-repro').hidden = false;
     return;
   }
-  try {
-    const ok = await regCall('verifyInclusion', [BigInt(p.onchain_epoch_id), account, assetsHash, p.proof || []]);
-    let standing = '';
-    try {
-      const on = await readOnchainEpoch(p.onchain_epoch_id);
-      const st = EPOCH_STATUS[Number(on.status)] || `status ${on.status}`;
-      standing = same(on.root, p.epoch.merkle_root)
-        ? `The registry holds the same root and calls this epoch <strong>${esc(st)}</strong>.`
-        : `<span class="err" style="margin:0">The registry holds a different root (${esc(short(on.root, 8))}) for this epoch.</span>`;
-      if (st !== 'finalized') standing += ' This root is not final yet — it can still be disputed and rejected.';
-      if (on.assertionId && !ZERO_HASH.test(on.assertionId)) standing += ` Oracle assertion <span class="addr">${esc(on.assertionId)}</span>.`;
-    } catch (err) { standing = `The epoch itself could not be read back: ${esc(err.message)}.`; }
-    set('proof-verdict', ok
-      ? proofVerdict('v-approved', 'verified on chain',
-        `<code>HintRegistry.verifyInclusion</code> at <span class="addr">${esc(REG.address)}</span> on chain ${esc(REG.chain_id)} returned true, asked on <code>${esc(hostOf(url))}</code>. ${standing}`)
-      : proofVerdict('v-spam', 'rejected by the contract',
-        `the hashes recompute here, yet the registry says this leaf is not under on-chain epoch #${esc(p.onchain_epoch_id)}. ${standing}`));
-  } catch (err) {
-    set('proof-verdict', revertIs(viem, err, 'UnknownEpoch')
-      ? proofVerdict('v-spam', 'unknown epoch', `the registry at <span class="addr">${esc(REG.address)}</span> has no epoch #${esc(p.onchain_epoch_id)}; this server’s record of posting it does not match the chain`)
-      : proofVerdict('v-none', 'contract not asked', `${esc(hostOf(url))} could not answer: ${esc(err.message)}`));
+  let ok, on, onErr;
+  try { ok = await regCall('verifyInclusion', [BigInt(p.onchain_epoch_id), account, assetsHash, siblings]); }
+  catch (err) {
+    render();
+    finish(revertIs(viem, err, 'UnknownEpoch')
+      ? proofVerdict('v-spam', 'unknown epoch', `The registry has no epoch #${esc(p.onchain_epoch_id)}. This server’s record of having posted it does not match the chain.`)
+      : proofVerdict('v-none', 'contract not asked', `${esc(hostOf(url))} could not answer: ${esc(err.message)}`),
+      [['registry', `<span class="addr" title="${esc(REG.address)}">${esc(short(REG.address, 6))}</span>`]]);
+    $('proof-how').textContent = how; $('proof-repro').hidden = false;
+    return;
   }
-  set('proof-how', castLine(p, assetsHash, url));
+  try { on = await readOnchainEpoch(p.onchain_epoch_id); } catch (err) { onErr = err; }
+  const st = on ? (EPOCH_STATUS[Number(on.status)] || `status ${on.status}`) : null;
+  const rootOnChain = on ? same(on.root, p.epoch.merkle_root) : null;
+  checks.push([ok, `<code>verifyInclusion</code> on chain ${esc(REG.chain_id)} returned ${ok}`, null, null]);
+  if (on) checks.push([rootOnChain, rootOnChain ? 'the registry holds the same root' : 'the registry holds a different root', on.root, p.epoch.merkle_root]);
+  render();
+
+  let verdict;
+  if (!ok) {
+    verdict = proofVerdict('v-spam', 'rejected by the contract',
+      `The hashes recompute here, but the registry says this leaf is not under on-chain epoch #${esc(p.onchain_epoch_id)}.`);
+  } else if (st === 'finalized') {
+    verdict = proofVerdict('v-approved', 'verified on chain',
+      'This account’s row is in the commitment the registry calls final. Nothing here took this server’s word for it.');
+  } else if (st === 'proposed') {
+    verdict = proofVerdict('v-approved', 'verified · not final yet',
+      `The registry agrees, but the epoch is still proposed: it can be disputed until ${esc(fmtUnix(on.challengeDeadline))} and rejected.`);
+  } else if (st) {
+    verdict = proofVerdict(st === 'rejected' || st === 'challenged' ? 'v-spam' : 'v-approved', `verified · epoch ${st}`,
+      st === 'rejected' ? 'The proof holds against a root the registry has since rejected; it proves nothing anyone should rely on.'
+        : st === 'challenged' ? 'The proof holds, and the root it holds against is under dispute.'
+          : 'The registry agrees.');
+  } else {
+    verdict = proofVerdict('v-approved', 'verified on chain',
+      `The registry agrees. Its copy of the epoch could not be read back${onErr ? ` (${esc(onErr.message)})` : ''}.`);
+  }
+  const extra = [
+    ['registry', `<span class="addr" title="${esc(REG.address)}">${esc(short(REG.address, 6))}</span>`],
+    ['asked on', `<span class="addr">${esc(hostOf(url))}</span>`],
+  ];
+  if (st) extra.unshift(['on chain', `<span class="verdict ${st === 'finalized' ? 'v-approved' : (st === 'rejected' || st === 'challenged') ? 'v-spam' : 'v-none'}">${esc(st)}</span>`]);
+  if (on && on.assertionId && !ZERO_HASH.test(on.assertionId)) extra.push(['oracle assertion', `<span class="addr" title="${esc(on.assertionId)}">${esc(short(on.assertionId, 6))}</span>`]);
+  finish(verdict, extra);
+  $('proof-how').textContent = how; $('proof-repro').hidden = false;
 }
 
+// One line of the checklist: a tick, what was checked, and the value it produced.
+// A failed check also shows what the API had claimed, so the two can be compared.
 function proofStep(ok, label, got, served) {
-  return `<div style="display:grid; grid-template-columns:16px minmax(0,1fr); gap:8px">
-      <span class="verdict ${ok ? 'v-approved' : 'v-spam'}">${ok ? '✓' : '✗'}</span>
-      <span>${esc(label)}<br><span class="addr" title="recomputed here: ${esc(got)}${ok ? '' : ' · served: ' + esc(served)}">${esc(short(got, 10))}</span>${ok ? '' : ` <span class="verdict v-spam">served ${esc(short(served, 10))}</span>`}</span>
-    </div>`;
+  const value = got
+    ? `<span class="addr" title="recomputed here: ${esc(got)}${ok ? '' : ' · served: ' + esc(served)}">${esc(short(got, 8))}${ok ? '' : ` <span class="verdict v-spam">served ${esc(short(served, 8))}</span>`}</span>`
+    : '';
+  return `<div><span class="verdict ${ok ? 'v-approved' : 'v-spam'}">${ok ? '✓' : '✗'}</span><span>${label}${value}</span></div>`;
 }
+// The headline: a chip and one sentence a reader can act on.
 function proofVerdict(cls, label, note) {
-  return `<span class="verdict ${cls}" style="font-size:12px">${esc(label)}</span>`
-    + (note ? `<div class="hint" style="margin-top:5px">${note}</div>` : '');
+  return `<span class="verdict ${cls}" style="font-size:12.5px">${esc(label)}</span>`
+    + (note ? `<div style="font-size:15px; line-height:1.45; margin-top:6px">${note}</div>` : '');
 }
 function hostOf(url) { try { return new URL(url).host; } catch { return url; } }
 // The same check from a shell, so nobody has to take the chip's word for it either.
 function castLine(p, digest, url) {
-  const proof = (p.proof || []).join(',');
-  return `Same check anywhere: <code>cast call ${esc(REG.address)} 'verifyInclusion(uint256,address,bytes32,bytes32[])(bool)' `
-    + `${esc(p.onchain_epoch_id)} ${esc(p.account)} ${esc(digest)} '[${esc(proof)}]'${url ? ` --rpc-url ${esc(url)}` : ''}</code>`;
+  return `cast call ${REG.address} \\\n  'verifyInclusion(uint256,address,bytes32,bytes32[])(bool)' \\\n  ${p.onchain_epoch_id} ${p.account} \\\n  ${digest} \\\n  '[${(p.proof || []).join(',')}]'${url ? ` \\\n  --rpc-url ${url}` : ''}`;
 }
 
 // What a row's local status means when the registry has no copy of it yet.
