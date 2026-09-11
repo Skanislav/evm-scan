@@ -761,7 +761,10 @@ let CHAINS = [], PICKED = null, DEFAULT_CHAIN = 0, PENDING = null, CAN_ADD = fal
 let INDEXED_CHAIN = 0, HEAD = 0, REG = null, WALLET = null, STATUS = null;
 let THRESHOLDS = { min_events: 0, min_blocks: 0 };
 let CANDIDATES = [], ASSETS = [], EPOCHS = [];
-let TRIAGE_IDX = 0, LAST_VERDICT = null;
+// The card is pinned to an address, never to a position. Discovery re-sorts the queue
+// every five seconds — on a busy chain the row under any given index changes between
+// one render and the next keystroke — and a verdict is about a contract, not a slot.
+let CARD_ADDR = null, LAST_VERDICT = null;
 // Skips are this session's, not the index's: "not now" is a different statement from
 // "not ever", and only the second one is worth a row in the database.
 const SKIPPED = new Set();
@@ -1393,7 +1396,7 @@ async function decide(address, verdict, btn) {
     // and undoing that means revoking the asset — a different act with a different
     // cost, so the offer is not made.
     LAST_VERDICT = verdict === 'unspam' ? null : { address, verdict };
-    TRIAGE_IDX = 0;
+    CARD_ADDR = null;
     await Promise.all([loadCandidates(), loadDecisions(), loadAssets(), loadStatus()]);
   } catch (e) {
     showErr(VIEW === 'triage' ? 'triage-err' : 'cand-err', e);
@@ -1483,7 +1486,10 @@ function renderTriage() {
   $('triage-empty').hidden = true;
   $('triage-card').hidden = false;
 
-  const c = q[Math.min(TRIAGE_IDX, q.length - 1)];
+  // Hold the contract already on screen if it is still in the queue; a poll that
+  // reorders under the operator must not change what the next keystroke judges.
+  const c = q.find(x => x.address === CARD_ADDR) || q[0];
+  CARD_ADDR = c.address;
   $('card-standard').textContent = c.standard;
   $('card-symbol').textContent = c.symbol || short(c.address, 5);
   $('card-name').textContent = c.name || 'no name on the contract';
@@ -1507,7 +1513,7 @@ function renderTriage() {
 
   $('v-approve').onclick = () => decide(c.address, 'approved', null);
   $('v-spam').onclick = () => decide(c.address, 'spam', null);
-  $('v-skip').onclick = () => { SKIPPED.add(c.address); renderQueue(); renderTriage(); };
+  $('v-skip').onclick = () => { SKIPPED.add(c.address); CARD_ADDR = null; renderQueue(); renderTriage(); };
 }
 
 window.addEventListener('keydown', e => {
@@ -1517,12 +1523,13 @@ window.addEventListener('keydown', e => {
   if (k === 'u' && LAST_VERDICT && LAST_VERDICT.verdict === 'spam') {
     e.preventDefault(); decide(LAST_VERDICT.address, 'unspam'); return;
   }
-  const q = queue();
-  const c = q[Math.min(TRIAGE_IDX, q.length - 1)];
+  // Read the pinned address, not the queue's current head: between the render and
+  // this keystroke the list may have been replaced by a poll.
+  const c = queue().find(x => x.address === CARD_ADDR);
   if (!c) return;
   if (k === 'a') { e.preventDefault(); decide(c.address, 'approved', null); }
   else if (k === 's') { e.preventDefault(); decide(c.address, 'spam', null); }
-  else if (k === 'k') { e.preventDefault(); SKIPPED.add(c.address); renderQueue(); renderTriage(); }
+  else if (k === 'k') { e.preventDefault(); SKIPPED.add(c.address); CARD_ADDR = null; renderQueue(); renderTriage(); }
 });
 
 // --------------------------------------------------------------------------
