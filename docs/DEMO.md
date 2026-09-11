@@ -5,13 +5,18 @@ point — but it also means you need a `geth` binary.
 
 ## 0. Get geth
 
-Any geth ≥ 1.14 works. If you don't have one, build the exact version this repo already
-depends on, straight from the Go module cache:
+Any geth ≥ 1.14 works. If you don't have one, install the exact version this repo
+already depends on:
 
 ```bash
-go build -o bin/geth github.com/ethereum/go-ethereum/cmd/geth
+GOBIN="$PWD/bin" go install github.com/ethereum/go-ethereum/cmd/geth@v1.16.1
 export PATH="$PWD/bin:$PATH"
 ```
+
+`go install pkg@version` rather than `go build` from this module: geth's command has
+build dependencies the daemon does not (`naoina/toml`, `automaxprocs`), so building it
+against this repo's `go.sum` fails on missing entries for packages nothing here
+imports. The `@version` form resolves in its own module context and ignores ours.
 
 ## 1. Postgres
 
@@ -109,6 +114,33 @@ curl -XPOST localhost:8080/v1/candidates/0xADDR/unspam
 
 Production configs should set `auto_promote: false` and let the on-chain registry decide;
 the demo turns it on so there is something to watch.
+
+**The hint filters, which is the private half of the read path.** The demo writes a
+token list beside the config — `config.demo.tokens.json` — and deliberately leaves
+dSTEALTH off it, because dSTEALTH is the contract nobody registered. Both filters are
+served without anyone asking first:
+
+```bash
+curl 'localhost:8080/v1/hints'        # index-<chain> and tokens-<chain>
+```
+
+In the wallet tab, look up a demo user. dSTEALTH carries an **unlisted** tag and the
+other three do not: that test ran in your browser against a file it already had, so
+marking it cost no request and told the daemon nothing. Add dSTEALTH to the list and
+restart to watch the tag disappear.
+
+Then open **"or ask the index without naming the address"** above the holdings and press
+*Ask the filter*. It reports the same contracts the lookup did, worked out from
+`index-<chain>.xorf` — a static file, identical for every visitor — so the daemon served
+a download and never learned whose address it was for. The block it quotes is the block
+the filter was built at, not head; a contract missing from it is one this deployment does
+not index, which is a different statement from a balance of zero.
+
+The **Private watchlist** section below builds the inverse: a filter over contracts you
+choose, blinded under a secret only you hold, which a host can store and cannot read.
+Pick the password provider to try it without a passkey or a wallet, then use *Open one*
+to read the file back. There is no epoch or registry involvement in any of this — a
+fresh index is enough.
 
 **The deployless lens.** Ask what an account actually holds, right now:
 

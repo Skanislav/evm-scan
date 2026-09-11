@@ -222,10 +222,31 @@ func (s *Server) filterBytes(ctx context.Context, name string, c *hintfilter.Cac
 
 // hintNames lists the served filters in a stable order, so the listing does not
 // reshuffle between requests for no reason.
+// hintNames is every filter this deployment can serve, not merely every one it has
+// been asked for yet.
+//
+// An index filter is built on demand and cached under its name, so a map of what has
+// been made is a map of what somebody has already fetched. Listing that would mean a
+// freshly started daemon reports no index filter, a client concludes there is nothing
+// to download, and the same filter appears in the listing later only because someone
+// guessed the URL — an endpoint whose answer depends on who asked first. The chain
+// set is what actually decides which index filters exist, so it is what is listed.
 func (s *Server) hintNames() []string {
-	names := make([]string, 0, len(s.hints))
+	seen := map[string]bool{}
+	var names []string
+	s.hintsMu.Lock()
 	for name := range s.hints {
+		seen[name] = true
 		names = append(names, name)
+	}
+	s.hintsMu.Unlock()
+	if s.d.Store != nil && s.d.Chains != nil {
+		for _, e := range s.d.Chains.Entries() {
+			if name := indexFilterName(e.ID); !seen[name] {
+				seen[name] = true
+				names = append(names, name)
+			}
+		}
 	}
 	sort.Strings(names)
 	return names
@@ -252,7 +273,12 @@ func listURL(lists map[string][]common.Address, name string) string {
 }
 
 func (s *Server) hintView(r *http.Request, name string) (hintFilterJSON, error) {
-	c := s.hints[name]
+	// Through lookupHint, so that an index filter named by the chain set but never
+	// requested is built here rather than reported as missing.
+	c, ok := s.lookupHint(name)
+	if !ok {
+		return hintFilterJSON{}, fmt.Errorf("no filter named %q", name)
+	}
 	f, enc, m, err := s.filterBytes(r.Context(), name, c)
 	if err != nil {
 		return hintFilterJSON{}, err
