@@ -390,6 +390,7 @@
       </div>
       <div id="holdings"></div>
     </div>
+    <p class="hint" id="hint-use" hidden style="margin-top:14px; max-width:92ch"></p>
     <div id="xchain" style="margin-top:40px">
       <div style="display:flex; align-items:baseline; justify-content:space-between; gap:25px; flex-wrap:wrap">
         <h3 style="font-size:26px; margin:0">Elsewhere</h3>
@@ -826,6 +827,10 @@ let CARD_ADDR = null, LAST_VERDICT = null;
 // "not ever", and only the second one is worth a row in the database.
 const SKIPPED = new Set();
 let WALLET_ADDR = '', WALLET_NAME = '', HOLDINGS = [], VALUATION = null, SHOW_SPAM = false;
+// What the reader's own hint did to the last lookup. Kept so it can be shown: a hint
+// that silently changes what gets asked about is exactly the thing this page should
+// not have.
+let HINT_USE = null;
 let ACCOUNTS = [], ACCT_OFFSET = 0, ACCT_MORE = false, ACCT_SELECTED = null;
 let graphLoaded = false;
 
@@ -2851,20 +2856,33 @@ function showResolved(r) {
 // nobody has ruled on. Without the second half every row would read "indexed" and the
 // verdict column would be decoration — the point is that the index says which
 // contracts to ask about, including the ones it has not committed to.
-function walletTokens() {
+function walletTokens(hinted) {
   const seen = new Set();
   const out = [];
   const push = a => { const k = a.toLowerCase(); if (!seen.has(k)) { seen.add(k); out.push(a); } };
   for (const a of ASSETS) push(a.address);
+
   // Spam is asked about too, and hidden at render. Leaving it out here would make the
   // "show N marked spam" count zero on a fresh lookup — a wallet holding three spam
   // tokens would be told it holds none, which is the opposite of what the toggle is for.
-  for (const c of CANDIDATES) {
-    if (c.promoted) continue;
+  const cands = CANDIDATES.filter(c => !c.promoted).map(c => c.address);
+
+  // Hinted candidates first, when this reader's hint says which of them this account
+  // has actually held. The cap below is the reason this matters: it was always going
+  // to drop candidates, and until now it dropped them in discovery order, which is an
+  // ordering about the chain rather than about the account being looked up. Sorting is
+  // stable, so everything unhinted keeps the order it had. Indexed assets are pushed
+  // above and never reordered — an asset the index committed to must not lose its slot
+  // to a hint, which is a guess.
+  if (hinted && hinted.size) {
+    cands.sort((a, b) => (hinted.has(b.toLowerCase()) ? 1 : 0) - (hinted.has(a.toLowerCase()) ? 1 : 0));
+  }
+
+  for (const a of cands) {
     // The lens batches by twenty and tokens= caps at 512; this cap is what keeps both
     // the URL and the number of eth_calls bounded no matter how busy discovery is.
     if (out.length >= 50) break;
-    push(c.address);
+    push(a);
   }
   return out;
 }
@@ -2889,6 +2907,15 @@ async function lookup() {
     WALLET_NAME = resolved.name || '';
     showResolved(resolved.name ? resolved : null);
 
+    // The hint read starts here, beside the account fetch rather than after it. The
+    // local half is instant; the ENS half is a mainnet eth_call, and a lookup should
+    // not wait for it in series with the request it was going to make anyway. Only a
+    // name that was typed is read — see hints.js for why a pasted address is not
+    // reverse-resolved to go looking for one.
+    const seedP = loadHints()
+      .then(m => m.seedFor(addr, ADDRESS_RE.test(typed) ? '' : typed))
+      .catch(() => null);
+
     const r = await api(onChain(`/v1/accounts/${addr}?prices=true`));
     // The daemon formats the hint name from registry.ens_parent; it resolves nothing.
     if (r.hint_name) { resolved.hintName = r.hint_name; showResolved(resolved); }
@@ -2900,10 +2927,21 @@ async function lookup() {
     // still hold plenty, and a candidate nobody has promoted has none by construction —
     // so both are asked about either way.
     const known = new Set(indexed.map(a => a.address.toLowerCase()));
-    const ask = walletTokens().filter(a => !known.has(a.toLowerCase()));
+    HINT_USE = await spendHint(await seedP, r.chain_id, known);
+    const ask = HINT_USE.vouched.concat(walletTokens(HINT_USE.hinted))
+      .filter(a => !known.has(a.toLowerCase()));
     const extra = ask.length ? await heldBalances(addr, ask) : [];
+    HINT_USE.asked = ask.length;
 
     HOLDINGS = indexed.concat(extra);
+
+    // Tag the rows the hint knew about by testing the rows themselves, not by
+    // remembering which ones it put on the list. Those are different sets: the hint is
+    // only consulted about candidates and about the token list, so an indexed asset it
+    // knows perfectly well would go untagged and the count under the table would be
+    // short by however many of them there are. Twenty-nine more keccaks, and the
+    // sentence becomes true.
+    await tagHinted(await seedP, r.chain_id);
 
     // Mark contracts no token list vouches for. The test runs here, against a
     // filter this browser already holds, so flagging junk costs no request and
@@ -2920,6 +2958,7 @@ async function lookup() {
     $('wallet-addr').textContent = addr;
     renderWalletTotals();
     renderHoldings();
+    renderHintUse();
 
     // Everything above is read at head and gone when the tab closes. The module below
     // is what makes it outlast the visit: it remembers this set locally so the next
@@ -3001,6 +3040,106 @@ function renderWalletTotals() {
     </div>`).join('');
 }
 
+// --------------------------------------------------------------------------
+// Spending the reader's own hint
+//
+// A hint is the one artifact on this page that belongs to the reader rather than to
+// the deployment, and until now the page only ever wrote one. This is where it gets
+// spent, and the shape of the spending is the whole argument:
+//
+//   - It ADDS. The deployment publishes its token list in an enumerable form
+//     (/v1/hints/tokens-<chain>.json) precisely so a reader can walk it locally, and
+//     the hint picks out of that walk the contracts this account has held before.
+//     Those get asked about whether or not the index has ever heard of them.
+//   - It ORDERS. Discovery produces far more candidates than one lookup can ask
+//     about, and the cap that follows was always going to drop some. It now drops the
+//     ones this account has not held instead of the ones discovery happened to see
+//     last.
+//   - It REMOVES nothing. There is no branch below that skips a contract because the
+//     hint missed it. A bloom miss means "not held when this was built", which is not
+//     a claim about now, and e23aa30 is what happens when a filter is allowed to make
+//     that claim: 65 real holdings became 1.
+//
+// Every test runs in this browser against files that are byte-identical for every
+// visitor. The daemon is not told which account any of it was run for.
+// --------------------------------------------------------------------------
+async function spendHint(seed, chainId, known) {
+  const use = { sources: [], notes: [], hinted: new Set(), vouched: [], scanned: 0, list: '', asked: 0, held: 0 };
+  // seed is null only when the module itself failed to load, which already cost the
+  // reader nothing visible and should not start now.
+  if (!seed) return use;
+  use.sources = seed.sources;
+  use.notes = seed.notes;
+  if (seed.empty) return use;
+
+  const m = await loadHints();
+  // Which of the candidates the index is offering has this account held before?
+  use.hinted = await m.mark(seed, chainId, CANDIDATES.filter(c => !c.promoted).map(c => c.address));
+
+  // And what does the hint name that the index never offered at all? This is the half
+  // that makes the stored promise true — "the contracts this account has actually
+  // held, asked about immediately, instead of walking a token list to rediscover
+  // them" was written next to storeSeen long before anything read it back.
+  const v = await m.vouchedBy(seed, chainId);
+  use.scanned = v.scanned;
+  use.list = v.list;
+  const dup = new Set([...use.hinted, ...ASSETS.map(a => a.address.toLowerCase())]);
+  use.vouched = v.tokens.filter(a => {
+    const k = a.toLowerCase();
+    return !known.has(k) && !dup.has(k);
+  });
+  return use;
+}
+
+// The rows the hint already knew about, marked on the rows.
+async function tagHinted(seed, chainId) {
+  if (!seed || seed.empty) return;
+  const m = await loadHints();
+  const hit = await m.mark(seed, chainId, HOLDINGS.map(h => h.address).filter(Boolean));
+  for (const h of HOLDINGS) if (h.address && hit.has(h.address.toLowerCase())) h.hinted = true;
+  HINT_USE.held = HOLDINGS.filter(h => h.hinted).length;
+}
+
+// What the hint did, in the reader's own terms. A hint that quietly changed what got
+// asked about would be worse than no hint at all, so this says which hints were used,
+// where each came from, what each added, and — the sentence that matters most — that
+// nothing was hidden by any of it.
+function renderHintUse() {
+  const el = $('hint-use');
+  const u = HINT_USE;
+  if (!u || (!u.sources.length && !u.notes.length)) { el.hidden = true; el.textContent = ''; return; }
+
+  const parts = [];
+  if (u.sources.length) {
+    const from = u.sources
+      .map(s => `${esc(s.where)} <span class="empty">(${num(s.count)} contract${s.count === 1 ? '' : 's'})</span>`)
+      .join(' and ');
+    parts.push(`Asked the chain about ${num(u.asked)} contract${u.asked === 1 ? '' : 's'}, ordered by your hint — from ${from}.`);
+
+    if (u.vouched.length) {
+      const where = u.list ? `${esc(u.list)}, the token list this deployment publishes` : 'this deployment&rsquo;s token list';
+      parts.push(`${num(u.vouched.length)} of them the index never offered: your hint recognised them out of the
+        ${num(u.scanned)} contracts in ${where}, tested here in your browser against a file every visitor gets
+        byte for byte. ${num(u.held)} of the rows above are held contracts your hint already knew about.`);
+    } else if (u.scanned) {
+      parts.push(`It named nothing the index was not already going to ask about, out of the ${num(u.scanned)}
+        contracts in this deployment&rsquo;s token list.`);
+    }
+
+    parts.push(`<strong>Nothing was hidden by it.</strong> A hint says where to look and never what is there:
+      a miss means the contract was not held when the hint was built, which is not an answer about now, so
+      everything the index offered was asked about anyway and every balance above was read from the chain.`);
+  }
+
+  // The notes are the reasons a hint was not used, and they are worth more than the
+  // silence they replace. "That name has a record but it is a watchlist" is a fixable
+  // complaint; a wallet that looks empty for the same reason is not.
+  for (const n of u.notes) parts.push(`<span class="empty">${esc(n)}</span>`);
+
+  el.innerHTML = parts.join('<br>');
+  el.hidden = false;
+}
+
 function renderHoldings() {
   if (!WALLET_ADDR) return;
   const rows = HOLDINGS.map(h => ({ ...h, verdict: verdictOf(h.address) }));
@@ -3029,6 +3168,7 @@ function renderHoldings() {
           <span class="sym">${h.symbol ? esc(h.symbol) : '<span class="empty">unknown</span>'}</span>
           <span class="nm">${esc(h.name || '')}</span>
           ${h.unlisted ? '<span class="tag" title="no token list this deployment loaded vouches for this contract. Checked in your browser, against a filter already downloaded — the daemon was not asked.">unlisted</span>' : ''}
+          ${h.hinted ? '<span class="tag" title="your hint already knew about this contract, so it was asked about first. The balance beside it was still read from the chain just now — the hint says where to look and never what is there.">in your hint</span>' : ''}
         </div>
         <div class="addr">${esc(h.address)}</div>
       </div>

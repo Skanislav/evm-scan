@@ -817,6 +817,167 @@ export function loadSeen(account) {
   } catch { return null; }
 }
 
+// ---------------------------------------------------------------------------
+// Spending one
+//
+// Everything above writes a hint. This is the half that reads one back, and without
+// it the rest is a write-only feature: a lookup rebuilt the bloom on every visit,
+// stored it, offered to publish it, and then started the next visit from nothing.
+//
+// Two places a hint comes from, and they are not the same thing:
+//
+//   - localStorage, written by afterLookup last visit. Free, instant, and gone with
+//     the browser profile.
+//   - an evmscan.hint text record on the name that was typed, one eth_call on
+//     mainnet. Costs a round trip and survives a new laptop, which is the entire
+//     reason anyone paid 244,000 gas to put it there.
+//
+// Only a name that was actually typed is read. Reverse-resolving a pasted address to
+// go looking for a record would spend a call to pick a name the reader did not
+// choose, and the name a reader types is the one they mean.
+//
+// What a hint is allowed to do is the part worth being exact about, because the
+// index filter got this wrong once and hid 64 of an account's 65 holdings:
+//
+//   - It ADDS contracts to the list of what gets asked about, from the enumerable
+//     token list this deployment already publishes. This is the part that makes the
+//     stored promise true — the contracts this account actually held, asked about
+//     immediately, rather than rediscovered by whatever the index happens to hold.
+//   - It ORDERS the candidates the index offered, so a wallet with more of them than
+//     the per-lookup cap spends that cap on contracts this account has held.
+//   - It REMOVES nothing, ever. A bloom miss means "not held when this was built",
+//     which is not a statement about now, and a hit is checked against the chain
+//     like every other row.
+// ---------------------------------------------------------------------------
+
+// A record under this key is written by the button above, but the key is public and
+// so is the format, so anything can write one. The failure mode is the quiet kind: a
+// blinded watchlist, or a token filter for one chain, decodes perfectly here and then
+// answers no to every question, which on screen is indistinguishable from a wallet
+// that holds nothing. Check the shape before believing it, and say which way it was
+// wrong — "that is a watchlist, not a holdings hint" is a fixable complaint.
+function hintFault(f) {
+  if (!f) return 'there is nothing under that key';
+  if (f.blinded) return 'its keys are blinded under a secret, so nothing here can test it';
+  if (f.kind !== KIND_INTEROP) return 'it is keyed for single-chain tokens, not for holdings';
+  if (f.structure !== 3) return 'it is not the bloom a holdings hint uses';
+  return null;
+}
+
+// seedFor gathers what this reader already knows about this account.
+//
+// Fail-open throughout. This sits on the critical path of every lookup, and a name
+// with no resolver, a dead RPC or a full localStorage must cost the reader a slower
+// answer and never the answer itself — every one of them lands as a note on screen
+// and an empty seed.
+export async function seedFor(account, name) {
+  const sources = [], notes = [];
+
+  const local = loadSeen(account);
+  if (local) {
+    const fault = hintFault(local.filter);
+    if (fault) notes.push(`the copy this browser kept is unusable: ${fault}`);
+    else sources.push({ where: 'this browser', filter: local.filter, count: Number(local.filter.count) });
+  }
+
+  if (name) {
+    try {
+      const rec = await readENSHint(name);
+      const fault = hintFault(rec && rec.filter);
+      if (fault) {
+        // Absent is not broken. A name with no record is the overwhelmingly common
+        // case and saying so every time would be noise.
+        if (rec) notes.push(`${H.normalizeName(name)} has an ${ENS_TEXT_KEY} record, but ${fault}`);
+      } else {
+        sources.push({ where: `${H.normalizeName(name)}'s ${ENS_TEXT_KEY} record`, filter: rec.filter, count: Number(rec.filter.count) });
+      }
+    } catch (e) {
+      const msg = String(e.message || e);
+      // A wildcard or offchain name answers text() by reverting OffchainLookup, which
+      // is a working name and not a broken one. Nothing here follows an ERC-3668
+      // gateway on a reader's behalf — that is a standing rule in this codebase, not
+      // an omission — so say which it is rather than reporting it as a failure.
+      notes.push(/OffchainLookup|0x556f1830/i.test(msg)
+        ? `${H.normalizeName(name)} answers its records through an offchain gateway, and nothing here follows one on your behalf — so its ${ENS_TEXT_KEY} record, if it has one, was not read`
+        : `could not read ${H.normalizeName(name)}'s ${ENS_TEXT_KEY} record: ${msg}`);
+    }
+  }
+
+  // The two are tested separately rather than merged. Two blooms sized for different
+  // numbers of keys have different k, and OR-ing their bitmaps produces a filter
+  // neither of them can read — so a hit in either is a hit, and the cost is one more
+  // pass over a 128-byte array.
+  const sub = sources.length ? await H.interopSubkey(new Uint8Array(0)) : null;
+  return {
+    sources, notes,
+    empty: sources.length === 0,
+    async has(chainId, address) {
+      if (!sources.length) return false;
+      const key = await H.interopKey(sub, chainId, address);
+      return sources.some(s => H.contains(s.filter, key));
+    },
+  };
+}
+
+// The token list this deployment publishes, in its enumerable form.
+//
+// A filter can be tested but never walked, which is what makes this pair necessary:
+// the .xorf answers questions and the .json supplies the questions. Both are static
+// and byte-identical for every visitor, so fetching them says nothing about who is
+// asking — the membership test runs here and the daemon is never told the account.
+//
+// A deployment with no token_lists configured serves a 404 here, which is not an
+// error: it means the hint can still order what the index offered, and has nothing
+// extra to name. Fail open to an empty list.
+let listCache = null;
+async function enumerableList(chainId) {
+  if (!listCache || listCache.chainId !== chainId) {
+    listCache = { chainId, p: (async () => {
+      const res = await fetch(`/v1/hints/tokens-${chainId}.json`);
+      if (!res.ok) return { tokens: [], name: '' };
+      const doc = await res.json();
+      return { tokens: doc.tokens || [], name: doc.name || '' };
+    })().catch(() => ({ tokens: [], name: '' })) };
+  }
+  return listCache.p;
+}
+
+// vouchedBy walks that list and keeps what the hint recognises.
+//
+// This is the read path for a filter, and it is also the dictionary attack on one —
+// they are the same walk, which is why blinding exists for the watchlist and
+// deliberately not for this. These balances are public on chain; a hint that saves
+// the reader work they could already do gives away nothing.
+//
+// Cost is one keccak per listed contract and no network at all. Measured against the
+// 5,862 contracts the mainnet deployment publishes: 208ms, and 207ms with viem hoisted
+// out of the loop so no key costs a dynamic import or an await — which is to say the
+// await was free and the keccak is the whole bill, so there is no optimisation here to
+// reach for. That is the same order as the eth_call it saves and it buys more than
+// symmetry: on the account this was measured against it recovered two real balances the
+// per-lookup cap had dropped.
+export async function vouchedBy(seed, chainId) {
+  if (!seed || seed.empty) return { tokens: [], scanned: 0, list: '' };
+  const { tokens, name } = await enumerableList(chainId);
+  const out = [];
+  for (const t of tokens) if (await seed.has(chainId, t)) out.push(t);
+  return { tokens: out, scanned: tokens.length, list: name };
+}
+
+// mark returns the lowercased subset of `addrs` the hint recognises.
+//
+// The caller sorts by it and then applies a cap, which is the one place a hint
+// decides what does *not* get asked about — and it decides it inside a budget that
+// already existed and was previously spent in discovery order. Nothing is dropped
+// that the cap would not have dropped anyway; what changes is which side of it the
+// contracts this account has actually held land on.
+export async function mark(seed, chainId, addrs) {
+  const hit = new Set();
+  if (!seed || seed.empty) return hit;
+  for (const a of addrs) if (await seed.has(chainId, a)) hit.add(a.toLowerCase());
+  return hit;
+}
+
 export async function afterLookup(account, holdings, indexed) {
   const chainId = H.chainId();
   const pairs = (holdings || [])
