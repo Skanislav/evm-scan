@@ -92,6 +92,19 @@ contract HintRegistry is IOptimisticOracleV3CallbackRecipient {
         ///      has been paid yet; block 0 is never a real coverage boundary.
         uint64 paidFrom;
         uint64 paidTo;
+        /// @dev Every wei ever committed to this asset, which only ever goes up.
+        ///
+        ///      `balance` answers "can this asset still pay an indexer", and drains
+        ///      as coverage is claimed — so an asset that has been indexed well and
+        ///      paid for reads as zero, indistinguishable from one nobody ever
+        ///      wanted. That makes it useless as a measure of demand, which is the
+        ///      question worth asking of a list of contracts: who cared enough about
+        ///      this one to pay for it?
+        ///
+        ///      Kept as its own counter rather than derived from the AssetFunded
+        ///      events, because a caller ranking a few hundred assets should not have
+        ///      to replay a log to do it, and a contract cannot read its own events.
+        uint256 vouched;
     }
 
     struct Epoch {
@@ -384,6 +397,9 @@ contract HintRegistry is IOptimisticOracleV3CallbackRecipient {
     function _fund(bytes32 key, uint256 amount) private {
         Funding storage f = _funding[key];
         f.balance += amount;
+        // The only place either number rises, and `vouched` is the one that never
+        // falls — claimCoverage spends `balance` and leaves this alone.
+        f.vouched += amount;
         emit AssetFunded(key, msg.sender, amount, f.balance);
     }
 

@@ -195,6 +195,10 @@ func New(d Deps) *Server {
 	s.mux.HandleFunc("POST /v1/candidates/{address}/promote", s.promoteCandidate)
 	s.mux.HandleFunc("POST /v1/candidates/{address}/spam", s.markCandidateSpam)
 	s.mux.HandleFunc("POST /v1/candidates/{address}/unspam", s.clearCandidateSpam)
+	// Against an asset, not a candidate: a contract someone paid to register never
+	// passes through discovery, so no candidate verdict can ever reach it.
+	s.mux.HandleFunc("POST /v1/assets/{address}/report", s.reportAsset)
+	s.mux.HandleFunc("POST /v1/assets/{address}/unreport", s.clearAssetReport)
 	s.mux.HandleFunc("GET /v1/decisions", s.listDecisions)
 	s.mux.HandleFunc("GET /v1/epochs", s.listEpochs)
 	s.mux.HandleFunc("POST /v1/epochs", s.createEpoch)

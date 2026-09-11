@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/jackc/pgx/v5"
@@ -40,6 +41,13 @@ type Asset struct {
 	// Promoted marks an asset the indexer chose to index after observing it at the
 	// head, rather than one someone registered.
 	Promoted bool
+	// Reports counts complaints against this asset. It orders a scan and nothing
+	// else: a funded asset cannot be un-indexed, because the funding already bought
+	// a backfill and the coverage is already in a root. Money buys indexing; it does
+	// not buy position.
+	Reports      int
+	ReportedAt   *time.Time
+	ReportReason string
 }
 
 // Cursor is an asset's two-pointer scan progress.
@@ -148,7 +156,8 @@ func backfillStart(anchor uint64) uint64 {
 func (s *Store) GetAsset(ctx context.Context, chainID uint64, addr common.Address) (Asset, error) {
 	row := s.pool.QueryRow(ctx, `
 		SELECT chain_id, address, standard, COALESCE(symbol,''), COALESCE(name,''), decimals,
-		       hint_from_block, registrant, registry_key, source, status, promoted_from_candidate
+		       hint_from_block, registrant, registry_key, source, status, promoted_from_candidate,
+		       reports, reported_at, COALESCE(report_reason, '')
 		FROM assets WHERE chain_id = $1 AND address = $2`,
 		int64(chainID), addr.Bytes())
 	a, err := scanAsset(row)
@@ -162,11 +171,12 @@ func (s *Store) GetAsset(ctx context.Context, chainID uint64, addr common.Addres
 func (s *Store) ListAssets(ctx context.Context, chainID uint64, includeRevoked bool) ([]Asset, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT chain_id, address, standard, COALESCE(symbol,''), COALESCE(name,''), decimals,
-		       hint_from_block, registrant, registry_key, source, status, promoted_from_candidate
+		       hint_from_block, registrant, registry_key, source, status, promoted_from_candidate,
+		       reports, reported_at, COALESCE(report_reason, '')
 		FROM assets
 		WHERE ($1 = 0 OR chain_id = $1)
 		  AND ($2 OR status <> 'revoked')
-		ORDER BY chain_id, address`,
+		ORDER BY chain_id, (reports > 0), address`,
 		int64(chainID), includeRevoked)
 	if err != nil {
 		return nil, err
@@ -196,7 +206,8 @@ func scanAsset(r scannable) (Asset, error) {
 		registrant []byte
 	)
 	if err := r.Scan(&chainID, &addr, &standard, &a.Symbol, &a.Name, &a.Decimals,
-		&hintFrom, &registrant, &a.RegistryKey, &a.Source, &a.Status, &a.Promoted); err != nil {
+		&hintFrom, &registrant, &a.RegistryKey, &a.Source, &a.Status, &a.Promoted,
+		&a.Reports, &a.ReportedAt, &a.ReportReason); err != nil {
 		return Asset{}, err
 	}
 	a.ChainID = uint64(chainID)
@@ -334,4 +345,48 @@ func (s *Store) RewindTail(ctx context.Context, chainID uint64, to uint64) error
 		return fmt.Errorf("store: rewind tail: %w", err)
 	}
 	return nil
+}
+
+// ReportAsset records a complaint against an indexed asset.
+//
+// Deliberately additive and deliberately cheap. It cannot revoke, un-index or
+// refund anything: the funding was already spent on a backfill and the coverage is
+// already committed to a root, so the only thing still in anyone's gift is where the
+// contract appears in a list.
+//
+// One report is enough to sink something, and that is a judgement about which
+// mistake is worse. Ordering is not adjudication — deranking a good contract costs
+// it a place and costs a reader one extra balance read, while ranking a scam costs
+// somebody seeing it at the top of their wallet. The bar on candidates.spam_at is
+// high because that decides whether to spend a backfill; the bar here is low because
+// this decides an ORDER BY.
+func (s *Store) ReportAsset(ctx context.Context, chainID uint64, addr common.Address, reason string) (int, error) {
+	var n int
+	err := s.pool.QueryRow(ctx, `
+		UPDATE assets
+		   SET reports = reports + 1,
+		       reported_at = now(),
+		       -- First reason wins: it is the one a later reader is most likely to be
+		       -- reacting to, and overwriting it would let the last reporter rewrite
+		       -- why everyone before them complained.
+		       report_reason = COALESCE(NULLIF(report_reason, ''), NULLIF($3, ''))
+		 WHERE chain_id = $1 AND address = $2
+		RETURNING reports`,
+		int64(chainID), addr.Bytes(), reason).Scan(&n)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, ErrNotFound
+	}
+	return n, err
+}
+
+// ClearAssetReports withdraws every report against an asset, for the case the
+// operator decides the complaints were wrong. Reports are a cheap signal, so
+// reversing them has to be cheap too — a one-way ratchet on a low bar is how a list
+// fills up with contracts nobody can rescue.
+func (s *Store) ClearAssetReports(ctx context.Context, chainID uint64, addr common.Address) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE assets SET reports = 0, reported_at = NULL, report_reason = NULL
+		 WHERE chain_id = $1 AND address = $2`,
+		int64(chainID), addr.Bytes())
+	return err
 }

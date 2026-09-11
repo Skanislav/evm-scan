@@ -190,6 +190,9 @@ func TestCoverageRewardsOnSimulatedChain(t *testing.T) {
 	if f, _ := client.Funding(ctx, fundedKey); f.Balance.Cmp(funding) != 0 || f.PaidTo != 0 {
 		t.Fatalf("funding after request: %+v", f)
 	}
+	if f, _ := client.Funding(ctx, fundedKey); f.Vouched.Cmp(funding) != 0 {
+		t.Fatalf("vouched after request: want %s, got %s", funding, f.Vouched)
+	}
 	if got := s.balance(ctx, registry); got.Cmp(funding) != 0 {
 		t.Fatalf("registry should hold the funding: %s", got)
 	}
@@ -256,6 +259,13 @@ func TestCoverageRewardsOnSimulatedChain(t *testing.T) {
 	f, _ := client.Funding(ctx, fundedKey)
 	if f.Balance.Cmp(new(big.Int).Sub(funding, paid1)) != 0 || f.PaidFrom != 5 || f.PaidTo != 20 {
 		t.Fatalf("funding after claim 1: %+v", f)
+	}
+	// The point of keeping both numbers: balance has just been spent down by the
+	// claim, and vouched has not moved. An asset that was funded well and indexed
+	// well reads as zero on balance, which is exactly how one nobody ever wanted
+	// reads, so balance cannot be what orders a list.
+	if f.Vouched.Cmp(funding) != 0 {
+		t.Fatalf("vouched moved when coverage was claimed: want %s, got %s", funding, f.Vouched)
 	}
 	if got, want := s.balance(ctx, registry), new(big.Int).Sub(funding, paid1); got.Cmp(want) != 0 {
 		t.Fatalf("registry after claim 1: want %s, got %s", want, got)

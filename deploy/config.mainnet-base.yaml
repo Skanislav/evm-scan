@@ -146,6 +146,21 @@ chains:
       min_blocks: 500
       max_promotions_per_tick: 1
 
+    # Two lists, merged into one membership filter and published at /v1/hints. This
+    # is the only third-party HTTP this process does, it happens once at startup, and
+    # a list that will not fetch is logged and skipped — an optional hint is never a
+    # reason a deployment refuses to come up.
+    #
+    # Both, rather than either, because the filter only ever *annotates*. Nothing is
+    # dropped for missing from it, so the cost of a broader list is a few more keys in
+    # a file that is already small, while the cost of a narrower one is a real
+    # long-tail holding flagged as junk in front of whoever holds it. Uniswap's list
+    # is the curated core; CoinGecko's is the long tail, and the union is what lets
+    # "nobody vouched for this" mean something.
+    token_lists:
+      - https://tokens.uniswap.org
+      - https://tokens.coingecko.com/uniswap/all.json
+
   # Base: present so the daemon can read the registry and send its transactions.
   # Nothing here is indexed — no discovery, and no assets will ever be registered
   # against chain 8453 unless someone asks for them explicitly.

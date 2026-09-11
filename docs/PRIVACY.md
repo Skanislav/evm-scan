@@ -140,12 +140,16 @@ where a reader would otherwise assume a protection they do not have:
 | `text(node, "evmscan.uri")` on HintResolver | shipped; **no deployment to read it from yet** |
 | cross-chain sweep over viem's chain registry | shipped; measured below |
 | unlisted-contract marking in the account table | shipped |
-| `passkeySecret` / `walletSecret` / `passwordSecret` / `buildWatchlist` | implemented and
-  round-tripped against Go, but **console-only — there is no UI to reach them** |
+| `passkeySecret` / `walletSecret` / `passwordSecret` / `buildWatchlist` | shipped, with a
+  UI: build from the holdings on screen, open a file back. Both directions pinned by
+  `testdata/browser-watch.xorf` (prf) and `testdata/browser-watch-pbkdf2.xorf` (password) |
+| private lookup: the index filter tested in the browser instead of `/v1/accounts` | shipped;
+  cross-checked against the hosted mainnet index, same contracts, address never sent |
 
-So blinded watchlists work and nobody can use them without opening devtools. That is a
-missing interface, not a missing mechanism, but until it exists the blinded half of
-this document describes a capability rather than a feature.
+Blinded watchlists are now reachable without devtools, and so is the index filter: the
+wallet tab can answer "which indexed contracts has this account touched" from a file it
+downloaded, without the daemon learning the address. The passkey path still cannot be
+exercised headlessly, so the fixture that pins the format end to end is the password one.
 
 ## What this does not solve
 

@@ -137,16 +137,39 @@ shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module 
   leaf = `keccak256(abi.encode(account, chainId, keccak256(abi.encodePacked(sorted unique
   assets))))`, sorted-pair keccak tree. Changing either side requires changing the other and
   re-running `cmd/evmscan-verify`, which checks the Go proof against the Solidity verifier.
-- `internal/hintfilter` is the `.xorf` membership filter: a binary-fuse8 or sorted-u64
-  table over 64-bit keys, published so a reader can narrow a portfolio read locally
-  instead of naming their address to the API. Keys are
+- `internal/hintfilter` is the `.xorf` membership filter: a binary-fuse8, sorted-u64
+  or bloom table over 64-bit keys, published so a reader can narrow a portfolio read
+  locally instead of naming their address to the API. Keys are
   `uint64be(keccak256(subkey ‖ parts)[0:8])` with
   `subkey = keccak256(secret ‖ "evmscan/xorf/v1" ‖ chainId ‖ kind)`; a non-empty secret
-  blinds the file so only its holder can test it. **The Go writer and the JavaScript
+  blinds the file so only its holder can test it. `KindInterop` keys an **ERC-7930**
+  interoperable address instead of a bare one, putting the chain inside the preimage
+  so a single filter spans every chain — its subkey binds `chainId` 0, because binding
+  a chain there as well would answer for one chain through keys that claim all of
+  them, and a subkey mismatch presents as an empty wallet rather than an error.
+  `StructureBloom` exists for the size the other two are bad at: at 65 keys fuse8's
+  fixed segment geometry costs 198 bytes and sorted-u64 costs 562, where a bloom is
+  0.12% in 128 bytes — small enough to publish on-chain or as an ENS text record.
+  `HintBits` is 1024 and **not** 256: one storage slot is the obvious size and the
+  wrong one, measuring 9.1% false positives at fifty tokens against 0.05% at 128
+  bytes, and on Base the difference between writing one word and four is a tenth of a
+  cent. Past 128 the extra bytes buy decimal places rather than round trips, since
+  once false positives fall below the real holdings the holdings decide the batch
+  count; the headroom that is left absorbs incremental `|=` additions before a
+  rebuild. Its bitmap is MSB-first bytes, not packed words, so the JavaScript reader
+  indexes it without reproducing Go's word endianness. The browser builds these
+  itself — the daemon never sees the account — so three implementations of the probe
+  have to agree, and `testdata/public-bloom-interop.xorf` (Go-written, 256 bits) plus
+  `testdata/browser-slot-interop.xorf` (browser-written, 1024) pin both directions
+  and both sizes. **The Go writer and the JavaScript
   reader in `web/index.html` must agree byte-for-byte** — `internal/hintfilter/testdata`
   is the fixture that enforces it, regenerated with `go test ./internal/hintfilter
-  -update`, and `testdata/browser-watch.xorf` pins the reverse direction (the browser
-  builds blinded watchlists; only Go builds fuse filters). Construction is
+  -update`, and `testdata/browser-watch.xorf` (WebAuthn prf) plus
+  `testdata/browser-watch-pbkdf2.xorf` (password) pin the reverse direction (the browser
+  builds blinded watchlists; only Go builds fuse filters). A watchlist's header carries a
+  `SaltDesc` saying how to re-derive its secret — which provider, which credential, which
+  salt, and for PBKDF2 the iteration count — but never the secret, which is what lets a
+  file be opened months later. Construction is
   deterministic, so a published filter can be rebuilt and diffed. Built by
   `cmd/evmscan-hint`, served at `GET /v1/hints`, `GET /v1/hints/{name}.xorf` and
   `.json`. docs/PRIVACY.md is the threat model.
@@ -179,6 +202,20 @@ shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module 
   everything that is not a read, minus one allowlisted exception (`POST /ccip`, which any
   ERC-3668 resolver has to reach) — an inverted rule, so a new mutating route is guarded
   before anyone remembers to add it, and `auth_test.go` is what holds the exception open.
+- Money buys indexing and does not buy position. `HintRegistry.Funding` keeps
+  `vouched` beside `balance`: `balance` drains as `claimCoverage` pays the publisher,
+  so a well-funded, well-indexed asset reads as zero there — the same as one nobody
+  ever wanted — which makes it useless for ranking. `vouched` only ever rises.
+  `orderAssets` in `internal/api` sorts by it, and any report sinks a contract below
+  every unreported one regardless of the amount, because the registry is open and
+  otherwise the cheapest attack is to buy the top of somebody's wallet. Reports live
+  on `assets` (migration 0009), not on `candidates`: a contract someone paid to
+  register never passes through discovery, so no candidate verdict can reach it. One
+  report is enough because ordering is not adjudication — deranking a good contract
+  costs it a place and a reader one extra balance read, while ranking a scam puts it
+  at the top of a wallet, and those are not the same mistake. A report can never
+  revoke, un-index or refund: the funding already bought a backfill and the coverage
+  is already in a root.
 - A candidate carries at most one live verdict. `spam_at` drops it out of
   `PromotableCandidates` — the only query auto-promote reads, so that one clause is the
   whole rule — and promotion clears the mark rather than sitting beside it, which is what
@@ -188,9 +225,16 @@ shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module 
 - `web/` is the UI, served by `http.FileServer` from `WebDir` — no build step, no bundler.
   `index.html` is one page of five tabs (wallet, overview, triage, accounts, graph);
   `graph.js` is the WebGL graph, imported the first time that tab is opened because
-  three.js is most of a megabyte and most visits never ask for a picture. Token metadata is
-  attacker-controlled text from the chain, so everything interpolated into markup goes
-  through `esc()`.
+  three.js is most of a megabyte and most visits never ask for a picture. `hints.js` is
+  imported the same way and for the same reason — the index filter is well over a
+  megabyte — and holds the two things that read one: the private lookup, which answers
+  "which indexed contracts has this account touched" from the downloaded file so the
+  daemon never learns the address, and the blinded-watchlist builder. It cannot close
+  over this file's scope, so the filter primitives are handed to it on
+  `window.evmscanHints`; there is deliberately only one implementation of the
+  arithmetic on the page, because a second one would be a second thing to keep
+  byte-identical with Go. Token metadata is attacker-controlled text from the chain, so
+  everything interpolated into markup goes through `esc()`.
 - `mirror/` is a separate TypeScript package (`make test-mirror`, own `node_modules`, not
   in the Go build): the commitment encoding ported for clients, plus a local-first mirror
   that keeps the committed rows in the client's SQLite via Evolu and rebuilds the keccak
@@ -225,6 +269,18 @@ shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module 
   reader's RPC, the mirror through its injected `EthCall`. The daemon never resolves a
   name, no API parameter takes one, and nobody here follows an ERC-3668 gateway on a
   reader's behalf.
+- A reader's own hint is published to their own ENS name, as an `evmscan.hint` text
+  record on mainnet (`publishToENS` in `web/hints.js`), not to a contract of ours:
+  any ENS client can read it and nothing here has to keep running for it to work.
+  The value is the whole `.xorf`, base64url-encoded. base64url rather than hex
+  because a text record stores the string — 175 bytes is 234 base64url characters
+  against 352 hex, measured as 244,199 gas versus 313,941 against a real resolver.
+  The whole file rather than the bare bitmap because `k` depends on the key count and
+  a reader cannot recover it; the header costs about 46,000 gas over a bitmap alone,
+  which is the price of keeping one wire format instead of two that can drift. Cost
+  the writes with `eth_estimateGas` against a real resolver, never from SSTORE
+  arithmetic: ENS stores a dynamic string, so reasoning from fixed slots understated
+  it by more than a factor of two.
 - Hint filters annotate, never filter. A token list is curated and therefore
   incomplete, so dropping what is not on one hides real holdings of long-tail tokens.
   `known` rides alongside a portfolio row and is absent — not false — when no list is
