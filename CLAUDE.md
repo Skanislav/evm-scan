@@ -232,3 +232,9 @@ shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module 
 - A filter is never trusted. It says where to look; the live lens read says what is
   there. A false positive costs one `balanceOf`; there are no false negatives except
   from staleness, which is why an index filter carries the block it is true as of.
+- An index filter's digest is fixed inside `Publisher.Build`, from the same
+  `SnapshotIndex` call as the merkle root, and stored on `epochs.filter_keccak`. The
+  bytes are never stored: they rebuild deterministically, and the serving path
+  asserts the rebuilt digest against what the epoch committed rather than trusting
+  either. The filter's own `epochId` header stays `-1`, because the digest has to be
+  fixed before the epoch has an id — the epoch names the filter, not the reverse.
