@@ -145,11 +145,41 @@ where a reader would otherwise assume a protection they do not have:
   `testdata/browser-watch.xorf` (prf) and `testdata/browser-watch-pbkdf2.xorf` (password) |
 | private lookup: the index filter tested in the browser instead of `/v1/accounts` | shipped;
   cross-checked against the hosted mainnet index, same contracts, address never sent |
+| the reader's own holdings hint: built, stored, published to `evmscan.hint` | shipped |
+| that hint **read back and spent** on the next lookup | shipped; from localStorage and
+  from a typed name's record. Adds contracts off the enumerable token list, orders the
+  candidate cap, removes nothing, and says on screen what it did. Skipped when the
+  1,024-bit bloom is too full to answer (see below) |
+| reader triage of their own holdings, deciding what the hint carries | shipped, local
+  to the browser; does not change what is asked about or what is valued |
 
 Blinded watchlists are now reachable without devtools, and so is the index filter: the
 wallet tab can answer "which indexed contracts has this account touched" from a file it
 downloaded, without the daemon learning the address. The passkey path still cannot be
 exercised headlessly, so the fixture that pins the format end to end is the password one.
+
+The reader's own hint is no longer write-only. A lookup reads it from this browser and,
+when a name was typed, from that name's `evmscan.hint` record, and spends it locally:
+one fetch of `/v1/hints/tokens-<chain>.json`, which every visitor gets byte for byte,
+and a membership test per contract in the browser. The daemon is never told which
+account any of it was run for. It only ever adds contracts to the read and orders the
+ones already queued — a miss means "not held when this was built", which is not an
+answer about now.
+
+The limit is arithmetic and worth stating, because it is the reason the walk sometimes
+does not happen. The hint is a fixed 1,024 bits, so its false-positive rate depends on
+how many contracts went in. Measured against the mainnet deployment's 5,862-contract
+list, at the sizing `buildSlotHint` uses: 0.03% at 27 holdings, 0.26% at 65, 0.70% at
+100, 2.44% at 130, 9.62% at 200. Past the point where expected false positives exceed
+the hint's own key count — between 100 and 130 holdings — walking the list would mostly
+guess, so it is skipped, which leaves exactly the behaviour of having no hint at all.
+An account large enough to hit that is an account the index is the better answer for.
+
+The reader's triage of their own holdings is what the hint carries. It never decides
+what is read: a contract set aside is still asked about at head on every lookup and
+still shown behind a toggle. Nothing about it leaves the browser, and it is stored as
+addresses rather than as a filter because it is the one set here that has to be
+enumerable — an undo you cannot list is not an undo.
 
 ## What this does not solve
 
