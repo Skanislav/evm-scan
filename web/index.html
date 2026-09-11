@@ -186,6 +186,20 @@
   }
   .worth-head { font: 500 11px/1 var(--mono); letter-spacing: .07em; text-transform: uppercase; color: oklch(0.38 0.10 66); margin-bottom: 3px; }
 
+  /* The answer as an ENS name: the parent, the account's own name, the four records. */
+  .enscard { margin-top: 22px; }
+  .ens-body { padding: 15px 16px 16px; }
+  .ens-body p { font: 400 12.5px/1.6 var(--sans); color: rgba(20,22,26,.72); margin: 0 0 13px; max-width: 660px; text-wrap: pretty; }
+  .ens-body p.ens-foot { font-size: 12px; color: var(--ink-70); margin: 0; }
+  .ens-name {
+    font: 400 11.5px/1.7 var(--mono); color: rgba(20,22,26,.68); background: var(--card);
+    border: 1px solid rgba(20,22,26,.1); border-radius: 7px; padding: 11px 12px; margin-bottom: 13px; word-break: break-all;
+  }
+  .ens-name b { font-weight: 500; color: var(--ink); }
+  .ens-keys { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px 16px; margin-bottom: 13px; }
+  .ens-keys .k { font: 500 11.5px/1.4 var(--mono); color: var(--ink); }
+  .ens-keys .d { font: 400 11.5px/1.5 var(--sans); color: rgba(20,22,26,.68); }
+
   /* From what you type to a number: the pipeline behind the answer, one step per
      row. The one blue step is the one call that does the reading. */
   .pipe { margin-top: 22px; }
@@ -558,6 +572,29 @@
         <input class="input" type="text" id="name-rpc" style="flex:1 1 320px" spellcheck="false" autocomplete="off" placeholder="https://… mainnet RPC for the name library (offchain names, .gwei, .wei)">
         <button class="btn btn-secondary" id="name-rpc-save">Save</button>
         <button class="btn btn-ghost" id="name-rpc-reset">Default</button>
+      </div>
+
+      <!-- Every account already has a name under the HintResolver's parent, so the
+           answer can be read as ENS text records by any ENS client. Shown only when
+           this deployment has a resolver attached: a card that promised a name nobody
+           serves would be the one dishonest thing on the page. -->
+      <div class="howto enscard" id="ens-card" hidden>
+        <div class="howto-head">the answer is also an ens name</div>
+        <div class="ens-body">
+          <p>One ENSIP-10 wildcard resolver hangs under <code id="ens-parent">…</code>, so every account already has
+            a name — nobody registers anything. Reading it hits the registry at call time and verifies the answer
+            on-chain before returning it, so a resolver can withhold a record but cannot forge one.</p>
+          <div class="ens-name" id="ens-name"></div>
+          <div class="ens-keys">
+            <div><div class="k">evmscan.contracts</div><div class="d">what this account touched</div></div>
+            <div><div class="k">evmscan.epoch</div><div class="d">which commitment answered</div></div>
+            <div><div class="k">evmscan.range</div><div class="d">the blocks it covers</div></div>
+            <div><div class="k">evmscan.root</div><div class="d">the root to check it against</div></div>
+          </div>
+          <p class="ens-foot">Any ENS client reads them — viem, ens-cli, the ENS app — with no evm-scan code, no SDK and
+            nothing of ours in the path. Names only travel the other way in your browser: the daemon takes addresses
+            and is never handed a name.</p>
+        </div>
       </div>
 
       <!-- The same question, two ways of asking it. "Ask by name" puts the address in
@@ -1392,6 +1429,7 @@ async function loadStatus() {
     tn.classList.toggle('warn', !c.node_local);
 
     renderStages(c);
+    renderEnsCard();
 
     const spam = c.candidates_spam ?? 0;
     const ready = c.candidates_promotable ?? 0;
@@ -1450,6 +1488,20 @@ function renderStages(c) {
       <div class="b"><div class="${cls}" style="width:${w}%"></div></div>
       <div class="n">${note}</div>
     </div>`).join('');
+}
+
+// The answer as an ENS name. The parent comes from the daemon's status, the account's
+// own name from its lookup; before one, the card shows the shape a name takes. With
+// no resolver attached the card stays hidden rather than promising a name nobody serves.
+function renderEnsCard() {
+  const card = $('ens-card');
+  const parent = REG && REG.ens_parent;
+  card.hidden = !parent;
+  if (!parent) return;
+  $('ens-parent').textContent = `hints.${parent}`;
+  $('ens-name').innerHTML = WALLET_HINT
+    ? `<b>${esc(WALLET_HINT)}</b> · ${esc(WALLET_NAME || short(WALLET_ADDR, 4))}'s index, as ENS text records`
+    : `&lt;address as hex&gt;.hints.${esc(parent)} · look an account up and its name appears here`;
 }
 
 // The three claims behind the answer, restated for whatever is on screen: the account
@@ -3499,9 +3551,8 @@ function showResolved(r) {
       + `${r.verified === false ? ' <span class="empty">(unverified: the name does not point back at this address)</span>' : ''}`
       + (r.via === 'library' ? ' <button class="btn btn-ghost btn-sm" id="name-rpc-edit">change RPC</button>' : ''));
   }
-  if (r.hintName) {
-    parts.push(`as an ENS record: <code>${esc(r.hintName)}</code> (text key <code>evmscan.contracts</code>, verified on-chain)`);
-  }
+  // The hint name itself is shown in the ENS card below, not repeated here.
+  if (!parts.length) { note.hidden = true; note.textContent = ''; return; }
   note.innerHTML = parts.join('<br>');
   note.hidden = false;
   const edit = document.getElementById('name-rpc-edit');
@@ -3560,6 +3611,7 @@ async function lookup() {
     const r = await api(onChain(`/v1/accounts/${addr}?prices=true`));
     // The daemon formats the hint name from registry.ens_parent; it resolves nothing.
     if (r.hint_name) { resolved.hintName = r.hint_name; WALLET_HINT = r.hint_name; showResolved(resolved); }
+    renderEnsCard();
     const indexed = r.assets || [];
     VALUATION = indexed.length ? r.valuation : null;
 
