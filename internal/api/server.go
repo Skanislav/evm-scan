@@ -104,6 +104,9 @@ type Server struct {
 	hintsMu   sync.Mutex
 	hints     map[string]*hintfilter.Cache
 	hintLists map[string][]common.Address
+	// funding is the registry's per-asset funding, read in the background so the
+	// asset list never waits on a verified eth_call per row. See funding.go.
+	funding *fundingCache
 }
 
 // indexFilter returns the index filter cache for a chain, making it on first ask.
@@ -158,7 +161,7 @@ func (s *Server) lookupHint(name string) (*hintfilter.Cache, bool) {
 
 // New builds the router.
 func New(d Deps) *Server {
-	s := &Server{d: d, mux: http.NewServeMux(), started: time.Now()}
+	s := &Server{d: d, mux: http.NewServeMux(), started: time.Now(), funding: newFundingCache()}
 	s.hints = map[string]*hintfilter.Cache{}
 	s.hintLists = map[string][]common.Address{}
 	for chainID, c := range d.TokenFilters {
