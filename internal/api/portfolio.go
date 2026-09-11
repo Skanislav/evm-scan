@@ -79,6 +79,17 @@ type portfolioTokenJSON struct {
 	// IndexStatus is what the indexer knows about this contract, when it knows
 	// anything: the lens will happily read a contract nobody registered.
 	IndexStatus string `json:"index_status,omitempty"`
+	// Known reports whether any configured token list vouches for this contract.
+	// Absent when the deployment loaded no list, because "nobody vouched" and
+	// "there was nobody to ask" are different answers and collapsing them would
+	// mark every token on a list-less deployment as junk.
+	//
+	// It annotates and never filters. Token lists are curated and therefore
+	// incomplete, so dropping what is not on one would hide real holdings of
+	// long-tail tokens — a false negative in front of a user, which is the one
+	// failure this whole path is built to avoid. A caller that wants the stricter
+	// view asks for it with known_only=true.
+	Known *bool `json:"known,omitempty"`
 	// Price is what the chain's own oracles and pools say one token is worth, and
 	// how far to trust it. ValueUSD is Balance at that price; absent, not zero,
 	// when either is unknown.
@@ -160,9 +171,14 @@ func (s *Server) accountPortfolio(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tokens := make([]portfolioTokenJSON, len(res.Tokens))
-	for i, t := range res.Tokens {
-		tokens[i] = portfolioTokenJSON{
+	knownOnly := q.Get("known_only") == "true"
+	tokens := make([]portfolioTokenJSON, 0, len(res.Tokens))
+	for _, t := range res.Tokens {
+		known, haveList := s.knownToken(ctx, chainID, t.Address)
+		if knownOnly && haveList && !known {
+			continue
+		}
+		row := portfolioTokenJSON{
 			Address:        t.Address.Hex(),
 			Standard:       t.Standard.String(),
 			IsContract:     t.IsContract,
@@ -174,15 +190,18 @@ func (s *Server) accountPortfolio(w http.ResponseWriter, r *http.Request) {
 			Balance:        numOrNil(t.Balance),
 			IndexStatus:    status[t.Address],
 		}
+		if haveList {
+			row.Known = &known
+		}
 		for _, a := range t.Allowances {
-			tokens[i].Allowances = append(tokens[i].Allowances, allowanceJSON{
+			row.Allowances = append(row.Allowances, allowanceJSON{
 				Spender:        a.Spender.Hex(),
 				Amount:         numOrNil(a.Amount),
 				ApprovedForAll: a.ApprovedForAll,
 			})
 		}
 		for _, id := range t.IDs {
-			tokens[i].IDs = append(tokens[i].IDs, tokenIDJSON{
+			row.IDs = append(row.IDs, tokenIDJSON{
 				ID:           id.ID.String(),
 				Owner:        addrOrNil(id.Owner),
 				Balance:      numOrNil(id.Balance),
@@ -191,6 +210,7 @@ func (s *Server) accountPortfolio(w http.ResponseWriter, r *http.Request) {
 				URITruncated: id.URITruncated,
 			})
 		}
+		tokens = append(tokens, row)
 	}
 
 	// Prices ride alongside, from the PriceLens rather than the AssetLens: a second
@@ -201,8 +221,18 @@ func (s *Server) accountPortfolio(w http.ResponseWriter, r *http.Request) {
 		nativeValue  string
 	)
 	if p := s.pricerFor(chainID); p != nil && q.Get("prices") != "false" {
-		addrs := make([]common.Address, 0, len(res.Tokens))
+		// Quote what is actually being returned, not everything the lens read:
+		// under known_only some tokens were dropped above, and pricing those would
+		// spend node reads on rows nobody will see.
+		shown := make(map[common.Address]bool, len(tokens))
+		for _, row := range tokens {
+			shown[common.HexToAddress(row.Address)] = true
+		}
+		addrs := make([]common.Address, 0, len(tokens))
 		for _, t := range res.Tokens {
+			if !shown[t.Address] {
+				continue
+			}
 			if t.IsContract && t.Standard != evmlogERC721 && t.Standard != evmlogERC1155 {
 				addrs = append(addrs, t.Address)
 			}
@@ -212,7 +242,18 @@ func (s *Server) accountPortfolio(w http.ResponseWriter, r *http.Request) {
 		var asOf uint64
 		if prices != nil {
 			asOf = prices.AsOfBlock
-			for i, t := range res.Tokens {
+			// Joined by address rather than by position. known_only can drop rows,
+			// so the two slices are not the same length and indexing one with the
+			// other's offset would price tokens as each other.
+			byAddr := make(map[common.Address]lens.Token, len(res.Tokens))
+			for _, t := range res.Tokens {
+				byAddr[t.Address] = t
+			}
+			for i := range tokens {
+				t, ok := byAddr[common.HexToAddress(tokens[i].Address)]
+				if !ok {
+					continue
+				}
 				pq := prices.Quotes[t.Address]
 				if pq == nil {
 					continue

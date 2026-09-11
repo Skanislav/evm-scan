@@ -411,6 +411,8 @@ epoch that made verifying it in practice too expensive to bother with.
 | `POST` | `/v1/assets` | Register a hint locally (gated by `api.allow_registration`). |
 | `GET` | `/v1/assets/{addr}/accounts` | Accounts known to have touched a contract. |
 | `GET` | `/v1/accounts?q=` | Accounts in the index, busiest first. `q` is a hex address prefix. |
+| `GET` | `/v1/hints` | Published membership filters, with their digests and the key derivation. |
+| `GET` | `/v1/hints/{name}.xorf` · `.json` | One filter's bytes, and the enumerable list behind a token filter. |
 | `GET` | `/v1/candidates` | Contracts discovered at the head, ranked by activity. `include_spam=true` shows the ones ruled out. |
 | `POST` | `/v1/candidates/{addr}/promote` | Commit a discovered contract to being indexed. |
 | `POST` | `/v1/candidates/{addr}/spam` · `/unspam` | Rule a contract not worth indexing, and take it back. A spam mark drops it out of the promotable ranking and out of auto-promote. |
@@ -434,12 +436,14 @@ internal/evmlog/     log decoding — which topics we watch and who is in them
 internal/indexer/    discovery, backfiller, follower, reorg handling, rollup aggregation
 internal/store/      PostgreSQL: rollup, pending buffer, commitments
 internal/merkle/     commitment tree; must match HintRegistry byte-for-byte
+internal/hintfilter/ .xorf membership filters; must match the JS reader byte-for-byte
 internal/hintreg/    registry mirror (pull hints) + publisher (push commitments)
 internal/api/        HTTP surface
 internal/ens/        on.eth chain names for the daemon; the hint-name scheme and ENSv2 ABIs for the tools
 cmd/evmscand/        the daemon
 cmd/evmscan-demo/    devnet bootstrapper
 cmd/evmscan-verify/  independent proof checker
+cmd/evmscan-hint/    builds and inspects .xorf hint filters
 cmd/evmscan-deploy/  registry deployer: fixes the adjudication mode, prints it, seeds requests
 cmd/evmscan-ens/     deploys HintResolver and attaches it under an ENSv2 name
 deploy/              container entrypoint and hosted config (Railway)

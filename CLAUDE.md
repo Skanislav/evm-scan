@@ -137,6 +137,19 @@ shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module 
   leaf = `keccak256(abi.encode(account, chainId, keccak256(abi.encodePacked(sorted unique
   assets))))`, sorted-pair keccak tree. Changing either side requires changing the other and
   re-running `cmd/evmscan-verify`, which checks the Go proof against the Solidity verifier.
+- `internal/hintfilter` is the `.xorf` membership filter: a binary-fuse8 or sorted-u64
+  table over 64-bit keys, published so a reader can narrow a portfolio read locally
+  instead of naming their address to the API. Keys are
+  `uint64be(keccak256(subkey ‖ parts)[0:8])` with
+  `subkey = keccak256(secret ‖ "evmscan/xorf/v1" ‖ chainId ‖ kind)`; a non-empty secret
+  blinds the file so only its holder can test it. **The Go writer and the JavaScript
+  reader in `web/index.html` must agree byte-for-byte** — `internal/hintfilter/testdata`
+  is the fixture that enforces it, regenerated with `go test ./internal/hintfilter
+  -update`, and `testdata/browser-watch.xorf` pins the reverse direction (the browser
+  builds blinded watchlists; only Go builds fuse filters). Construction is
+  deterministic, so a published filter can be rebuilt and diffed. Built by
+  `cmd/evmscan-hint`, served at `GET /v1/hints`, `GET /v1/hints/{name}.xorf` and
+  `.json`. docs/PRIVACY.md is the threat model.
 - `internal/token` probes metadata and balances via `eth_call` **at head only**. Nothing in
   the codebase may request historical state; that is what keeps snap sync sufficient.
 - `internal/lens` runs `contracts/src/AssetLens.sol` as a *deployless* `eth_call` (creation
@@ -212,3 +225,10 @@ shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module 
   reader's RPC, the mirror through its injected `EthCall`. The daemon never resolves a
   name, no API parameter takes one, and nobody here follows an ERC-3668 gateway on a
   reader's behalf.
+- Hint filters annotate, never filter. A token list is curated and therefore
+  incomplete, so dropping what is not on one hides real holdings of long-tail tokens.
+  `known` rides alongside a portfolio row and is absent — not false — when no list is
+  configured; `known_only=true` is the caller's explicit opt-in.
+- A filter is never trusted. It says where to look; the live lens read says what is
+  there. A false positive costs one `balanceOf`; there are no false negatives except
+  from staleness, which is why an index filter carries the block it is true as of.

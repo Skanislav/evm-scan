@@ -105,6 +105,22 @@ chains:
     # well-known Feed Registry / native feed / factories / quote tokens filled in;
     # anything set below overrides the matching default. On another chain, or to
     # price through a Uniswap fork, set the addresses explicitly.
+    # Token lists, fetched once at startup and compiled into a published membership
+    # filter served at /v1/hints/tokens-<chain_id>.xorf.
+    #
+    # A reader downloads that file once and tests contracts against it in their own
+    # browser, which is how a portfolio read drops airdrop spam without naming the
+    # account to this deployment. The list is a hint about what is worth looking at
+    # and never a source of truth: symbol, decimals and every number still come from
+    # the chain, so a wrong or hostile list costs a wasted read and nothing more.
+    #
+    # These are the one third-party HTTP dependency in this process. A list that will
+    # not fetch is logged and skipped rather than fatal.
+    #
+    # token_lists:
+    #   - https://tokens.uniswap.org
+    #   - https://tokens.coingecko.com/uniswap/all.json
+
     pricing:
       enabled: true
       # false drops the built-in addresses and uses only what is written here.

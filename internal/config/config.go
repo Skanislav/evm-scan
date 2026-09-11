@@ -153,6 +153,15 @@ type Chain struct {
 	// Pricing reads prices from on-chain oracles and DEX pools through the node,
 	// never from a quote API.
 	Pricing Pricing `yaml:"pricing"`
+	// TokenLists are tokenlists.org documents, as URLs or paths, compiled at
+	// startup into a published membership filter for this chain.
+	//
+	// A list is a hint about which contracts are worth looking at, never a source
+	// of truth about them: symbol, decimals and every number still come from the
+	// chain. A wrong or hostile list costs a wasted read and can never put a bad
+	// number in front of anyone, which is the same bargain the on-chain registry
+	// makes.
+	TokenLists []string `yaml:"token_lists"`
 }
 
 // Discovery configures the head-watching sweep.
