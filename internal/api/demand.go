@@ -210,10 +210,33 @@ type relayKey struct {
 	chainID uint64
 }
 
+// relayLast is what the relay remembers between requests: when each (voter,
+// chain) last landed, and the nonce a voter's next vote must carry. The second
+// exists because the registry is read through a load-balanced public RPC whose
+// backends do not all have the last block: a receipt from one and a stale
+// nonces() from another sent one vote twice, and the copy reverted at the gas
+// the relay paid. A nonce this process has already seen consumed is not offered
+// again, whatever the RPC says.
 var relayLast = struct {
 	sync.Mutex
-	at map[relayKey]time.Time
-}{at: map[relayKey]time.Time{}}
+	at    map[relayKey]time.Time
+	nonce map[common.Address]*big.Int
+}{at: map[relayKey]time.Time{}, nonce: map[common.Address]*big.Int{}}
+
+// relayNonce reads the voter's next nonce and lifts it to the one this process
+// has already seen consumed, whichever is higher.
+func (s *Server) relayNonce(ctx context.Context, voter common.Address) (*big.Int, error) {
+	n, err := s.d.Registry.VoteNonce(ctx, voter)
+	if err != nil {
+		return nil, err
+	}
+	relayLast.Lock()
+	defer relayLast.Unlock()
+	if floor, ok := relayLast.nonce[voter]; ok && floor.Cmp(n) > 0 {
+		return new(big.Int).Set(floor), nil
+	}
+	return n, nil
+}
 
 type relayRequest struct {
 	ChainID   uint64   `json:"chain_id"`
@@ -252,7 +275,7 @@ func (s *Server) relayInfo(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, "voter must be an address", nil)
 			return
 		}
-		n, err := s.d.Registry.VoteNonce(r.Context(), common.HexToAddress(v))
+		n, err := s.relayNonce(r.Context(), common.HexToAddress(v))
 		if err != nil {
 			// A registry deployed before voteFor has no nonces(); that is "no relay",
 			// and the page sends the vote from the wallet instead.
@@ -330,7 +353,7 @@ func (s *Server) relayVote(w http.ResponseWriter, r *http.Request) {
 	// The nonce the contract expects, and whether any token is new. The signature
 	// covers the whole list, so nothing can be dropped from it; a vote that would
 	// count nothing is refused instead of paid for.
-	want, err := s.d.Registry.VoteNonce(ctx, voter)
+	want, err := s.relayNonce(ctx, voter)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, "could not read the nonce", err)
 		return
@@ -382,7 +405,8 @@ func (s *Server) relayVote(w http.ResponseWriter, r *http.Request) {
 
 	// Sent is not counted: the nonce moves when the transaction mines, and the
 	// voter's next vote (for their next chain) cannot be signed against anything
-	// else. Wait for the receipt, bounded, and say which it was.
+	// else. Wait for the receipt, bounded, then for the state the next read will
+	// see to agree with it, and say which it was.
 	wctx, cancel := context.WithTimeout(ctx, relayMinedWait)
 	defer cancel()
 	out := map[string]any{
@@ -395,11 +419,28 @@ func (s *Server) relayVote(w http.ResponseWriter, r *http.Request) {
 		"voted_chain_id": req.ChainID,
 		"mined":          false,
 	}
-	if rcpt, err := s.d.Relay.Wait(wctx, tx); err == nil && rcpt != nil {
-		out["mined"] = rcpt.Status == 1
-		out["block"] = rcpt.BlockNumber.Uint64()
-		if rcpt.Status != 1 {
-			out["error"] = "the transaction reverted"
+	rcpt, err := s.d.Relay.Wait(wctx, tx)
+	if err != nil || rcpt == nil {
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
+	out["block"] = rcpt.BlockNumber.Uint64()
+	if rcpt.Status != 1 {
+		writeErr(w, http.StatusBadGateway, "the vote reverted on chain", fmt.Errorf("tx %s", tx.Hex()))
+		return
+	}
+	out["mined"] = true
+	next := new(big.Int).Add(nonce, big.NewInt(1))
+	relayLast.Lock()
+	relayLast.nonce[voter] = next
+	relayLast.Unlock()
+	for wctx.Err() == nil {
+		if n, err := s.d.Registry.VoteNonce(wctx, voter); err == nil && n.Cmp(next) >= 0 {
+			break
+		}
+		select {
+		case <-wctx.Done():
+		case <-time.After(time.Second):
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
