@@ -22,8 +22,10 @@ def rpc(url, method, params, tries=5):
     last = None
     for attempt in range(tries):
         try:
+            # Public endpoints answer urllib's default User-Agent with 403.
             req = urllib.request.Request(
-                url, body.encode(), {"content-type": "application/json"}
+                url, body.encode(),
+                {"content-type": "application/json", "user-agent": "evmscan-verify/1"},
             )
             return json.load(urllib.request.urlopen(req, timeout=60))
         except Exception as exc:  # a rate limit or a blip, not an answer
