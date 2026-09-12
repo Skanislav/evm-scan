@@ -236,13 +236,13 @@ whatever `EVMSCAN_PUBLISHER_KEY` holds and needs no on-chain step. The two regis
 deployed before this change (`0xE51e…1375`, `0xCDe4…98f2`) have an immutable arbiter
 and cannot be rotated; they are abandoned.
 
-Done on 2026-09-12, twice. First `0xcde45355570e25b90e9aadf6cb1a999ee7f198f2`
-(deploy tx `0x2467…5096`, immutable arbiter, abandoned the same day when its arbiter
-key leaked). Then, after the Ownable2Step change, the live one:
-`0xf6ba84CA25d949E99c241C27980E90aF1095F13b`, deploy tx
-`0xf75b962d74356c7379a5da164f1be18f510fe5f5f8439292fc57bdf11604c0f6`, owner and
-arbiter `0x91C117Faa280B6b6f0413b71cAa2b9F7372bA0B9`, same economics and gateway
-throughout. Reading the receipt back off `base-rpc.publicnode.com`
+Done on 2026-09-12, three times, same economics and gateway throughout. First
+`0xcde45355570e25b90e9aadf6cb1a999ee7f198f2` (immutable arbiter, abandoned the same
+day when its arbiter key leaked). Then `0xf6ba84CA25d949E99c241C27980E90aF1095F13b`
+after the Ownable2Step change (owner `0x91C1…A0B9`), abandoned hours later for the
+signed-vote registry. The live one: `0x6D021dBe3A5804F6AC4faE7A20117dF8d7525Ad7`,
+deploy tx `0x599f58ff962f4cc635db3207f2a0c408cd990c72a93afa0414a5b0f1b5649624`, owner
+and arbiter `0x91C117Faa280B6b6f0413b71cAa2b9F7372bA0B9`, verified on Basescan. Reading the receipt back off `base-rpc.publicnode.com`
 lagged by minutes while `mainnet.base.org` had it at once; the tool's receipt wait
 timed out on the first and the deployment was fine, which is exactly the "do NOT
 deploy again" case the tool warns about.

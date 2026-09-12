@@ -148,6 +148,9 @@ where a reader would otherwise assume a protection they do not have:
 | the browser's memory of an account, **spent** on the next lookup | shipped; localStorage
   only. Adds every contract it names, orders the candidate cap, removes nothing, and
   says on screen what it did |
+| a signed vote carried to the registry by the daemon (`POST /v1/demand/relay`, `HintRegistry.voteFor`) | shipped;
+  the wallet signs EIP-712, the publisher key pays Base gas; the voter's address is on
+  chain with the vote, which the button says |
 | a vote for the held contracts the index does not keep (`POST /v1/demand`, `HintRegistry.vote`) | shipped;
   voter hashed under a per-deployment salt so the table cannot be enumerated (it can
   still be tested by whoever holds the salt), one count per account, promotion by
