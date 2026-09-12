@@ -4728,6 +4728,30 @@ function renderHintUse() {
   el.hidden = false;
 }
 
+// The same check the triage card runs, on the reader's own rows.
+//
+// It belongs here more than it belongs there. An operator seeing ꒤5DT in a queue is
+// deciding whether to index it; a reader seeing it in their holdings already owns it,
+// already believes it is USDT, and is the person the imitation was built for. The
+// contract at 0xDd44…9A5F has tens of thousands of holders, every one of whom sees a
+// row that says USDT in the pixels their font draws.
+//
+// Only the strong tier is shown here. "Carries characters outside ASCII" is a useful
+// prompt for somebody judging a contract on purpose and it is noise in a list of
+// balances, where the reader is not making that decision and cannot act on it.
+function holdingFake(h) {
+  const hit = lookalikeOf(h);
+  return hit && hit.tier === 'impersonates' ? hit : null;
+}
+
+function holdingFakeTag(h) {
+  const hit = holdingFake(h);
+  const chars = hit.odd.map(o => o.folded === ''
+    ? `${o.hex}, which draws nothing`
+    : o.folded ? `${o.hex} standing in for ${o.folded}` : o.hex).join(', ');
+  return ` <span class="tag tag-flag" title="This contract is not ${esc(hit.target)}. Its symbol renders as ${esc(hit.target)} and is a different string: ${esc(chars)}. A curated token list carries the real ${esc(hit.target)} and does not carry this address. The balance is real; the name is borrowed.">not ${esc(hit.target)}</span>`;
+}
+
 function renderHoldings() {
   if (!WALLET_ADDR) return;
   const rows = HOLDINGS.map(h => ({ ...h, verdict: verdictOf(h.address) }));
@@ -4767,7 +4791,7 @@ function renderHoldings() {
       <div style="min-width:0">
         <div class="sym">${h.symbol ? esc(h.symbol) : '<span class="empty">unknown</span>'}${
           h.name ? ` <span class="nm">${esc(h.name)}</span>` : ''}<span class="std">${esc(stdLabel(h.standard))}</span>${
-          h.unlisted ? ' <span class="tag tag-flag" title="no token list this deployment loaded vouches for this contract. Checked in your browser, against a filter already downloaded — the daemon was not asked.">unlisted</span>' : ''}${
+          holdingFake(h) ? holdingFakeTag(h) : h.unlisted ? ' <span class="tag tag-flag" title="no token list this deployment loaded vouches for this contract. Checked in your browser, against a filter already downloaded — the daemon was not asked.">unlisted</span>' : ''}${
           h.event_count ? '' : ' <span class="tag" title="the index has no rows for this contract and account; the balance was read live at head">live read</span>'}${
           h.hinted && !h.aside ? ' <span class="tag" title="your hint already knew about this contract, so it was asked about first. The balance beside it was still read from the chain just now — the hint says where to look and never what is there.">in your hint</span>' : ''}${
           h.aside ? ' <span class="tag" title="you set this aside, in this browser. It stays out of your hint and it is still read from the chain on every lookup — setting aside decides what your hint spends itself on, not what exists.">set aside</span>' : ''}</div>
