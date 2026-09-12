@@ -1429,44 +1429,55 @@ function renderSweepVote(account, rows, pairs, el) {
     </p>` : ''}`;
   el.appendChild(card);
 
+  // What has landed survives the click handler: a wallet that rejects the third
+  // prompt, or a relay that refuses one chain, leaves the others done, and the next
+  // press must start from the first chain that is not — a vote sent again is what
+  // the relay refuses (409, "already counts"), and stopping there would strand the
+  // chains behind it.
   const send = $('sweep-vote-send');
+  const sent = [];
   send.addEventListener('click', async () => {
     const status = $('sweep-vote-status');
     send.disabled = true;
-    const done = [];
     try {
       for (const [cid, addrs] of groups) {
-        status.textContent = `${done.map(d => `${d.chain} ${d.recorded} new`).join(' · ')}${done.length ? ' · ' : ''}${chainLabel(cid)}…`;
+        if (sent.some(d => d.cid === cid)) continue;
+        status.textContent = `${sent.map(d => `${d.chain} ${d.recorded} new`).join(' · ')}${sent.length ? ' · ' : ''}${chainLabel(cid)}…`;
         const r = await vote(account, cid, addrs);
-        done.push({ chain: chainLabel(cid), recorded: r.recorded, here: r.indexed_here });
+        sent.push({ cid, chain: chainLabel(cid), recorded: r.recorded, here: r.indexed_here });
       }
-      status.innerHTML = `recorded · ${done.map(d => `${H.esc(d.chain)} ${H.esc(String(d.recorded))} new${d.here ? '' : ' (not indexed here)'}`).join(' · ')}`;
+      status.innerHTML = `recorded · ${sent.map(d => `${H.esc(d.chain)} ${H.esc(String(d.recorded))} new${d.here ? '' : ' (not indexed here)'}`).join(' · ')}`;
       send.textContent = 'voted';
     } catch (e) {
-      status.textContent = `${done.length ? done.map(d => `${d.chain} recorded`).join(' · ') + ' · ' : ''}${e.message || String(e)}`;
+      const left = groups.filter(([cid]) => !sent.some(d => d.cid === cid)).length;
+      status.textContent = `${sent.length ? sent.map(d => `${d.chain} recorded`).join(' · ') + ' · ' : ''}${e.message || String(e)}`;
+      send.textContent = `Vote for the remaining ${left} chain${left === 1 ? '' : 's'}`;
       send.disabled = false;
     }
   });
 
   const onchain = $('sweep-vote-chain');
   if (!onchain) return;
+  const landed = [];
   onchain.addEventListener('click', async () => {
     const status = $('sweep-vote-chain-status');
     onchain.disabled = true;
-    const done = [];
     try {
       for (const [cid, addrs] of groups) {
+        if (landed.some(d => d.cid === cid)) continue;
         const tokens = addrs.slice(0, RELAY_MAX_TOKENS);
-        const prefix = done.map(d => `${d.chain} ${d.tx}`).join(' · ');
-        const say = { set textContent(t) { status.textContent = `${prefix}${prefix ? ' · ' : ''}${chainLabel(cid)} (${done.length + 1} of ${groups.length}): ${t}`; } };
+        const prefix = landed.map(d => `${d.chain} ${d.tx}`).join(' · ');
+        const say = { set textContent(t) { status.textContent = `${prefix}${prefix ? ' · ' : ''}${chainLabel(cid)} (${landed.length + 1} of ${groups.length}): ${t}`; } };
         const r = await H.voteOnChain(cid, tokens, say);
-        done.push({ chain: chainLabel(cid), tx: `${String(r.tx).slice(0, 10)}…`, fresh: r.fresh, mined: r.mined });
+        landed.push({ cid, chain: chainLabel(cid), tx: `${String(r.tx).slice(0, 10)}…`, fresh: r.fresh, mined: r.mined });
       }
-      status.innerHTML = done.map(d => `${H.esc(d.chain)} <code>${H.esc(d.tx)}</code>${d.fresh != null ? ` ${H.esc(String(d.fresh))} new` : ''}${d.mined === false ? ' (sent, not yet mined)' : ''}`).join(' · ')
+      status.innerHTML = landed.map(d => `${H.esc(d.chain)} <code>${H.esc(d.tx)}</code>${d.fresh != null ? ` ${H.esc(String(d.fresh))} new` : ''}${d.mined === false ? ' (sent, not yet mined)' : ''}`).join(' · ')
         + ' · the mirror picks them up within a minute';
       onchain.textContent = 'voted on chain';
     } catch (e) {
-      status.textContent = `${done.length ? done.map(d => `${d.chain} ${d.tx}`).join(' · ') + ' · ' : ''}${e.message || String(e)}`;
+      const left = groups.filter(([cid]) => !landed.some(d => d.cid === cid)).length;
+      status.textContent = `${landed.length ? landed.map(d => `${d.chain} ${d.tx}`).join(' · ') + ' · ' : ''}${e.message || String(e)}`;
+      onchain.textContent = `Sign the remaining ${left} vote${left === 1 ? '' : 's'} for the registry`;
       onchain.disabled = false;
     }
   });
