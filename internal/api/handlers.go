@@ -64,7 +64,10 @@ type assetJSON struct {
 	ReportReason string `json:"report_reason,omitempty"`
 }
 
-func (s *Server) assetView(ctx context.Context, a store.Asset) assetJSON {
+// assetView renders one asset. live says whether the registry may be asked for its
+// funding on this request: a route about one asset can afford the verified
+// eth_call, a list of hundreds cannot and reads what the cache already knows.
+func (s *Server) assetView(ctx context.Context, a store.Asset, live bool) assetJSON {
 	v := assetJSON{
 		ChainID:       a.ChainID,
 		Address:       a.Address.Hex(),
@@ -94,7 +97,14 @@ func (s *Server) assetView(ctx context.Context, a store.Asset) assetJSON {
 		v.HistoryComplete = c.BackfillDone && c.BackfillFloor <= a.HintFromBlock
 	}
 	if s.d.Registry != nil {
-		if f, err := s.d.Registry.Funding(ctx, hintreg.AssetKey(a.ChainID, a.Address)); err == nil {
+		key := hintreg.AssetKey(a.ChainID, a.Address)
+		f, ok := s.funding.get(s.d.Registry, key)
+		if !ok && live {
+			if got, err := s.funding.fetch(ctx, s.d.Registry, key); err == nil {
+				f, ok = got, true
+			}
+		}
+		if ok && f.Balance != nil {
 			v.FundingWei = f.Balance.String()
 			if f.Vouched != nil {
 				v.VouchedWei = f.Vouched.String()
@@ -120,7 +130,7 @@ func (s *Server) listAssets(w http.ResponseWriter, r *http.Request) {
 
 	out := make([]assetJSON, 0, len(assets))
 	for _, a := range assets {
-		out = append(out, s.assetView(r.Context(), a))
+		out = append(out, s.assetView(r.Context(), a, false))
 	}
 	orderAssets(out)
 	writeJSON(w, http.StatusOK, map[string]any{"chain_id": chainID, "assets": out})
@@ -187,7 +197,7 @@ func (s *Server) getAsset(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "query failed", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, s.assetView(r.Context(), a))
+	writeJSON(w, http.StatusOK, s.assetView(r.Context(), a, true))
 }
 
 type registerRequest struct {
@@ -282,7 +292,7 @@ func (s *Server) registerAsset(w http.ResponseWriter, r *http.Request) {
 	if created {
 		code2 = http.StatusCreated
 	}
-	writeJSON(w, code2, map[string]any{"created": created, "asset": s.assetView(ctx, a)})
+	writeJSON(w, code2, map[string]any{"created": created, "asset": s.assetView(ctx, a, true)})
 }
 
 func (s *Server) assetAccounts(w http.ResponseWriter, r *http.Request) {
@@ -621,9 +631,20 @@ func (s *Server) listEpochs(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "query failed", err)
 		return
 	}
+	// The registry's view rides along for epochs whose window may still be open, so
+	// a reader can see when a commitment stops being challengeable without asking
+	// for each one by id. Finalized rows are settled and need no eth_call; the
+	// whole pass shares one short deadline so a slow registry costs the list a
+	// few fields, never the response.
+	onctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
 	out := make([]epochJSON, 0, len(rows))
 	for _, e := range rows {
-		out = append(out, epochView(e))
+		v := epochView(e)
+		if e.OnchainID != nil && e.Status != store.EpochFinalized && e.Status != store.EpochRejected && onctx.Err() == nil {
+			v = s.withOnchain(onctx, v)
+		}
+		out = append(out, v)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"epochs": out})
 }
@@ -910,7 +931,7 @@ func (s *Server) promoteCandidate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"promoted": true,
 		"reason":   reason,
-		"asset":    s.assetView(ctx, a),
+		"asset":    s.assetView(ctx, a, true),
 	})
 }
 

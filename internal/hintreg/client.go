@@ -14,6 +14,7 @@ import (
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/crypto"
 
 	"github.com/Skanislav/evm-scan/contracts"
 )
@@ -543,4 +544,33 @@ func (c *Client) Simulate(ctx context.Context, from common.Address, method strin
 	}
 	_, err = c.src.CallAtHead(ctx, ethereum.CallMsg{From: from, To: &c.addr, Data: in})
 	return err
+}
+
+// ERC20Meta reads a token's symbol and decimals so a bond denominated in it can be
+// shown to a person as "0.5 USDC" rather than as 500000 units of an address. Both
+// are best-effort: neither is part of ERC-20 proper, and a currency that implements
+// neither still bonds fine, so a missing answer is an absent field rather than an
+// error.
+func (c *Client) ERC20Meta(ctx context.Context, token common.Address) (symbol string, decimals *uint8) {
+	stringT, _ := abi.NewType("string", "", nil)
+	uint8T, _ := abi.NewType("uint8", "", nil)
+	if out, err := c.src.CallAtHead(ctx, ethereum.CallMsg{To: &token, Data: selectorOf("symbol()")}); err == nil {
+		if vals, err := (abi.Arguments{{Type: stringT}}).Unpack(out); err == nil && len(vals) == 1 {
+			if s, ok := vals[0].(string); ok {
+				symbol = s
+			}
+		}
+	}
+	if out, err := c.src.CallAtHead(ctx, ethereum.CallMsg{To: &token, Data: selectorOf("decimals()")}); err == nil {
+		if vals, err := (abi.Arguments{{Type: uint8T}}).Unpack(out); err == nil && len(vals) == 1 {
+			if d, ok := vals[0].(uint8); ok {
+				decimals = &d
+			}
+		}
+	}
+	return symbol, decimals
+}
+
+func selectorOf(sig string) []byte {
+	return crypto.Keccak256([]byte(sig))[:4]
 }

@@ -104,6 +104,14 @@ type Server struct {
 	hintsMu   sync.Mutex
 	hints     map[string]*hintfilter.Cache
 	hintLists map[string][]common.Address
+	// funding is the registry's per-asset funding, read in the background so the
+	// asset list never waits on a verified eth_call per row. See funding.go.
+	funding *fundingCache
+	// registry is the deployment's adjudication rules, read once: every field in
+	// it is an immutable of the contract, and /v1/status is polled every few
+	// seconds by every open page. See registry_status.go.
+	regMu sync.Mutex
+	reg   *registryRules
 }
 
 // indexFilter returns the index filter cache for a chain, making it on first ask.
@@ -158,7 +166,7 @@ func (s *Server) lookupHint(name string) (*hintfilter.Cache, bool) {
 
 // New builds the router.
 func New(d Deps) *Server {
-	s := &Server{d: d, mux: http.NewServeMux(), started: time.Now()}
+	s := &Server{d: d, mux: http.NewServeMux(), started: time.Now(), funding: newFundingCache()}
 	s.hints = map[string]*hintfilter.Cache{}
 	s.hintLists = map[string][]common.Address{}
 	for chainID, c := range d.TokenFilters {
@@ -490,21 +498,9 @@ type pricingStatus struct {
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	out := struct {
-		Chains   []chainStatus `json:"chains"`
-		Registry *struct {
-			ChainID uint64 `json:"chain_id"`
-			Address string `json:"address"`
-			// RewardPerBlockWei is what the registry pays a publisher per newly covered
-			// block of a funded asset; MinFundingWei is the least a request deposits.
-			RewardPerBlockWei string `json:"reward_per_block_wei,omitempty"`
-			MinFundingWei     string `json:"min_funding_wei,omitempty"`
-			// AssetBondWei is what registerAsset locks for an asset nobody has
-			// registered yet. requestIndexing wants assetBond + minFunding for a new
-			// asset and minFunding for one that already exists, so a caller building
-			// that transaction needs both numbers.
-			AssetBondWei string `json:"asset_bond_wei,omitempty"`
-		} `json:"registry,omitempty"`
-		Publisher string `json:"publisher,omitempty"`
+		Chains    []chainStatus `json:"chains"`
+		Registry  *registryJSON `json:"registry,omitempty"`
+		Publisher string        `json:"publisher,omitempty"`
 	}{}
 
 	for _, e := range s.d.Chains.Entries() {
@@ -567,24 +563,7 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		out.Chains = append(out.Chains, cs)
 	}
 
-	if s.d.Registry != nil {
-		out.Registry = &struct {
-			ChainID           uint64 `json:"chain_id"`
-			Address           string `json:"address"`
-			RewardPerBlockWei string `json:"reward_per_block_wei,omitempty"`
-			MinFundingWei     string `json:"min_funding_wei,omitempty"`
-			AssetBondWei      string `json:"asset_bond_wei,omitempty"`
-		}{ChainID: s.d.RegistryChainID, Address: s.d.Registry.Address().Hex()}
-		if v, err := s.d.Registry.RewardPerBlock(ctx); err == nil {
-			out.Registry.RewardPerBlockWei = v.String()
-		}
-		if v, err := s.d.Registry.MinFunding(ctx); err == nil {
-			out.Registry.MinFundingWei = v.String()
-		}
-		if v, err := s.d.Registry.AssetBond(ctx); err == nil {
-			out.Registry.AssetBondWei = v.String()
-		}
-	}
+	out.Registry = s.registryStatus(ctx)
 	if s.d.Publisher != nil {
 		out.Publisher = s.d.Publisher.Address().Hex()
 	}
