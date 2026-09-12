@@ -132,6 +132,28 @@ func (s *Store) SetOnchainDemand(ctx context.Context, chainID uint64, addr commo
 	return err
 }
 
+// ReplaceOnchainDemand makes the mirrored aggregate exactly what the registry lists:
+// rows present are written, rows absent are deleted. There is one registry per
+// deployment and it is the truth for every chain, so a count synced from a registry
+// this deployment has since moved away from does not linger as a phantom voter.
+func (s *Store) ReplaceOnchainDemand(ctx context.Context, rows []DemandRow) error {
+	return s.inTx(ctx, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `DELETE FROM asset_demand_onchain`); err != nil {
+			return err
+		}
+		for _, r := range rows {
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO asset_demand_onchain (chain_id, address, voters, synced_at)
+				VALUES ($1, $2, $3, now())
+				ON CONFLICT (chain_id, address) DO UPDATE SET voters = EXCLUDED.voters, synced_at = now()`,
+				int64(r.ChainID), r.Address.Bytes(), int64(r.OnchainVoters)); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 const demandSelect = `
 	SELECT t.chain_id, t.address, t.voters, COALESCE(o.voters, 0),
 	       COALESCE(d.last_at, o.synced_at, now()),

@@ -196,13 +196,18 @@ func (m *Mirror) syncDemand(ctx context.Context) {
 		return
 	}
 	m.demandUnsupported = false
+	// The registry of record is the whole truth: whatever it lists for a chain we run
+	// replaces what was mirrored before, so a count synced from a registry this
+	// deployment has since moved away from does not linger as a phantom voter.
+	var rows []store.DemandRow
 	for _, v := range votes {
 		if _, ok, err := m.head(ctx, v.ChainID); err != nil || !ok {
 			continue
 		}
-		if err := m.st.SetOnchainDemand(ctx, v.ChainID, v.Token, v.Voters); err != nil {
-			m.log.Warn("could not mirror on-chain demand", "chain_id", v.ChainID, "token", v.Token.Hex(), "err", err)
-		}
+		rows = append(rows, store.DemandRow{ChainID: v.ChainID, Address: v.Token, OnchainVoters: v.Voters})
+	}
+	if err := m.st.ReplaceOnchainDemand(ctx, rows); err != nil {
+		m.log.Warn("could not mirror on-chain demand", "err", err)
 	}
 }
 

@@ -84,11 +84,15 @@ func TestDemandCountsVotersAndOrdersPromotion(t *testing.T) {
 		t.Fatalf("DemandedUnseen = %+v, %v", un, err)
 	}
 
-	// The on-chain aggregate adds to the total and reorders the listing.
-	if err := st.SetOnchainDemand(ctx, chain, b, 3); err != nil {
+	// The on-chain aggregate adds to the total and reorders the listing, and a
+	// sync replaces the whole table: a row the registry no longer lists is gone.
+	if err := st.SetOnchainDemand(ctx, chain, c, 9); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SetOnchainDemand(ctx, chain, b, 4); err != nil {
+	if err := st.ReplaceOnchainDemand(ctx, []store.DemandRow{{ChainID: chain, Address: b, OnchainVoters: 3}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ReplaceOnchainDemand(ctx, []store.DemandRow{{ChainID: chain, Address: b, OnchainVoters: 4}}); err != nil {
 		t.Fatal(err)
 	}
 	dl, err := st.ListDemand(ctx, chain, 10)
