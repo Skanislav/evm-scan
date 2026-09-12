@@ -281,6 +281,28 @@ shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module 
   the writes with `eth_estimateGas` against a real resolver, never from SSTORE
   arithmetic: ENS stores a dynamic string, so reasoning from fixed slots understated
   it by more than a factor of two.
+- A reader's hint is spent on the next lookup, and the shape of the spending is the
+  invariant. It **adds**: `vouchedBy` walks `/v1/hints/tokens-<chain>.json` — the
+  enumerable half of a filter that can be tested and never listed — and names the
+  contracts this account has held whether or not the index offers them. It **orders**:
+  hinted candidates go ahead of the per-lookup cap, though never ahead of an indexed
+  asset. It **removes nothing**. The ENS record is read only for a name the reader
+  typed, never by reverse-resolving a pasted address, and what comes back has its kind
+  and structure checked before it is believed — a blinded watchlist under the same key
+  decodes fine and then answers no to everything, which on screen is a wallet that
+  holds nothing. Every failure is a note on screen and an empty seed, never a lost
+  lookup. Because the hint is a fixed 1,024 bits, its error rate is a function of how
+  many contracts went in (0.03% at 27, 9.62% at 200 over 5,862), so the walk is skipped
+  when expected false positives exceed the hint's key count; that is a refusal to add,
+  which leaves exactly the behaviour of having no hint.
+- A reader's own triage of their own holdings ("set aside", `evmscan.aside.<account>`
+  in localStorage) decides what goes into their hint and nothing else. Set-aside
+  contracts are still asked about, still read from the chain, still shown behind a
+  toggle, and the valuation is untouched — it is the only reader-owned set stored as
+  addresses rather than as a filter, because an undo that cannot be enumerated is not
+  an undo. `afterLookup` and `openWatchlist` must both honour it: a hint rebuilt from
+  everything on screen hands the dust back on the next lookup and the triage lasts
+  until the button is pressed again.
 - Hint filters annotate, never filter. A token list is curated and therefore
   incomplete, so dropping what is not on one hides real holdings of long-tail tokens.
   `known` rides alongside a portfolio row and is absent — not false — when no list is
