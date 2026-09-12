@@ -2631,7 +2631,7 @@ async function voteOnChain(chainId, tokens, status) {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ chain_id: chainId, voter: WALLET, tokens, nonce: info.nonce, deadline, signature }),
   });
-  return { tx: r.tx, relayed: true, fresh: r.new };
+  return { tx: r.tx, relayed: true, fresh: r.new, mined: r.mined };
 }
 
 // --------------------------------------------------------------------------

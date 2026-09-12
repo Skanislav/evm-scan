@@ -335,7 +335,16 @@ shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module 
   the domain, types and nonce, and reports `available: false` on a registry that
   predates `voteFor`, where the page falls back to a plain `vote` transaction.
   The same account voting through the API and on chain counts twice, since the
-  mirror sees only aggregates. Demand is a priority
+  mirror sees only aggregates. A vote names a chain, and it may be one this
+  deployment does not run: the cross-chain sweep offers one vote per chain it
+  found holdings on (`renderSweepVote`), `POST /v1/demand` records it, the
+  mirror keeps every chain the registry lists, and `GET /v1/demand` says
+  `indexed_here` — demand for an unindexed chain is what tells an operator which
+  chain to add, and `DemandedUnseen` promotes it as soon as that chain runs. The
+  relay's window is therefore per voter **and chain**, and it waits for the
+  receipt before answering, because each `voteFor` spends `nonces(voter)` and the
+  next chain's vote cannot be signed against anything but the mined state.
+  Demand is a priority
   signal and nothing else: `PromotableCandidates` orders by it and, with
   `min_voters` above zero, promotes on it alone (`DemandedUnseen` reaches a voted
   contract discovery never counted, promoted with source `demand`); `spam_at` still

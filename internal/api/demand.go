@@ -1,10 +1,12 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math/big"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -53,17 +55,20 @@ func (s *Server) recordDemand(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad body", err)
 		return
 	}
-	chainID, _, err := s.chainOf(r)
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "bad chain", err)
-		return
-	}
-	if req.ChainID != 0 {
-		chainID = req.ChainID
-	}
-	if _, ok := s.d.Chains.Worker(chainID); !ok {
-		writeErr(w, http.StatusBadRequest, "unknown chain", nil)
-		return
+	// A vote may name a chain this deployment does not run. The cross-chain sweep
+	// finds holdings on a dozen chains and the index runs on one; demand for the
+	// others is still demand — it is what tells an operator which chain to add next
+	// (POST /v1/chains), and DemandedUnseen promotes it the moment that chain runs.
+	// Without a chain_id the vote lands on the first configured chain, as every
+	// other route defaults.
+	chainID := req.ChainID
+	if chainID == 0 {
+		e, ok := s.d.Chains.First()
+		if !ok {
+			writeErr(w, http.StatusBadRequest, "no chains are configured", nil)
+			return
+		}
+		chainID = e.ID
 	}
 	if !common.IsHexAddress(req.Account) {
 		writeErr(w, http.StatusBadRequest, "account must be an address", nil)
@@ -102,7 +107,8 @@ func (s *Server) recordDemand(w http.ResponseWriter, r *http.Request) {
 		voters[a.Hex()] = n
 	}
 	var minVoters uint64
-	if wk, ok := s.d.Chains.Worker(chainID); ok {
+	wk, runs := s.d.Chains.Worker(chainID)
+	if runs {
 		_, _, minVoters = wk.DiscoveryThresholds()
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -110,11 +116,33 @@ func (s *Server) recordDemand(w http.ResponseWriter, r *http.Request) {
 		"recorded":   added,
 		"voters":     voters,
 		"min_voters": minVoters,
+		// indexed_here says whether this deployment can act on the vote itself. A
+		// false is not a refusal: the count is kept, and the on-chain vote — the one
+		// every indexer mirrors — is the same either way.
+		"indexed_here": runs,
 	})
 }
 
+// demandChain reads chain_id for the demand routes. Unlike chainOf it accepts a
+// chain this deployment does not run, since demand is recorded for those too.
+func (s *Server) demandChain(r *http.Request) (uint64, error) {
+	raw := r.URL.Query().Get("chain_id")
+	if raw == "" {
+		e, ok := s.d.Chains.First()
+		if !ok {
+			return 0, fmt.Errorf("no chains are configured")
+		}
+		return e.ID, nil
+	}
+	id, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil || id == 0 {
+		return 0, fmt.Errorf("chain_id %q is not a chain id", raw)
+	}
+	return id, nil
+}
+
 func (s *Server) listDemand(w http.ResponseWriter, r *http.Request) {
-	chainID, _, err := s.chainOf(r)
+	chainID, err := s.demandChain(r)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "bad chain", err)
 		return
@@ -137,10 +165,12 @@ func (s *Server) listDemand(w http.ResponseWriter, r *http.Request) {
 			Promotable: minVoters > 0 && d.Voters >= minVoters && !d.Indexed && !d.Spam,
 		}
 	}
+	_, runs := s.d.Chains.Worker(chainID)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"chain_id":   chainID,
-		"min_voters": minVoters,
-		"demand":     out,
+		"chain_id":     chainID,
+		"min_voters":   minVoters,
+		"indexed_here": runs,
+		"demand":       out,
 	})
 }
 
@@ -155,21 +185,35 @@ func (s *Server) listDemand(w http.ResponseWriter, r *http.Request) {
 // recovers the signer and counts the vote as theirs; the carrier is nobody.
 //
 // What the relay spends is gas, so it is stingy in three ways: at most
-// relayMaxTokens per vote, one relayed transaction per voter per relayWindow, and a
-// simulation before every send so a bad signature or an expired deadline costs a
-// call and not a transaction. It refuses a vote that would count nothing new,
-// because the contract still spends the nonce and the gas on those.
+// relayMaxTokens per vote, one relayed transaction per voter per chain voted for
+// per relayWindow, and a simulation before every send so a bad signature or an
+// expired deadline costs a call and not a transaction. It refuses a vote that
+// would count nothing new, because the contract still spends the nonce and the
+// gas on those.
+//
+// The window is per chain because Vote is: the struct carries one chainId, so a
+// wallet the sweep found on four chains signs four votes, and they have to land
+// one after another — each spends nonces(voter), so the next cannot be simulated,
+// let alone sent, until the last has mined. That is why the route waits for the
+// receipt before answering: the page asks for the nonce again and signs the next
+// vote against a chain state that already has the previous one in it.
 // --------------------------------------------------------------------------
 
 const (
 	relayMaxTokens = 20
 	relayWindow    = 10 * time.Minute
+	relayMinedWait = 90 * time.Second
 )
+
+type relayKey struct {
+	voter   common.Address
+	chainID uint64
+}
 
 var relayLast = struct {
 	sync.Mutex
-	at map[common.Address]time.Time
-}{at: map[common.Address]time.Time{}}
+	at map[relayKey]time.Time
+}{at: map[relayKey]time.Time{}}
 
 type relayRequest struct {
 	ChainID   uint64   `json:"chain_id"`
@@ -273,11 +317,12 @@ func (s *Server) relayVote(w http.ResponseWriter, r *http.Request) {
 	voter := common.HexToAddress(req.Voter)
 	ctx := r.Context()
 
-	// One transaction per voter per window, before anything is read or sent.
+	// One transaction per voter per chain per window, before anything is read or sent.
+	rk := relayKey{voter, req.ChainID}
 	relayLast.Lock()
-	if last, seen := relayLast.at[voter]; seen && time.Since(last) < relayWindow {
+	if last, seen := relayLast.at[rk]; seen && time.Since(last) < relayWindow {
 		relayLast.Unlock()
-		writeErr(w, http.StatusTooManyRequests, fmt.Sprintf("one relayed vote per %s per voter", relayWindow), nil)
+		writeErr(w, http.StatusTooManyRequests, fmt.Sprintf("one relayed vote per %s per voter and chain", relayWindow), nil)
 		return
 	}
 	relayLast.Unlock()
@@ -323,23 +368,39 @@ func (s *Server) relayVote(w http.ResponseWriter, r *http.Request) {
 	}
 
 	relayLast.Lock()
-	relayLast.at[voter] = time.Now()
+	relayLast.at[rk] = time.Now()
 	relayLast.Unlock()
 	tx, err := s.d.Relay.Submit(ctx, s.d.Registry.Address(), nil, data)
 	if err != nil {
 		relayLast.Lock()
-		delete(relayLast.at, voter)
+		delete(relayLast.at, rk)
 		relayLast.Unlock()
 		writeErr(w, http.StatusBadGateway, "could not send", err)
 		return
 	}
-	s.d.Log.Info("relayed a signed vote", "voter", voter.Hex(), "tokens", len(tokens), "new", fresh, "tx", tx.Hex())
-	writeJSON(w, http.StatusOK, map[string]any{
-		"tx":       tx.Hex(),
-		"voter":    voter.Hex(),
-		"tokens":   len(tokens),
-		"new":      fresh,
-		"registry": s.d.Registry.Address().Hex(),
-		"chain_id": s.d.RegistryChainID,
-	})
+	s.d.Log.Info("relayed a signed vote", "voter", voter.Hex(), "chain_id", req.ChainID, "tokens", len(tokens), "new", fresh, "tx", tx.Hex())
+
+	// Sent is not counted: the nonce moves when the transaction mines, and the
+	// voter's next vote (for their next chain) cannot be signed against anything
+	// else. Wait for the receipt, bounded, and say which it was.
+	wctx, cancel := context.WithTimeout(ctx, relayMinedWait)
+	defer cancel()
+	out := map[string]any{
+		"tx":             tx.Hex(),
+		"voter":          voter.Hex(),
+		"tokens":         len(tokens),
+		"new":            fresh,
+		"registry":       s.d.Registry.Address().Hex(),
+		"chain_id":       s.d.RegistryChainID,
+		"voted_chain_id": req.ChainID,
+		"mined":          false,
+	}
+	if rcpt, err := s.d.Relay.Wait(wctx, tx); err == nil && rcpt != nil {
+		out["mined"] = rcpt.Status == 1
+		out["block"] = rcpt.BlockNumber.Uint64()
+		if rcpt.Status != 1 {
+			out["error"] = "the transaction reverted"
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
 }

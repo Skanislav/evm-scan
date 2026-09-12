@@ -1351,6 +1351,125 @@ export async function afterSweep(account, rows, { aside } = {}) {
       btn.disabled = false;
     }
   });
+  renderSweepVote(account, rows, pairs, el);
+}
+
+// ---------------------------------------------------------------------------
+// Voting for what the sweep found
+//
+// The lookup's vote covers one chain: the one this deployment indexes. The sweep
+// finds holdings on a dozen, and every one of them is a (chain, contract) pair a
+// vote can name — the demand table keys by chain, HintRegistry.vote takes one, and
+// the registry is read by every indexer that mirrors it, this one included. A
+// vote for a chain nobody indexes yet is the demand that says which chain to add
+// next, and it is already counted when that chain starts.
+//
+// One vote per chain, because that is what the contract signs: Vote carries one
+// chainId, so four chains are four signatures, carried one after another — each
+// spends the voter's nonce, and the relay answers only once the previous one has
+// mined, so the next is signed against a state that has it.
+// ---------------------------------------------------------------------------
+
+const RELAY_MAX_TOKENS = 20;
+
+function renderSweepVote(account, rows, pairs, el) {
+  // What this deployment already keeps for anyone is not worth a vote: an asset has
+  // its backfill. That is knowable only for the chain it indexes; on every other
+  // chain, everything the sweep found is unindexed here by definition.
+  const homeChain = Number(H.chainId());
+  const kept = new Set((H.assets() || []).map(a => (a.address || '').toLowerCase()));
+  const byChain = new Map();
+  const names = new Map();
+  for (const r of rows || []) if (r.chainId && r.chainName) names.set(Number(r.chainId), r.chainName);
+  for (const p of pairs) {
+    const cid = Number(p.chainId);
+    if (cid === homeChain && kept.has(p.address.toLowerCase())) continue;
+    if (!byChain.has(cid)) byChain.set(cid, []);
+    byChain.get(cid).push(p.address);
+  }
+  const groups = [...byChain.entries()].sort((a, b) => a[0] - b[0]);
+  const wanted = groups.reduce((n, [, a]) => n + a.length, 0);
+  if (!wanted) return;
+  const reg = H.registry() || {};
+  const wallet = (H.wallet && H.wallet()) || '';
+  const chainLabel = (cid) => names.get(cid) || `chain ${cid}`;
+
+  const card = document.createElement('div');
+  card.className = 'commit';
+  card.id = 'sweep-vote';
+  card.innerHTML = `
+    <div class="unkept-head" style="margin-top:18px">ask for these to be indexed</div>
+    <p class="hint" style="margin:10px 0 0; max-width:74ch; text-wrap:pretty">
+      ${H.esc(String(wanted))} of the pairs above ${wanted === 1 ? 'is' : 'are'} held and not kept by this index —
+      ${groups.map(([cid, a]) => `${H.esc(String(a.length))} on ${H.esc(chainLabel(cid))}`).join(', ')}.
+      One vote per chain, counted once per account. This deployment indexes ${H.esc(H.chainName ? H.chainName() : `chain ${homeChain}`)};
+      a vote for another chain is kept as the demand that says which chain to run next, and counts the moment one does.
+    </p>
+    <div class="row" style="gap:10px; margin-top:12px; flex-wrap:wrap">
+      <button class="btn btn-primary btn-sm" id="sweep-vote-send">Vote for ${H.esc(String(wanted))} on this deployment</button>
+      <span class="hint" id="sweep-vote-status"></span>
+    </div>
+    <p class="hint" style="margin:8px 0 0; max-width:74ch; text-wrap:pretty">
+      <strong>What this tells the deployment:</strong> your address and these ${H.esc(String(wanted))} chain-and-contract pairs,
+      which the sweep never told it — every lens call went to the chains' own endpoints. The vote is hashed under a
+      per-deployment salt, so the daemon counts you once and holds no list of who holds what.
+    </p>
+    ${reg.address ? `
+    <div class="row" style="gap:10px; margin-top:14px; flex-wrap:wrap">
+      <button class="btn btn-secondary btn-sm" id="sweep-vote-chain">Sign ${H.esc(String(groups.length))} vote${groups.length === 1 ? '' : 's'} for the registry</button>
+      <span class="hint" id="sweep-vote-chain-status"></span>
+    </div>
+    <p class="hint" style="margin:8px 0 0; max-width:74ch; text-wrap:pretty">
+      The same votes, on the registry itself: one EIP-712 signature per chain (no gas, nothing sent from your wallet),
+      each carried to <code>HintRegistry.voteFor</code> on chain ${H.esc(String(reg.chain_id ?? ''))} with this deployment's key
+      and counted as yours. They land one after another — the second is signed once the first has mined. Read by every
+      indexer that mirrors the registry, so the vote outlives this deployment; your wallet address is on chain with it.
+      At most ${H.esc(String(RELAY_MAX_TOKENS))} contracts per chain are carried.${wallet && wallet.toLowerCase() !== account.toLowerCase()
+        ? ` The connected wallet is ${H.esc(H.short(wallet))}, not this account, so the votes would be its own.` : ''}
+    </p>` : ''}`;
+  el.appendChild(card);
+
+  const send = $('sweep-vote-send');
+  send.addEventListener('click', async () => {
+    const status = $('sweep-vote-status');
+    send.disabled = true;
+    const done = [];
+    try {
+      for (const [cid, addrs] of groups) {
+        status.textContent = `${done.map(d => `${d.chain} ${d.recorded} new`).join(' · ')}${done.length ? ' · ' : ''}${chainLabel(cid)}…`;
+        const r = await vote(account, cid, addrs);
+        done.push({ chain: chainLabel(cid), recorded: r.recorded, here: r.indexed_here });
+      }
+      status.innerHTML = `recorded · ${done.map(d => `${H.esc(d.chain)} ${H.esc(String(d.recorded))} new${d.here ? '' : ' (not indexed here)'}`).join(' · ')}`;
+      send.textContent = 'voted';
+    } catch (e) {
+      status.textContent = `${done.length ? done.map(d => `${d.chain} recorded`).join(' · ') + ' · ' : ''}${e.message || String(e)}`;
+      send.disabled = false;
+    }
+  });
+
+  const onchain = $('sweep-vote-chain');
+  if (!onchain) return;
+  onchain.addEventListener('click', async () => {
+    const status = $('sweep-vote-chain-status');
+    onchain.disabled = true;
+    const done = [];
+    try {
+      for (const [cid, addrs] of groups) {
+        const tokens = addrs.slice(0, RELAY_MAX_TOKENS);
+        const prefix = done.map(d => `${d.chain} ${d.tx}`).join(' · ');
+        const say = { set textContent(t) { status.textContent = `${prefix}${prefix ? ' · ' : ''}${chainLabel(cid)} (${done.length + 1} of ${groups.length}): ${t}`; } };
+        const r = await H.voteOnChain(cid, tokens, say);
+        done.push({ chain: chainLabel(cid), tx: `${String(r.tx).slice(0, 10)}…`, fresh: r.fresh, mined: r.mined });
+      }
+      status.innerHTML = done.map(d => `${H.esc(d.chain)} <code>${H.esc(d.tx)}</code>${d.fresh != null ? ` ${H.esc(String(d.fresh))} new` : ''}${d.mined === false ? ' (sent, not yet mined)' : ''}`).join(' · ')
+        + ' · the mirror picks them up within a minute';
+      onchain.textContent = 'voted on chain';
+    } catch (e) {
+      status.textContent = `${done.length ? done.map(d => `${d.chain} ${d.tx}`).join(' · ') + ' · ' : ''}${e.message || String(e)}`;
+      onchain.disabled = false;
+    }
+  });
 }
 
 // submitHint signs the bytes' digest as EIP-712 Hint(account, digest, deadline)

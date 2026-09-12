@@ -182,10 +182,12 @@ func (m *Mirror) Sync(ctx context.Context) error {
 	return nil
 }
 
-// syncDemand mirrors the registry's vote counts into asset_demand_onchain, for the
-// chains this daemon runs. The contract deduplicates voters itself, so what lands
-// here is an aggregate. A registry deployed before votes existed has no listDemand;
-// that is logged once and is not an error.
+// syncDemand mirrors the registry's vote counts into asset_demand_onchain, for
+// every chain the registry lists — not only the ones this daemon runs. A vote for
+// a chain nobody indexes yet is the demand that says which chain to add, and it is
+// already counted when that chain starts. The contract deduplicates voters itself,
+// so what lands here is an aggregate. A registry deployed before votes existed has
+// no listDemand; that is logged once and is not an error.
 func (m *Mirror) syncDemand(ctx context.Context) {
 	votes, err := m.client.ListDemand(ctx, 200)
 	if err != nil {
@@ -196,14 +198,11 @@ func (m *Mirror) syncDemand(ctx context.Context) {
 		return
 	}
 	m.demandUnsupported = false
-	// The registry of record is the whole truth: whatever it lists for a chain we run
-	// replaces what was mirrored before, so a count synced from a registry this
-	// deployment has since moved away from does not linger as a phantom voter.
-	var rows []store.DemandRow
+	// The registry of record is the whole truth: whatever it lists replaces what
+	// was mirrored before, so a count synced from a registry this deployment has
+	// since moved away from does not linger as a phantom voter.
+	rows := make([]store.DemandRow, 0, len(votes))
 	for _, v := range votes {
-		if _, ok, err := m.head(ctx, v.ChainID); err != nil || !ok {
-			continue
-		}
 		rows = append(rows, store.DemandRow{ChainID: v.ChainID, Address: v.Token, OnchainVoters: v.Voters})
 	}
 	if err := m.st.ReplaceOnchainDemand(ctx, rows); err != nil {
