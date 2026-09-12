@@ -64,6 +64,8 @@ func main() {
 	switch cmd {
 	case "deploy-resolver":
 		err = deployResolver(ctx, args)
+	case "deploy-signed-resolver":
+		err = deploySignedResolver(ctx, args)
 	case "attach":
 		err = attach(ctx, args)
 	case "check":
@@ -86,6 +88,8 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `usage: evmscan-ens <deploy-resolver|attach|check|send> [flags]
 
   deploy-resolver  deploy HintResolver bound to a HintRegistry
+  deploy-signed-resolver
+                   deploy HintSignedResolver for a chain the registry is not on
   attach           hang a HintResolver under <label>.<name> in ENSv2
   check            read-only: does <hex>.hints.<name> reach the resolver through the Universal Resolver?
   send             sign and broadcast unsigned calldata (e.g. from ens-cli --json)
@@ -264,6 +268,100 @@ func deployResolver(ctx context.Context, args []string) error {
 	}
 	fmt.Printf("gateways   %v\n", urls)
 	fmt.Printf("\nnext:  evmscan-ens attach -node <rpc> -key <key> -name <yourname>.eth -resolver %s -eth-registry 0x… -factory 0x… -impl 0x…\n", resolver.Hex())
+	return nil
+}
+
+// --------------------------------------------------------------- deploy-signed-resolver
+
+type listFlag []string
+
+func (l *listFlag) String() string     { return strings.Join(*l, ",") }
+func (l *listFlag) Set(v string) error { *l = append(*l, v); return nil }
+
+// deploySignedResolver deploys HintSignedResolver: the resolver for a chain the
+// registry is NOT on (ENS on mainnet, registry on Base). Its answers are signed by
+// the daemon's publisher key rather than proven against the root, and the resolver
+// pins that key. The deployer's key becomes the owner, which can rotate the signer
+// and the gateways.
+func deploySignedResolver(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("deploy-signed-resolver", flag.ExitOnError)
+	var c common_
+	c.bind(fs)
+	signerHex := fs.String("signer", "", "the daemon's publisher address: `ens_signer` in GET /v1/status")
+	var gateways listFlag
+	fs.Var(&gateways, "gateway", "signed gateway URL template, e.g. https://host/ens/{sender}/{data}.json (repeatable)")
+	defaultChain := fs.Uint64("chain-id", 0, "chain the index is about (default: the node's own chain)")
+	registryHex := fs.String("registry", "", "the HintRegistry the index is committed to, for the evmscan.registry record")
+	registryChain := fs.Uint64("registry-chain-id", 0, "chain that registry lives on")
+	_ = fs.Parse(args)
+
+	signer, err := address("-signer", *signerHex)
+	if err != nil {
+		return err
+	}
+	registry, err := address("-registry", *registryHex)
+	if err != nil {
+		return err
+	}
+	if *registryChain == 0 {
+		return errors.New("-registry-chain-id is required")
+	}
+	if len(gateways) == 0 {
+		return errors.New("at least one -gateway is required; the resolver has nowhere to send readers otherwise")
+	}
+	s, err := c.open(ctx, true)
+	if err != nil {
+		return err
+	}
+	defer s.close()
+	if *defaultChain == 0 {
+		*defaultChain = s.chainID
+	}
+
+	art, err := contracts.Load("HintSignedResolver")
+	if err != nil {
+		return err
+	}
+	resABI, err := art.Parsed()
+	if err != nil {
+		return err
+	}
+	ctor, err := resABI.Pack("", signer, []string(gateways), *defaultChain, *registryChain, registry)
+	if err != nil {
+		return err
+	}
+	h, err := s.sub.Deploy(ctx, append(art.Creation(), ctor...))
+	if err != nil {
+		return err
+	}
+	fmt.Printf("deploy tx  %s\n", h.Hex())
+	r, err := s.sub.Wait(ctx, h)
+	if err != nil {
+		return err
+	}
+	if r.Status != types.ReceiptStatusSuccessful {
+		return errors.New("HintSignedResolver deployment reverted")
+	}
+	resolver := r.ContractAddress
+	fmt.Printf("resolver   %s\n", resolver.Hex())
+
+	// Read it back rather than echoing the flags.
+	if out, err := s.call(ctx, resolver, resABI.Methods["signer"].ID); err == nil {
+		if vals, err := resABI.Unpack("signer", out); err == nil {
+			fmt.Printf("signer()   %s\n", vals[0].(common.Address).Hex())
+		}
+	}
+	if out, err := s.call(ctx, resolver, resABI.Methods["defaultChainId"].ID); err == nil {
+		if vals, err := resABI.Unpack("defaultChainId", out); err == nil {
+			fmt.Printf("chain      %d\n", vals[0].(uint64))
+		}
+	}
+	fmt.Printf("gateways   %v\n", []string(gateways))
+	fmt.Printf("\nThis resolver attests, it does not verify: a reader learns the signer said so,\n")
+	fmt.Printf("recently. On the registry's own chain use deploy-resolver instead.\n")
+	fmt.Printf("\nnext, from the name owner's wallet on the ENS registry (0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e):\n")
+	fmt.Printf("  setSubnodeRecord(namehash(\"<yourname>.eth\"), keccak256(\"hints\"), <owner>, %s, 0)\n", resolver.Hex())
+	fmt.Printf("then on the daemon: EVMSCAN_ENS_RESOLVER=%s and registry.ens_parent: \"<yourname>.eth\"\n", resolver.Hex())
 	return nil
 }
 
@@ -463,13 +561,31 @@ func check(ctx context.Context, args []string) error {
 		return fmt.Errorf("resolver does not declare IExtendedResolver, so the Universal Resolver will not use it for wildcard names (%v)", err)
 	}
 
-	art, err := contracts.Load("HintResolver")
+	// Two resolvers serve these names. HintResolver verifies against the registry
+	// on its own chain; HintSignedResolver pins a signer instead. signer() tells
+	// them apart, and the output says which claim the contracts record makes.
+	signed := false
+	art, err := contracts.Load("HintSignedResolver")
 	if err != nil {
 		return err
 	}
 	resABI, err := art.Parsed()
 	if err != nil {
 		return err
+	}
+	if out, err := s.call(ctx, resolver, resABI.Methods["signer"].ID); err == nil {
+		if vals, err := resABI.Unpack("signer", out); err == nil {
+			signed = true
+			fmt.Printf("signer     %s  (answers are attested by this key, not verified against a root)\n", vals[0].(common.Address).Hex())
+		}
+	}
+	if !signed {
+		if art, err = contracts.Load("HintResolver"); err != nil {
+			return err
+		}
+		if resABI, err = art.Parsed(); err != nil {
+			return err
+		}
 	}
 	out, err := s.call(ctx, resolver, resABI.Methods["registry"].ID)
 	if err != nil {
@@ -509,7 +625,11 @@ func check(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("%-18s %d contract(s), verified on-chain against the latest finalized epoch\n", "evmscan.contracts", len(list))
+	if signed {
+		fmt.Printf("%-18s %d contract(s), signed by the resolver's pinned key\n", "evmscan.contracts", len(list))
+	} else {
+		fmt.Printf("%-18s %d contract(s), verified on-chain against the latest finalized epoch\n", "evmscan.contracts", len(list))
+	}
 	for _, a := range list {
 		fmt.Printf("  %s\n", a.Hex())
 	}

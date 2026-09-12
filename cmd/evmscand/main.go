@@ -168,6 +168,7 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 		regClient *hintreg.Client
 		publisher *hintreg.Publisher
 		relay     hintreg.Submitter
+		signer    hintreg.Signer
 		mirror    *hintreg.Mirror
 	)
 
@@ -225,6 +226,11 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 				return err
 			}
 			relay = sub
+			// The same key attests to ENS gateway answers; the interface is narrower
+			// than Submitter on purpose.
+			if sg, ok := sub.(hintreg.Signer); ok {
+				signer = sg
+			}
 			publisher = hintreg.NewPublisher(regClient, sub, st, log)
 			publisher.StaleAfter = cfg.Registry.Publisher.StaleAfter.D()
 			if raw := cfg.Registry.Publisher.MinExpectedReward; raw != "" {
@@ -255,6 +261,8 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 			RegistryChainID:   cfg.Registry.ChainID,
 			Publisher:         publisher,
 			Relay:             relay,
+			Signer:            signer,
+			ENSResolver:       common.HexToAddress(cfg.Registry.ENSResolver),
 			AllowRegistration: cfg.API.AllowRegistration,
 			AuthToken:         cfg.API.AuthToken,
 			Cost:              cfg.Cost,

@@ -142,9 +142,10 @@
   <div class="howto">
     <div class="howto-head">the registry's name for an account</div>
     <div class="howto-body">
-      <p class="hint" style="margin:0 0 12px; max-width:74ch"><code>&lt;address as hex&gt;.hints.&lt;parent&gt;</code> · served by
-        HintResolver · reading its contracts record means following the registry's gateway from this browser, and the
-        callback checks the answer against the latest finalized root before returning it. The step is shown when it happens.</p>
+      <p class="hint" style="margin:0 0 12px; max-width:74ch"><code>&lt;address as hex&gt;.hints.&lt;parent&gt;</code> · reading its contracts record means
+        following the resolver's gateway from this browser. On the registry's own chain the callback checks the answer against
+        the latest finalized root; on another chain (ENS on mainnet, registry on Base) a HintSignedResolver only checks that the
+        publisher's pinned key signed it. The steps say which one answered, and what was and was not checked.</p>
       <div class="row">
         <input class="input big" type="text" id="name" style="flex:1 1 360px; min-width:0" spellcheck="false"
                autocomplete="off" placeholder="0x… or a name">

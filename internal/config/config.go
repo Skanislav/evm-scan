@@ -120,6 +120,12 @@ type Registry struct {
 	// so the API and the page can print each account's hint name
 	// <hex>.hints.<parent>. Informational: nothing resolves through it here.
 	ENSParent string `yaml:"ens_parent"`
+	// ENSResolver is the HintSignedResolver bound under hints.<ens_parent> on the
+	// chain the name lives on (mainnet), when the registry is elsewhere. The signed
+	// ENS gateway answers only for this address, and the page names it. Empty
+	// means the gateway signs for whatever sender asks, which is fine before the
+	// resolver is deployed and wrong afterwards.
+	ENSResolver string `yaml:"ens_resolver"`
 	// Publisher controls how commitments reach the chain.
 	Publisher PublisherCfg `yaml:"publisher"`
 }
@@ -326,6 +332,9 @@ func (c *Config) applyEnv() {
 	if v := os.Getenv("EVMSCAN_API_TOKEN"); v != "" {
 		c.API.AuthToken = v
 	}
+	if v := os.Getenv("EVMSCAN_ENS_RESOLVER"); v != "" {
+		c.Registry.ENSResolver = v
+	}
 	if v := os.Getenv("EVMSCAN_REGISTRY_ADDRESS"); v != "" {
 		c.Registry.Address = v
 	}
@@ -369,6 +378,9 @@ func (c *Config) validate() error {
 		}
 	}
 
+	if c.Registry.ENSResolver != "" && !common.IsHexAddress(c.Registry.ENSResolver) {
+		return fmt.Errorf("config: registry.ens_resolver %q is not an address", c.Registry.ENSResolver)
+	}
 	if c.Registry.Address != "" {
 		if !common.IsHexAddress(c.Registry.Address) {
 			return fmt.Errorf("config: registry.address %q is not an address", c.Registry.Address)

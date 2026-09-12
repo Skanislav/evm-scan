@@ -953,6 +953,8 @@
               <span class="hint mono" id="xchain-status" style="font-family:var(--mono); font-size:11.5px"></span>
             </div>
             <div id="xchain-results"></div>
+            <!-- hints.js draws the reader's hint card here after a sweep. -->
+            <div id="xchain-hint"></div>
             <div class="sweep-skipped" id="xchain-skipped"></div>
             <div class="sweep-foot">The sweep deliberately does <em>not</em> narrow each chain's list with the index
               filter first. That looked obviously right and was badly wrong: a filter miss means "we do not index that
@@ -3509,6 +3511,8 @@ window.evmscanHints = {
   interopKey, interopSubkey, interop7930,
   lookalike: lookalikeOf,
   requestIndexing, voteOnChain, registry: () => REG, head: () => HEAD, indexedChain: () => INDEXED_CHAIN,
+  wallet: () => WALLET, ensureWallet,
+  signTypedData: (typed) => window.ethereum.request({ method: 'eth_signTypedData_v4', params: [WALLET, JSON.stringify(typed)] }),
   weiToEth, ethToWei,
   namehash: async (name) => namehash(await import(VIEM_MODULE), normalizeName(name)),
   normalizeName, rpc, nameRpc, viem: () => import(VIEM_MODULE),
@@ -3824,11 +3828,27 @@ const RETIRED_CHAINS = new Set([
 // false negative about the set it was built over; the mistake was asking it about a
 // different set. Narrowing is sound only where the index is authoritative for the
 // question, which is the wallet lookup, not a list sweep.
+//
+// The reader's own hint (hints.js, afterSweep/hintFor) is a bloom over the pairs a
+// previous sweep confirmed, and it ORDERS this sweep: those pairs are asked about
+// in the first calls. It removes nothing — the list is still read to the end — so
+// the only thing it can get wrong is which batch a holding lands in.
 
 // sweepChain reads one chain and reports what is held there.
-async function sweepChain(chain, account, onProgress) {
-  const tokens = chain.tokens;
-  if (!tokens.length) return { chain, held: [], calls: 0, scanned: 0 };
+async function sweepChain(chain, account, onProgress, hint) {
+  let tokens = chain.tokens;
+  if (!tokens.length) return { chain, held: [], calls: 0, scanned: 0, hinted: 0 };
+
+  // The reader's hint orders the list and never shortens it: pairs the hint knows
+  // go first, so they land in the first calls, and every other pair follows in
+  // the order the list had. `tokens.length` is the same number either way.
+  let hinted = 0;
+  if (hint) {
+    const first = [], rest = [];
+    for (const t of tokens) ((await hint.has(chain.id, t.address)) ? first : rest).push(t);
+    hinted = first.length;
+    tokens = first.concat(rest);
+  }
 
   const held = [];
   let calls = 0;
@@ -3858,7 +3878,7 @@ async function sweepChain(chain, account, onProgress) {
     }
     if (onProgress) onProgress({ chain, done: Math.min(i + LENS_BATCH, tokens.length), total: tokens.length, held });
   }
-  return { chain, held, calls, scanned: tokens.length };
+  return { chain, held, calls, scanned: tokens.length, hinted };
 }
 
 function withTimeout(p, ms, what) {
@@ -3871,7 +3891,7 @@ function withTimeout(p, ms, what) {
 // sweep runs the selected chains with a concurrency cap, reporting each as it
 // lands. A chain that fails is reported and skipped: one unreachable public
 // endpoint should cost its own row, not the whole answer.
-async function sweep(chains, account, onChainDone, onProgress) {
+async function sweep(chains, account, onChainDone, onProgress, hint) {
   const queue = [...chains];
   const results = [];
   const workers = Array.from({ length: Math.min(CHAIN_CONCURRENCY, queue.length) }, async () => {
@@ -3879,7 +3899,7 @@ async function sweep(chains, account, onChainDone, onProgress) {
       const chain = queue.shift();
       if (!chain) return;
       try {
-        const r = await sweepChain(chain, account, onProgress);
+        const r = await sweepChain(chain, account, onProgress, hint);
         results.push(r);
         onChainDone(r);
       } catch (e) {
@@ -3901,6 +3921,10 @@ const XSELECTED = new Set();
 let XLIST = null;         // the token list's own name and version, for the disclosure
 let XSTATE = 'idle';      // idle | running | done
 let XLAST = null;         // the last sweep's totals, for the status line after it
+// The address this page last fetched from the daemon by name. A sweep asks the
+// daemon for a hint only for that address: a private lookup never named it, and
+// ordering a sweep is not worth naming it for.
+let HOSTED_LOOKUP_FOR = '';
 
 async function openXChain() {
   $('xchain-open').disabled = true;
@@ -4001,6 +4025,7 @@ function updateXChainStatus() {
     `${num(picked.length)} selected · ${Math.min(CHAIN_CONCURRENCY, picked.length)} in flight, ${CHAIN_TIMEOUT_MS / 1000} s each · a chain that fails costs its own row, not the answer`;
   else if (XSTATE === 'done' && XLAST) st.textContent =
     `${num(XLAST.holdings)} holding${XLAST.holdings === 1 ? '' : 's'} across ${num(XLAST.answered)} of ${num(XLAST.chains)} chains, over ${num(XLAST.calls)} calls`
+    + (XLAST.hinted ? ` · ${num(XLAST.hinted)} hinted first, from ${XLAST.hintSource}` : '')
     + (XLAST.failed ? ` · ${num(XLAST.failed)} did not answer` : '');
 }
 
@@ -4014,8 +4039,14 @@ async function runXChain() {
   XLAST = null;
   updateXChainStatus();
   $('xchain-results').innerHTML = '';
+  const hintEl = $('xchain-hint');
+  if (hintEl) hintEl.innerHTML = '';
   const done = [];
   const total = picked.length;
+
+  // What this browser, or the daemon, already knows this account held. Orders the
+  // reads below; the list is still read to the end.
+  const hint = await loadHints().then(m => m.hintFor(addr, HOSTED_LOOKUP_FOR === addr)).catch(() => null);
 
   // One row per chain as it lands — the host that answered, and what it said — with
   // the holdings under it. A chain that failed keeps its row and says so.
@@ -4025,8 +4056,8 @@ async function runXChain() {
       const head = `<div class="sweep-row">
           <div class="cn">${esc(r.chain.name)}</div>
           <div class="ch" title="${esc(r.chain.rpc)}">${r.chain.mine ? 'your endpoint · ' : ''}${esc(r.chain.host)}</div>
-          <div class="res" style="color:${r.error ? 'var(--amber-text)' : r.held.length ? 'var(--ink)' : 'var(--ink-62)'}" title="${esc(r.error || `${r.scanned} contracts read in ${r.calls} call${r.calls === 1 ? '' : 's'}`)}">${
-            r.error ? 'no answer' : `${num(r.held.length)} holding${r.held.length === 1 ? '' : 's'}`}</div>
+          <div class="res" style="color:${r.error ? 'var(--amber-text)' : r.held.length ? 'var(--ink)' : 'var(--ink-62)'}" title="${esc(r.error || `${r.scanned} contracts read in ${r.calls} call${r.calls === 1 ? '' : 's'}${r.hinted ? `, ${r.hinted} hinted first` : ''}`)}">${
+            r.error ? 'no answer' : `${num(r.held.length)} holding${r.held.length === 1 ? '' : 's'}${r.hinted ? ` <span class="empty">· ${num(r.hinted)} hinted first</span>` : ''}`}</div>
         </div>`;
       const rows = r.held.map(h => `<div class="sweep-row held-row">
           <div class="cn"><strong>${esc(h.symbol || '')}</strong> <span class="empty">${esc(h.name || '')}</span></div>
@@ -4038,7 +4069,7 @@ async function runXChain() {
   };
 
   try {
-    await sweep(picked, addr, (r) => { done.push(r); render(); }, () => {});
+    await sweep(picked, addr, (r) => { done.push(r); render(); }, () => {}, hint);
   } finally {
     XSTATE = 'done';
     XLAST = {
@@ -4047,8 +4078,13 @@ async function runXChain() {
       failed: done.filter(r => r.error).length,
       chains: total,
       calls: done.reduce((n, r) => n + (r.calls || 0), 0),
+      hinted: done.reduce((n, r) => n + (r.hinted || 0), 0),
+      hintSource: hint ? hint.source : '',
     };
     updateXChainStatus();
+    // What the sweep confirmed becomes the next sweep's hint. Never awaited: the
+    // results are on screen already and the hint must not take them off.
+    loadHints().then(m => m.afterSweep(addr, done.flatMap(r => r.held), { aside: ASIDE })).catch(() => {});
   }
 }
 
@@ -4456,6 +4492,8 @@ async function lookup() {
       .catch(() => null);
 
     const r = await api(onChain(`/v1/accounts/${addr}?prices=true`));
+
+    HOSTED_LOOKUP_FOR = addr;
     // The daemon formats the hint name from registry.ens_parent; it resolves nothing.
     if (r.hint_name) { resolved.hintName = r.hint_name; WALLET_HINT = r.hint_name; showResolved(resolved); }
     renderEnsCard();

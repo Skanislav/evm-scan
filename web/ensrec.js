@@ -188,6 +188,17 @@ export function decodeString(out) {
   return new TextDecoder().decode(hexToBytes('0x' + hex));
 }
 
+// decodeBytes reads one ABI-encoded bytes return value, as a resolver's callback
+// returns the profile's result when it is called directly rather than through the
+// Universal Resolver.
+export function decodeBytes(out) {
+  const body = strip(out);
+  if (body.length < 128) return '0x';
+  const off = Number(BigInt('0x' + body.slice(0, 64)));
+  const len = Number(BigInt('0x' + body.slice(off * 2, off * 2 + 64)));
+  return '0x' + body.slice(off * 2 + 64, off * 2 + 64 + len * 2);
+}
+
 // decodeResolve reads the Universal Resolver's (bytes result, address resolver) and
 // returns the inner result still encoded, for decodeString.
 export function decodeResolve(out) {

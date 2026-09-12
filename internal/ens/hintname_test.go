@@ -100,3 +100,22 @@ func TestClassifyRevert(t *testing.T) {
 		t.Fatal("short revert data should still be an error")
 	}
 }
+
+func TestJoinContractsMatchesResolverFormat(t *testing.T) {
+	a := common.HexToAddress("0x000000000000000000000000000000000000dEaD")
+	b := common.HexToAddress("0x0000000000000000000000000000000000000001")
+	got := JoinContracts([]common.Address{a, b, a})
+	// Sorted ascending, unique, lowercase, no spaces: what HintResolver.contractsText
+	// renders and what SplitContracts reads back.
+	want := "0x0000000000000000000000000000000000000001,0x000000000000000000000000000000000000dead"
+	if got != want {
+		t.Fatalf("JoinContracts = %q, want %q", got, want)
+	}
+	back, err := SplitContracts(got)
+	if err != nil || len(back) != 2 || back[0] != b || back[1] != a {
+		t.Fatalf("round trip = %v %v", back, err)
+	}
+	if JoinContracts(nil) != "" {
+		t.Fatal("empty set should render as an empty record")
+	}
+}

@@ -81,6 +81,27 @@ func DecodeString(out []byte) (string, error) {
 	return s, nil
 }
 
+// TextKey reads the key out of a text(node, key) profile call, as a gateway that
+// was handed the call has to. The node is ignored, as ENSIP-10 lets a wildcard
+// resolver do: identity came from the name.
+func TextKey(call []byte) (string, error) {
+	if len(call) < 4 || string(call[:4]) != string(selText) {
+		return "", errors.New("ens: not a text(bytes32,string) call")
+	}
+	vals, err := textIn.Unpack(call[4:])
+	if err != nil {
+		return "", err
+	}
+	key, _ := vals[1].(string)
+	return key, nil
+}
+
+// EncodeString packs a string the way text() returns one; what a gateway signs as
+// the result of a text profile.
+func EncodeString(s string) ([]byte, error) {
+	return stringOut.Pack(s)
+}
+
 // DecodeBytes reads an ABI-encoded bytes value, as an extended resolver returns one.
 func DecodeBytes(out []byte) ([]byte, error) {
 	vals, err := bytesOut.Unpack(out)

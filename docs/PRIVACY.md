@@ -148,6 +148,13 @@ where a reader would otherwise assume a protection they do not have:
 | the browser's memory of an account, **spent** on the next lookup | shipped; localStorage
   only. Adds every contract it names, orders the candidate cap, removes nothing, and
   says on screen what it did |
+| the reader's cross-chain hint: a bloom of the sweep's confirmed pairs, signed and kept by the daemon (`POST /v1/accounts/{addr}/hint`, `evmscan.hint`) | shipped;
+  per-account, enumerable, **unblinded** — the one row of that kind here, kept only
+  under the account's EIP-712 signature; it orders the next sweep and removes nothing |
+| `hints.evm-scan.eth` served by a signed resolver on mainnet (`/ens`) | shipped; the
+  publisher key signs on a public endpoint, bound to the resolver by the 0x1900
+  prefix so the signatures attest records and nothing else; signer-trust, not
+  root-verified |
 | a signed vote carried to the registry by the daemon (`POST /v1/demand/relay`, `HintRegistry.voteFor`) | shipped;
   the wallet signs EIP-712, the publisher key pays Base gas; the voter's address is on
   chain with the vote, which the button says |

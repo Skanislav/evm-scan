@@ -151,7 +151,7 @@ async function followOffchain(revertData, url) {
       [{ type: 'bytes' }, { type: 'bytes' }], [response, extraData]).slice(2);
     try {
       const out = await rpc(url, 'eth_call', [{ to: sender, data: callback }, 'latest']);
-      return { out, sender, gateway: used };
+      return { out, sender, gateway: used, response };
     } catch (e) {
       const d = String(e.data || '');
       if (d.startsWith(R.SEL_OFFCHAIN_LOOKUP)) { data = d; continue; }
@@ -178,20 +178,49 @@ async function readRegistry(typed, parent) {
   const d = await deps();
   const url = ensRpc();
 
-  // The contracts record is the one that reverts OffchainLookup; the rest are plain.
-  let value, resolver;
+  // Which resolver serves the name, asked of the Universal Resolver the way any
+  // ENS client asks. The contracts record is then read from that resolver
+  // directly rather than through the Universal Resolver: the resolver's
+  // OffchainLookup names OUR gateway, and following it here means the step on
+  // screen names the host that actually answered, not ENS's batch gateway.
+  const v = await viem();
+  const resolver = await findResolver(hint);
+  if (!resolver) throw new Error(`${hint} has no resolver — is ${R.normalizeName(parent)} the parent a resolver was attached to?`);
+  const node = R.namehash((b) => v.keccak256(b), hint);
+  const req = R.encodeResolve(R.dnsEncode(hint), R.encodeText(node, R.KEY_CONTRACTS));
+  let value, signed = null;
   try {
-    const r = await R.readText(d, hint, R.KEY_CONTRACTS);
-    value = r.value; resolver = r.resolver;
+    const out = await rpc(url, 'eth_call', [{ to: resolver, data: req }, 'latest']);
+    value = R.decodeString(R.decodeBytes(out));
     step(`Read <code>${esc(R.KEY_CONTRACTS)}</code> on ${esc(hint)}`, `answered on chain without a gateway · resolver ${esc(short(resolver))}`);
   } catch (e) {
-    if (e && e.notFound) throw new Error(`${hint} has no resolver — is ${R.normalizeName(parent)} the parent a HintResolver was attached to?`);
-    if (!(e && e.offchain)) throw e;
-    step(`Asked for <code>${esc(R.KEY_CONTRACTS)}</code> on ${esc(hint)}`, `the resolver reverted OffchainLookup, as HintResolver does for this record`);
-    const { out } = await followOffchain(e.data, url);
-    const dec = R.decodeResolve(out);
-    value = R.decodeString(dec.result); resolver = dec.resolver;
-    step(`Verified on chain`, `the callback handed the gateway's answer to HintRegistry.contractsOfCallback, which recomputed the leaf and checked the proof against the latest finalized root before returning it`, 'green');
+    const rd = String(e.data || '');
+    if (!rd.startsWith(R.SEL_OFFCHAIN_LOOKUP)) throw e;
+    // Two resolvers make this revert and they do not make the same claim. The
+    // callback selector says which one answered.
+    const { args } = v.decodeErrorResult({ abi: OFFCHAIN_ABI, data: rd });
+    const callback = String(args[3]).toLowerCase();
+    signed = callback === v.toFunctionSelector('resolveWithProof(bytes,bytes)').toLowerCase();
+    step(`Asked for <code>${esc(R.KEY_CONTRACTS)}</code> on ${esc(hint)}`,
+      `resolver ${esc(short(resolver))} reverted OffchainLookup · ${signed ? 'a HintSignedResolver: its answers are signed, not proven' : 'a HintResolver: its answers are proven against the registry\'s root'}`);
+    const { out, response } = await followOffchain(rd, url);
+    value = R.decodeString(R.decodeBytes(out));
+    if (signed) {
+      // Say what was checked and by whom, and what was not.
+      const sr = await rpc(url, 'eth_call', [{ to: resolver, data: v.toFunctionSelector('signer()') }, 'latest']).catch(() => '');
+      const signer = sr && sr.length >= 66 ? v.getAddress('0x' + sr.slice(-40)) : '';
+      let until = '';
+      try {
+        const [, expires] = v.decodeAbiParameters([{ type: 'bytes' }, { type: 'uint64' }, { type: 'bytes' }], response);
+        until = new Date(Number(expires) * 1000).toISOString();
+      } catch { /* the callback accepted it; the expiry is informational */ }
+      SIGNED_BY = { signer, until };
+      step(`Signed by the publisher key the resolver pins`,
+        `signer ${esc(signer ? short(signer) : '?')} read from resolver.signer() · valid until ${esc(until || '?')} · NOT checked against a root: the root is on the registry's chain, this name is on ${esc(host(url))}'s`, 'amber');
+    } else {
+      SIGNED_BY = null;
+      step(`Verified on chain`, `the callback handed the gateway's answer to HintRegistry.contractsOfCallback, which recomputed the leaf and checked the proof against the latest finalized root before returning it`, 'green');
+    }
   }
   disclose(`the ENS RPC at <code>${esc(host(ensRpc()))}</code> saw the hint name, which carries the address`);
 
@@ -203,7 +232,25 @@ async function readRegistry(typed, parent) {
   const chainId = R.parseChain(side[R.KEY_CHAIN]) ?? 1;
   step(`Read the commitment's provenance`,
     `epoch ${esc(side[R.KEY_EPOCH] || '?')} · blocks ${esc(side[R.KEY_RANGE] || '?')} · root ${esc(short(side[R.KEY_ROOT] || '', 6))} · chain ${esc(String(chainId))}`);
-  return { kind: 'registry', name: label || hint, hint, address, chainId, contracts, raw: value, side };
+  return { kind: 'registry', name: label || hint, hint, address, chainId, contracts, raw: value, side, signed: !!signed };
+}
+
+// The signer the last signed answer named, for the render.
+let SIGNED_BY = null;
+
+// findResolver asks the Universal Resolver which resolver serves a name (the
+// deepest one on the path, per ENSIP-10). Null when there is none.
+async function findResolver(name) {
+  const v = await viem();
+  const data = v.encodeFunctionData({
+    abi: [{ type: 'function', name: 'findResolver', stateMutability: 'view',
+      inputs: [{ name: 'name', type: 'bytes' }],
+      outputs: [{ type: 'address' }, { type: 'bytes32' }, { type: 'uint256' }] }],
+    functionName: 'findResolver', args: [R.dnsEncode(R.normalizeName(name))],
+  });
+  const out = await rpc(ensRpc(), 'eth_call', [{ to: R.UNIVERSAL_RESOLVER, data }, 'latest']);
+  const addr = '0x' + out.slice(2 + 24, 66);
+  return /^0x0{40}$/.test(addr) ? null : v.getAddress(addr);
 }
 
 // ---------------------------------------------------------------------------
@@ -280,8 +327,8 @@ function render(r, bal, rpcUrl) {
   $('r-name').textContent = r.name;
   $('r-addr').textContent = r.address || '';
   const verdict = $('r-verdict');
-  verdict.className = 'verdict verified';
-  verdict.textContent = `verified · epoch ${r.side[R.KEY_EPOCH] || '?'}`;
+  verdict.className = r.signed ? 'verdict self' : 'verdict verified';
+  verdict.textContent = `${r.signed ? 'signed' : 'verified'} · epoch ${r.side[R.KEY_EPOCH] || '?'}`;
 
   const held = bal.rows.filter(t => t.hasBalance && t.balance > 0n).length;
   const unread = bal.rows.filter(t => !t.hasBalance).length;
@@ -305,7 +352,13 @@ function render(r, bal, rpcUrl) {
     </div>`;
   }).join('');
 
-  $('r-foot').innerHTML = `The list is what the index committed for this account in epoch ${esc(r.side[R.KEY_EPOCH] || '?')},
+  $('r-foot').innerHTML = r.signed
+    ? `The list is what the publisher signed for this account, attested by the key the resolver pins
+       (${esc(SIGNED_BY && SIGNED_BY.signer ? short(SIGNED_BY.signer) : '?')}), valid until ${esc(SIGNED_BY && SIGNED_BY.until || '?')} — and
+       <strong>not</strong> verified against the merkle root: the root is on the registry's chain and this name is on another.
+       It names epoch ${esc(r.side[R.KEY_EPOCH] || '?')} and root <code>${esc(short(r.side[R.KEY_ROOT] || '', 6))}</code>, so it can be
+       checked against the registry by anyone who cares to. It covers the contracts the index keeps, not the chain.`
+    : `The list is what the index committed for this account in epoch ${esc(r.side[R.KEY_EPOCH] || '?')},
     verified against root <code>${esc(short(r.side[R.KEY_ROOT] || '', 6))}</code> by the registry's own callback before this page
     saw it. It covers the contracts the index keeps, not the chain: a contract nobody asked for is absent whether or not this
     account holds it — the lookup page is where to ask.`;

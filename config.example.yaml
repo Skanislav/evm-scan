@@ -46,6 +46,9 @@ registry:
   # Set, account responses carry the account's hint name <hex>.hints.<parent>.
   # Informational only: nothing resolves through it here.
   # ens_parent: ""
+  # HintSignedResolver on the name's chain when the registry is elsewhere; the
+  # /ens gateway then signs only for it. Env: EVMSCAN_ENS_RESOLVER.
+  # ens_resolver: ""
   # How commitments reach the chain. "eoa" signs with publisher_key and pays its own
   # gas; the registry pays it back per block of funded coverage once an epoch finalizes
   # and its coverage is claimed.

@@ -244,6 +244,36 @@ func DNSEncode(name string) []byte {
 	return append(out, 0)
 }
 
+// DNSDecode is the inverse of DNSEncode: the dotted name a wire name spells. Strict,
+// because the gateway hashes the request as received and parses this from it — a
+// name that half-decodes must be refused, not guessed at.
+func DNSDecode(b []byte) (string, error) {
+	var labels []string
+	i := 0
+	for {
+		if i >= len(b) {
+			return "", errors.New("ens: wire name has no terminator")
+		}
+		n := int(b[i])
+		i++
+		if n == 0 {
+			break
+		}
+		if n > 63 {
+			return "", fmt.Errorf("ens: wire label of %d bytes exceeds 63", n)
+		}
+		if i+n > len(b) {
+			return "", errors.New("ens: wire name truncated inside a label")
+		}
+		labels = append(labels, string(b[i:i+n]))
+		i += n
+	}
+	if i != len(b) {
+		return "", fmt.Errorf("ens: %d trailing bytes after the wire name", len(b)-i)
+	}
+	return strings.Join(labels, "."), nil
+}
+
 // DecodeChainID reads an ERC-7930 v1 interoperable address that names a chain and
 // no account.
 //

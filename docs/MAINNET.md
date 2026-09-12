@@ -215,6 +215,35 @@ relay report `available: false` and the page sends `vote` from the wallet instea
 Deploying the signed-vote registry is the same command as §6b with the current
 arbiter; the daemon must be redeployed with the matching artifacts afterwards.
 
+### 6d. `hints.evm-scan.eth`: the signed resolver on mainnet
+
+The registry is on Base and ENS on mainnet, so the mainnet name is served by
+`HintSignedResolver`, whose answers the daemon signs (docs/ENS.md). Five steps, the
+first and second from the name owner's wallet:
+
+1. Deploy the resolver (the deployer becomes its owner; the classifier stops Claude
+   from sending mainnet transactions, so this is yours to run):
+   ```bash
+   ./bin/evmscan-ens deploy-signed-resolver -node https://<mainnet rpc> -key 0x<owner key> \
+     -signer <ens_signer from GET /v1/status> \
+     -gateway 'https://evm-scan-production.up.railway.app/ens/{sender}/{data}.json' \
+     -chain-id 1 -registry 0x6D021dBe3A5804F6AC4faE7A20117dF8d7525Ad7 -registry-chain-id 8453
+   ```
+   Verify it on Etherscan with `scripts/verify-contract.sh -chain 1 -name HintSignedResolver …`.
+2. Create the subnode from the owner of `evm-scan.eth` (unwrapped, so the ENS registry
+   accepts the owner directly): on `0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e`,
+   `setSubnodeRecord(node = namehash("evm-scan.eth"), label = keccak256("hints"),
+   owner = <your address>, resolver = <the address from step 1>, ttl = 0)`.
+3. Service records on `evm-scan.eth` itself, in the ENS app: `evmscan.registry` =
+   `eip155:8453:0x6D021dBe3A5804F6AC4faE7A20117dF8d7525Ad7`, `evmscan.hints` =
+   `https://evm-scan-production.up.railway.app/v1/hints`, `evmscan.api` =
+   `https://evm-scan-production.up.railway.app`.
+4. On Railway set `EVMSCAN_ENS_RESOLVER` to the resolver and redeploy; the profile
+   already carries `ens_parent: "evm-scan.eth"`. From then on `/ens` signs only for it
+   and `/v1/status` shows `ens_resolver` and `ens_signer`.
+5. `./bin/evmscan-ens check -node https://<mainnet rpc> -name <hex>.hints.evm-scan.eth`,
+   and any ENS client: `viem.getEnsText({name, key: 'evmscan.contracts'})`.
+
 ### 6c. Rotating the arbiter key
 
 Since the Ownable2Step change the arbiter is the registry's owner and a leaked key is

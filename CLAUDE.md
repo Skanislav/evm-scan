@@ -199,15 +199,46 @@ shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module 
   both contracts; the gateway does not check `sender`, because ENS's Universal Resolver
   rewrites it and the answer is verified where it is used. `registry.ens_parent` only
   lets account responses carry `hint_name`.
+- `contracts/src/HintSignedResolver.sol` is the same resolver for a chain the registry is
+  **not** on: ENS names live on mainnet, the registry on Base, and a mainnet resolver
+  cannot verify a Base root. It pins a `signer` (the publisher key, rotatable by its
+  `Ownable2Step` owner) and answers `addr`, `evmscan.registry`, `evmscan.chain` and
+  `evmscan.signer` itself; every other text key reverts `OffchainLookup` with the full
+  `resolve(name,data)` calldata, and `resolveWithProof` recovers the gateway's
+  signature over `keccak256(0x1900 ‖ resolver ‖ expires ‖ keccak(request) ‖
+  keccak(result))` and checks the expiry. `internal/api/ensgateway.go` (`GET
+  /ens/{sender}/{data}`, `POST /ens`) builds the records from the same finalized leaf
+  `/ccip` proves and signs them with `Deps.Signer` (`hintreg.Signer`, the
+  `EOASubmitter`'s key), refusing any sender but `registry.ens_resolver` once that is
+  set. **Signer-trust, not root-verified**: a stolen publisher key forges these
+  records where a proof would not, and `read.html` and `evmscan-ens check` say which
+  path answered. `internal/ccip/signed.go` is the codec; `ens_signed_sim_test.go`
+  runs the loop on the simulated backend. `evmscan-ens deploy-signed-resolver`
+  deploys it; the subnode is created from the name owner's wallet (docs/MAINNET.md §8).
+- A reader's cross-chain **hint** is a `KindInterop` bloom over the `(chain, token)`
+  pairs the page's sweep confirmed, built in the browser (`buildHint` in
+  `web/hints.js`, sized 1024–4096 bits), kept in localStorage, and — only with the
+  account's EIP-712 signature (`Hint(account, digest, deadline)` under the domain
+  `{evm-scan hint, 1}`, no chain, no contract; `internal/api/hintsig.go`) — stored
+  in `account_hints` (migration 0011) and served at `GET /v1/accounts/{addr}/hint`
+  and as the `evmscan.hint` record. Without a stored one the daemon builds a bloom
+  from the account's committed contracts. That row is per-account, enumerable and
+  unblinded, which the button says; it exists because the reader signed for it. The
+  hint **orders** a sweep — hinted pairs go in the first lens calls — and **removes
+  nothing**; `sweepChain` reads the whole list either way. The page asks the daemon
+  for a hint only for an address it already looked up by name (`HOSTED_LOOKUP_FOR`),
+  and never reads ENS on the lookup page.
 - `internal/api` depends on the indexer through the small `Worker` interface, not the package.
   `gateway.go` is the ERC-3668 gateway for `HintRegistry.contractsOf`; `internal/ccip` holds
   the response codec and an ERC-3668 client shared with `cmd/evmscan-verify -ccip`. The
   callback only accepts the latest finalized epoch, so the gateway reads that id from the
   registry, not from the local table.
   Routes use Go 1.22 method-prefixed patterns on `http.ServeMux`. `authorized` guards
-  everything that is not a read, minus one allowlisted exception (`POST /ccip`, which any
-  ERC-3668 resolver has to reach) — an inverted rule, so a new mutating route is guarded
-  before anyone remembers to add it, and `auth_test.go` is what holds the exception open.
+  everything that is not a read, minus the allowlisted exceptions (`POST /ccip` and
+  `POST /ens`, which any ERC-3668 resolver has to reach; `/v1/demand*`, a reader's
+  vote; `POST /v1/accounts/{addr}/hint`, written under the reader's own signature) —
+  an inverted rule, so a new mutating route is guarded before anyone remembers to add
+  it, and `auth_test.go` is what holds the exceptions open.
 - Money buys indexing and does not buy position. `HintRegistry.Funding` keeps
   `vouched` beside `balance`: `balance` drains as `claimCoverage` pays the publisher,
   so a well-funded, well-indexed asset reads as zero there — the same as one nobody

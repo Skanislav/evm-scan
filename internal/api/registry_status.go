@@ -30,6 +30,11 @@ type registryJSON struct {
 	// reader knows an account's hint name exists before asking about one.
 	// Absent when no resolver is attached.
 	ENSParent string `json:"ens_parent,omitempty"`
+	// ENSResolver is the HintSignedResolver serving that name on the name's own
+	// chain, and ENSSigner the key its answers are checked against. Both absent
+	// when this deployment signs nothing.
+	ENSResolver string `json:"ens_resolver,omitempty"`
+	ENSSigner   string `json:"ens_signer,omitempty"`
 
 	// Mode is "oracle" when UMA's Optimistic Oracle V3 settles disputes and
 	// "local-arbiter" when one key does. Absent until the registry has answered.
@@ -70,6 +75,12 @@ func (s *Server) registryStatus(ctx context.Context) *registryJSON {
 		return nil
 	}
 	out := &registryJSON{ChainID: s.d.RegistryChainID, Address: s.d.Registry.Address().Hex(), ENSParent: s.d.ENSParent}
+	if s.d.ENSResolver != (common.Address{}) {
+		out.ENSResolver = s.d.ENSResolver.Hex()
+	}
+	if s.d.Signer != nil {
+		out.ENSSigner = s.d.Signer.Sender().Hex()
+	}
 
 	rules := s.registryRules(ctx)
 	if rules == nil {

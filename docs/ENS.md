@@ -197,6 +197,29 @@ Mixing tools: `ens … --json` prints unsigned calldata, and
 - The daemon never follows an ERC-3668 gateway for a name. Clients do, and the
   callback verifies what they bring back.
 
+## `hints.evm-scan.eth` on mainnet: signed, not verified
+
+ENS names resolve on mainnet and the hosted registry lives on Base, so the mainnet
+name cannot be served by `HintResolver`: its callback verifies against a root on the
+same chain. `HintSignedResolver` serves it instead. Same names, same records, one
+different claim.
+
+| record | answered | claim |
+| --- | --- | --- |
+| `addr`, `evmscan.registry` (`eip155:8453:0x…`), `evmscan.chain`, `evmscan.signer` | by the contract | immutable / owner-set |
+| `evmscan.contracts`, `evmscan.epoch`, `evmscan.range`, `evmscan.root`, `evmscan.uri`, `evmscan.hint` | by the daemon at `/ens`, signed | **the publisher said so, within the last five minutes** |
+
+The gateway signs `keccak256(0x1900 ‖ resolver ‖ expires ‖ keccak256(request) ‖
+keccak256(result))` over the exact `resolve(name, data)` calldata, and the callback
+recovers the signer and checks the expiry. The records are built from the latest
+finalized epoch's committed leaf, the same one `/ccip` proves, so an honest publisher
+signs what the root commits and anyone can check a signed answer against the registry
+on Base. What a signature cannot do is stop a stolen publisher key from forging a
+record; a proof would. `read.html` and `evmscan-ens check` say which resolver answered.
+
+`evmscan.hint` is the reader's own cross-chain bloom (docs/PRIVACY.md), or one the
+index built when the reader never signed for one.
+
 ## The reader page
 
 `read.html` is the other end of the index: an account or a name in, the registry's

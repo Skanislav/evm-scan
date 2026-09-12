@@ -35,6 +35,13 @@ func TestAuthorizedGuardsOnlySpendingEndpoints(t *testing.T) {
 		// the credential, checked by the contract.
 		{http.MethodPost, "/v1/demand/relay"},
 		{http.MethodGet, "/v1/demand/relay"},
+		// The signed ENS gateway is the other thing a resolver on the internet has
+		// to reach; the signature it returns is what the resolver trusts, not the
+		// caller. A reader's hint is written under the reader's own signature.
+		{http.MethodPost, "/ens"},
+		{http.MethodGet, "/ens/0x0/0x0"},
+		{http.MethodPost, "/v1/accounts/0xabc/hint"},
+		{http.MethodGet, "/v1/accounts/0xabc/hint"},
 	}
 	for _, r := range reads {
 		if !s.authorized(httptest.NewRequest(r.method, r.path, nil)) {

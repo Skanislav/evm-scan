@@ -49,6 +49,15 @@ registry:
   # Base gas is cheap enough that the timer, not the cost, is what bounds how often
   # a commitment is posted. Identical roots are skipped either way.
   auto_publish_interval: 1h
+  # ENS. Every account gets <hex>.hints.<ens_parent>: on mainnet that name is
+  # served by a HintSignedResolver (contracts/src/HintSignedResolver.sol) whose
+  # answers this daemon signs at /ens with the publisher key — attested, not
+  # verified against the root, which lives on Base. Set ens_resolver from
+  # EVMSCAN_ENS_RESOLVER once it is deployed (docs/MAINNET.md §8); until then
+  # the gateway signs for any sender. The resolver's gateway template is
+  #   https://evm-scan-production.up.railway.app/ens/{sender}/{data}.json
+  ens_parent: "evm-scan.eth"
+  ens_resolver: ""
   # Where the full index table for a commitment is published. A root proves a leaf
   # to whoever already holds it and recovers nothing on its own, so an epoch whose
   # data lives only in this deployment's Postgres dies with that database. This

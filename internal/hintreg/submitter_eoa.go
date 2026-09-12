@@ -51,6 +51,18 @@ func NewEOASubmitter(sender chain.Sender, key *ecdsa.PrivateKey, chainID uint64,
 
 func (s *EOASubmitter) Sender() common.Address { return s.from }
 
+// Sign attests to a 32-byte digest. crypto.Sign yields v in {0, 1}; the contract
+// side recovers with v in {27, 28}, so the shift happens here, once, and nowhere
+// downstream has to remember it.
+func (s *EOASubmitter) Sign(digest [32]byte) ([]byte, error) {
+	sig, err := crypto.Sign(digest[:], s.key)
+	if err != nil {
+		return nil, fmt.Errorf("hintreg: sign: %w", err)
+	}
+	sig[64] += 27
+	return sig, nil
+}
+
 // Submit signs and sends a call, returning its transaction hash.
 func (s *EOASubmitter) Submit(ctx context.Context, to common.Address, value *big.Int, data []byte) (common.Hash, error) {
 	return s.send(ctx, &to, value, data)

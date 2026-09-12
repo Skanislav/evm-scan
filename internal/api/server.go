@@ -71,7 +71,13 @@ type Deps struct {
 	// publisher's own sender; nil when this deployment holds no key, in which case
 	// the relay route answers 503 and the page falls back to the wallet's own
 	// transaction.
-	Relay             hintreg.Submitter
+	Relay hintreg.Submitter
+	// Signer attests to ENS gateway answers with the publisher key, for a
+	// HintSignedResolver on a chain the registry is not on. Nil without a key.
+	Signer hintreg.Signer
+	// ENSResolver is that resolver's address. When set, /ens signs only for it;
+	// zero signs for any sender, which is only right before it is deployed.
+	ENSResolver       common.Address
 	AllowRegistration bool
 	// AuthToken, when set, is required as a bearer token on every endpoint that
 	// spends something. Empty leaves those endpoints open.
@@ -227,6 +233,15 @@ func New(d Deps) *Server {
 	// ERC-3668 gateway for HintRegistry.contractsOf.
 	s.mux.HandleFunc("GET /ccip/{sender}/{data}", s.ccipGet)
 	s.mux.HandleFunc("POST /ccip", s.ccipPost)
+	// ERC-3668 gateway for HintSignedResolver: the same records, signed rather than
+	// proven, for a resolver on a chain the registry is not on.
+	s.mux.HandleFunc("GET /ens/{sender}/{data}", s.ensGet)
+	s.mux.HandleFunc("POST /ens", s.ensPost)
+	// A reader's own cross-chain hint: written only with the account's signature,
+	// read by anyone, served as evmscan.hint under the account's ENS name.
+	s.mux.HandleFunc("GET /v1/accounts/{address}/hint", s.getAccountHint)
+	s.mux.HandleFunc("GET /v1/accounts/{address}/hint.json", s.getAccountHintJSON)
+	s.mux.HandleFunc("POST /v1/accounts/{address}/hint", s.postAccountHint)
 
 	if d.WebDir != "" {
 		s.mux.Handle("/", http.FileServer(http.Dir(d.WebDir)))
@@ -281,7 +296,16 @@ func guarded(r *http.Request) bool {
 	case http.MethodGet, http.MethodHead, http.MethodOptions:
 		return false
 	}
-	return r.URL.Path != "/ccip" && !strings.HasPrefix(r.URL.Path, "/v1/demand")
+	p := r.URL.Path
+	if p == "/ccip" || p == "/ens" || strings.HasPrefix(p, "/v1/demand") {
+		return false
+	}
+	// A reader's hint is written with the reader's own signature, which the handler
+	// checks; the operator's token would only stop readers.
+	if strings.HasPrefix(p, "/v1/accounts/") && strings.HasSuffix(p, "/hint") {
+		return false
+	}
+	return true
 }
 
 // authorized checks the bearer token on the endpoints that mutate. With no token

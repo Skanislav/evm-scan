@@ -18,6 +18,8 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"golang.org/x/text/unicode/norm"
+
+	"github.com/Skanislav/evm-scan/internal/ccip"
 )
 
 var (
@@ -116,6 +118,20 @@ func parseDecimal(s string) (uint64, error) {
 		v = v*10 + uint64(c-'0')
 	}
 	return v, nil
+}
+
+// JoinContracts renders HintResolver's evmscan.contracts record: lowercase 0x hex,
+// sorted and unique, joined by commas. The inverse of SplitContracts, and
+// byte-for-byte what HintResolver.contractsText produces for the same set, so a
+// signed answer from the gateway and a verified one from the registry's own resolver
+// read the same.
+func JoinContracts(assets []common.Address) string {
+	sorted := ccip.SortedUnique(assets)
+	parts := make([]string, len(sorted))
+	for i, a := range sorted {
+		parts[i] = strings.ToLower(a.Hex())
+	}
+	return strings.Join(parts, ",")
 }
 
 // SplitContracts parses HintResolver's evmscan.contracts record.

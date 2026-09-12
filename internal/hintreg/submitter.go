@@ -18,6 +18,21 @@ import (
 // Submit and Wait are separate on purpose: the reference Submit hands back is
 // persisted before anyone waits on it, so a crash between the two resumes the wait
 // instead of submitting a second time.
+// Signer attests to a digest with the publisher's key. Its one consumer is the
+// signed ENS gateway: a resolver on a chain the registry is not on cannot verify a
+// proof against the root, so it checks that the publisher said so, recently.
+//
+// Kept apart from Submitter on purpose. Submitting spends gas and is budgeted;
+// signing is free and answers a public endpoint, and a type that can only do the
+// second cannot be talked into the first.
+type Signer interface {
+	// Sender is the address a signature recovers to.
+	Sender() common.Address
+	// Sign returns a 65-byte signature over digest with v in {27, 28}, which is
+	// what ecrecover and OpenZeppelin's ECDSA.recover expect.
+	Sign(digest [32]byte) ([]byte, error)
+}
+
 type Submitter interface {
 	// Sender is the address the registry will see as msg.sender.
 	Sender() common.Address

@@ -1145,3 +1145,246 @@ export async function mark(seed, chainId, addrs) {
   for (const a of addrs) if (seed.has(chainId, a)) hit.add(a.toLowerCase());
   return hit;
 }
+
+// ---------------------------------------------------------------------------
+// The reader's cross-chain hint
+//
+// The cross-chain sweep confirms, chain by chain, which (chain, token) pairs an
+// account holds. That set is worth keeping: the next sweep can ask about those
+// pairs first and show them while the rest of thirty token lists are still being
+// read. It is kept as a bloom filter keyed by the ERC-7930 pair, so one filter
+// spans every chain and 128 to 512 bytes cover a wallet.
+//
+// It is a bloom and not a list on purpose, and the reason is the opposite of the
+// one that cut the bloom from the lookup page: the sweep already holds every
+// chain's token list, so the dictionary a bloom needs is on the client. Nothing
+// walks anything it did not already have.
+//
+// Where it goes: this browser, always; and, when the reader signs for it, this
+// deployment, which serves it back as the evmscan.hint record under the account's
+// ENS name (<hex>.hints.<parent>) and as GET /v1/accounts/{addr}/hint. The daemon
+// stores it under the address, unblinded — the disclosure on the button says so —
+// and only with the account's own EIP-712 signature.
+//
+// What it does to a sweep is the same rule as every hint here: it ORDERS and it
+// REMOVES NOTHING. A hinted pair is asked about first; every other pair is asked
+// about after. A miss means "not held when this was built", never "not held".
+//
+// The bit layout is internal/hintfilter's, byte for byte: probes are Kirsch-
+// Mitzenmacher with uint32 wraparound before the modulo, the bitmap is MSB-first
+// bytes, and the header is codec.go's. testdata/browser-slot-interop.xorf pins the
+// 1024-bit form of this builder against the Go reader; browser-hint-2048.xorf pins
+// the sized form.
+// ---------------------------------------------------------------------------
+
+const HINT_KIND_INTEROP = 3;
+const HINT_MIN_BITS = 1024;
+const HINT_MAX_BITS = 4096;
+
+function bloomK(m, n) {
+  if (n <= 0) return 1;
+  return Math.min(24, Math.max(1, Math.round((m / n) * Math.LN2)));
+}
+
+// The same sizing as hintfilter.BloomBits at 1% — -n·ln(p)/ln2², rounded up to a
+// multiple of 64 — floored at 1024 and capped at 4096, which is what the daemon
+// accepts.
+function bloomBitsFor(n) {
+  const raw = Math.ceil(-n * Math.log(0.01) / (Math.LN2 * Math.LN2));
+  const bits = Math.ceil(raw / 64) * 64;
+  return Math.max(HINT_MIN_BITS, Math.min(HINT_MAX_BITS, bits));
+}
+
+// Kirsch-Mitzenmacher, in the same order Go does it: uint32 wrap first, then mod m.
+function bloomProbe(key, i, m) {
+  const h1 = Number(key & 0xffffffffn);
+  const h2 = Number((key >> 32n) & 0xffffffffn) | 1;
+  return ((h1 + Math.imul(i, h2)) >>> 0) % m;
+}
+
+function bloomAdd(bitmap, key, k, m) {
+  for (let i = 0; i < k; i++) {
+    const p = bloomProbe(key, i, m);
+    bitmap[p >>> 3] |= 0x80 >> (p & 7);
+  }
+}
+
+// buildHint returns { bytes, m, k, count } for a set of (chainId, address) pairs:
+// the whole .xorf, as internal/hintfilter/codec.go lays it out.
+async function buildHint(pairs) {
+  const sub = await H.interopSubkey(new Uint8Array(0));
+  const keys = [];
+  for (const p of pairs) keys.push(await H.interopKey(sub, p.chainId, p.address));
+  const uniq = [...new Set(keys.map(String))].map(BigInt);
+
+  const m = bloomBitsFor(uniq.length);
+  const k = bloomK(m, uniq.length);
+  const bitmap = new Uint8Array(m / 8);
+  for (const key of uniq) bloomAdd(bitmap, key, k, m);
+
+  const out = new Uint8Array(34 + 8 + 5 + bitmap.length);
+  const dv = new DataView(out.buffer);
+  out.set(new TextEncoder().encode('XORF'), 0);
+  out[4] = 1;
+  out[5] = 0;            // not blinded
+  out[6] = 3;            // StructureBloom
+  dv.setBigUint64(7, 0n);          // chainId 0: the chain is inside every preimage
+  out[15] = HINT_KIND_INTEROP;
+  dv.setBigInt64(16, -1n);         // epochId -1: nothing vouches for this
+  dv.setBigUint64(24, 0n);
+  dv.setUint16(32, 0);             // no descriptor
+  dv.setBigUint64(34, BigInt(uniq.length));
+  dv.setUint32(42, m);
+  out[46] = k;
+  out.set(bitmap, 47);
+  return { bytes: out, m, k, count: uniq.length };
+}
+
+const HINT_PREFIX = 'evmscan.hint.';
+const hintKey = (account) => `${HINT_PREFIX}${account.toLowerCase()}`;
+
+function storeHint(account, bytes) {
+  try { localStorage.setItem(hintKey(account), H.bytesToB64url(bytes)); } catch { /* private window, or full */ }
+}
+
+function loadHint(account) {
+  try {
+    const s = localStorage.getItem(hintKey(account));
+    if (!s) return null;
+    const bytes = H.b64urlToBytes(s);
+    const filter = H.decode(bytes.buffer);
+    if (filter.structure !== 3 || filter.kind !== HINT_KIND_INTEROP || filter.blinded) return null;
+    return { bytes, filter };
+  } catch { return null; }
+}
+
+// hintFor is the hint a sweep orders by: this browser's copy, else the daemon's —
+// the reader's signed one or the index-built one — but the daemon is asked only
+// when this page already did a hosted lookup for the address, so a private lookup
+// stays private. Null means an unordered sweep, which is not an error.
+export async function hintFor(account, hosted) {
+  let h = loadHint(account);
+  let source = 'this browser';
+  if (!h && hosted) {
+    try {
+      const res = await fetch(`/v1/accounts/${account}/hint`);
+      if (res.ok) {
+        const bytes = new Uint8Array(await res.arrayBuffer());
+        const filter = H.decode(bytes.buffer);
+        if (filter.structure === 3 && filter.kind === HINT_KIND_INTEROP && !filter.blinded) {
+          h = { bytes, filter };
+          source = res.headers.get('x-hint-source') === 'reader' ? 'your signed hint on this deployment' : 'the index';
+        }
+      }
+    } catch { /* an unordered sweep */ }
+  }
+  if (!h) return null;
+  const sub = await H.interopSubkey(new Uint8Array(0));
+  return {
+    ...h, sub, source, count: Number(h.filter.count),
+    async has(chainId, address) { return H.contains(h.filter, await H.interopKey(sub, chainId, address)); },
+  };
+}
+
+// afterSweep builds the hint from what the sweep confirmed, keeps it here, and
+// offers to keep it on the daemon under the reader's signature.
+export async function afterSweep(account, rows, { aside } = {}) {
+  const skip = new Set([...(aside || [])].map(a => String(a).toLowerCase()));
+  const seen = new Set();
+  const pairs = [];
+  for (const r of rows || []) {
+    if (!r.address || !r.chainId) continue;
+    const k = `${r.chainId}:${r.address.toLowerCase()}`;
+    if (skip.has(r.address.toLowerCase()) || seen.has(k)) continue;
+    seen.add(k);
+    pairs.push({ chainId: r.chainId, address: r.address });
+  }
+  const el = $('xchain-hint');
+  if (!el) return;
+  if (!pairs.length) { el.innerHTML = ''; return; }
+
+  let hint;
+  try {
+    hint = await buildHint(pairs);
+    storeHint(account, hint.bytes);
+  } catch (e) {
+    el.innerHTML = `<p class="hint">could not build the hint: ${H.esc(e.message || String(e))}</p>`;
+    return;
+  }
+  const chains = new Set(pairs.map(p => p.chainId)).size;
+  const wallet = (H.wallet && H.wallet()) || '';
+  const mine = wallet && wallet.toLowerCase() === account.toLowerCase();
+  el.innerHTML = `
+    <div class="unkept" style="margin-top:18px">
+      <div class="unkept-head">keep this as your hint</div>
+      <div class="unkept-body">
+        <p class="hint" style="margin:0; max-width:74ch; text-wrap:pretty">
+          ${H.esc(String(hint.count))} pair${hint.count === 1 ? '' : 's'} across ${H.esc(String(chains))} chain${chains === 1 ? '' : 's'},
+          as a ${H.esc(String(hint.bytes.length))}-byte bloom filter keyed by chain and contract. This browser kept it, and the next
+          sweep for this address asks about these pairs first — it drops nothing, it only goes first.
+        </p>
+        <div class="row" style="gap:10px; margin-top:12px; flex-wrap:wrap">
+          <button class="btn btn-primary btn-sm" id="hint-keep">Sign and keep it on this deployment</button>
+          <span class="hint" id="hint-keep-status"></span>
+        </div>
+        <p class="hint" style="margin:8px 0 0; max-width:74ch; text-wrap:pretty">
+          <strong>What this tells the deployment:</strong> your address, and a bloom of the chain-and-contract pairs you hold,
+          stored under your address and served to anyone as <code>evmscan.hint</code> on your account's ENS name and at
+          <code>/v1/accounts/${H.esc(account)}/hint</code>. Not blinded: anyone with a token list can test it. Signed by your
+          wallet (EIP-712, no gas, nothing sent); ${mine
+            ? 'the connected wallet is this account.'
+            : wallet ? `the connected wallet is ${H.esc(H.short(wallet))}, not this account, so it cannot sign for it.`
+            : 'the wallet that signs must be this account.'}
+        </p>
+      </div>
+    </div>`;
+  const btn = $('hint-keep');
+  btn.addEventListener('click', async () => {
+    const status = $('hint-keep-status');
+    btn.disabled = true;
+    try {
+      const r = await submitHint(account, hint.bytes, status);
+      status.innerHTML = `kept · ${H.esc(String(r.count))} pairs · ${H.esc(String(r.m))} bits · <a href="/v1/accounts/${H.esc(account)}/hint.json">served</a>`;
+      btn.textContent = 'kept';
+    } catch (e) {
+      status.textContent = e.message || String(e);
+      btn.disabled = false;
+    }
+  });
+}
+
+// submitHint signs the bytes' digest as EIP-712 Hint(account, digest, deadline)
+// under the domain {name: "evm-scan hint", version: "1"} — no chain, no contract,
+// because the bloom is cross-chain and nothing on chain verifies it — and posts it.
+// internal/api/hintsig.go builds the identical typed data to recover the signer.
+async function submitHint(account, bytes, status) {
+  if (!H.ensureWallet) throw new Error('this page has no wallet bridge');
+  const say = (t) => { if (status) status.textContent = t; };
+  say('connecting the wallet…');
+  const wallet = await H.ensureWallet();
+  if (String(wallet).toLowerCase() !== account.toLowerCase()) {
+    throw new Error(`the connected wallet is ${H.short(wallet)}; only ${H.short(account)} can sign for its own hint`);
+  }
+  const viem = await H.viem();
+  const digest = viem.keccak256(bytes);
+  const deadline = String(Math.floor(Date.now() / 1000) + 600);
+  const typed = {
+    types: {
+      EIP712Domain: [{ name: 'name', type: 'string' }, { name: 'version', type: 'string' }],
+      Hint: [{ name: 'account', type: 'address' }, { name: 'digest', type: 'bytes32' }, { name: 'deadline', type: 'uint256' }],
+    },
+    primaryType: 'Hint',
+    domain: { name: 'evm-scan hint', version: '1' },
+    message: { account, digest, deadline },
+  };
+  say('sign the hint in your wallet — no gas, nothing is sent from it…');
+  const signature = await H.signTypedData(typed);
+  say('keeping it…');
+  const res = await fetch(`/v1/accounts/${account}/hint`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ bytes: H.bytesToB64url(bytes), deadline, signature }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error ? `${body.error}${body.detail ? ': ' + body.detail : ''}` : `${res.status} ${res.statusText}`);
+  return body;
+}

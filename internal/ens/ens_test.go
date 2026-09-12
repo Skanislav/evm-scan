@@ -264,3 +264,32 @@ func (f *fakeNode) NonceAt(context.Context, common.Address) (uint64, error) {
 }
 func (f *fakeNode) Endpoint() chain.Endpoint { return chain.Endpoint{} }
 func (f *fakeNode) Close()                   {}
+
+func TestDNSDecodeIsTheInverseOfEncode(t *testing.T) {
+	for _, name := range []string{"base.on.eth", "abcdef0123456789abcdef0123456789abcdef01.hints.evm-scan.eth", "eth"} {
+		got, err := DNSDecode(DNSEncode(name))
+		if err != nil || got != name {
+			t.Errorf("DNSDecode(DNSEncode(%q)) = %q, %v", name, got, err)
+		}
+	}
+	for _, bad := range [][]byte{
+		{},                                      // no terminator
+		{3, 'a', 'b'},                           // truncated inside a label
+		{1, 'a', 0, 0},                          // trailing byte
+		append([]byte{64}, make([]byte, 64)...), // label over 63
+	} {
+		if _, err := DNSDecode(bad); err == nil {
+			t.Errorf("DNSDecode(%x) accepted a malformed name", bad)
+		}
+	}
+}
+
+func TestEncodeStringRoundTrip(t *testing.T) {
+	enc, err := EncodeString("0xabc,0xdef")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := DecodeString(enc); err != nil || got != "0xabc,0xdef" {
+		t.Fatalf("round trip = %q, %v", got, err)
+	}
+}
