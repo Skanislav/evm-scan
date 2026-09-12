@@ -85,10 +85,16 @@ shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module 
   an ERC-20 the publisher must approve (`Publisher.ensureBondAllowance`), `finalizeIndex`
   settles the assertion, and the arbiter is the zero address so `resolveChallenge` and
   `setGateways` revert forever. **Local-arbiter mode**: wei bonds, one key resolves
-  challenges and may edit the gateway list. In both modes bonds, window and pricing are
-  `immutable` constructor arguments with no setters, and the arbiter cannot be reassigned;
-  the constructor takes an `Economics` tuple plus the initial gateway list, packed with
-  `hintreg.ConstructorArgs`. Changing the rules means a new deployment.
+  challenges and may edit the gateway list. That key is the OpenZeppelin
+  `Ownable2Step` owner (`arbiter()` is a view over `owner()`, zero in oracle mode), so
+  a leaked arbiter is rotated with `transferOwnership` then `acceptOwnership` from the
+  new key — `evmscan-deploy -transfer-owner` / `-accept-owner` — rather than by
+  redeploying; the compile script pulls `@openzeppelin/contracts` (pinned in
+  `scripts/package.json`) into the standard input so verification stays complete. In
+  both modes bonds, window and pricing are `immutable` constructor arguments with no
+  setters; the constructor takes an `Economics` tuple plus the initial gateway list,
+  packed with `hintreg.ConstructorArgs`. Changing the rules means a new deployment;
+  changing the key does not.
   `registry_integration_test.go` (needs a dev node) covers the oracle path.
 - `HintRegistry.requestIndexing` is a paid registration whose surplus becomes the asset's
   funding (`getFunding`). An epoch commits a `coverageRoot` over per-asset

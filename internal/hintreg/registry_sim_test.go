@@ -545,3 +545,115 @@ func TestVoteCountsOnceAndLists(t *testing.T) {
 		t.Fatalf("hasVoted(b, second) = %v, %v", vals, err)
 	}
 }
+
+// TestArbiterRotatesInTwoSteps checks the Ownable2Step rotation: the pending key holds
+// nothing until it accepts, the old key loses setGateways the moment it does, and
+// arbiter() follows the owner so mode detection keeps working.
+func TestArbiterRotatesInTwoSteps(t *testing.T) {
+	ctx := context.Background()
+	s := newSim(t)
+
+	art, err := contracts.Load("HintRegistry")
+	if err != nil {
+		t.Fatal(err)
+	}
+	regABI, err := art.Parsed()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctor, err := regABI.Pack("", ConstructorArgs(common.Address{}, common.Address{}, s.from, Economics{
+		AssetBond: big.NewInt(0), PublisherBond: big.NewInt(1e15), ChallengeWindow: big.NewInt(5),
+		MinFunding: big.NewInt(0), RewardPerBlock: big.NewInt(1e12),
+	}, []string{"https://old/{sender}/{data}"})...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := s.sendTx(ctx, nil, nil, append(art.Creation(), ctor...))
+	if err != nil {
+		t.Fatalf("deploy: %v", err)
+	}
+	rcpt, err := s.client.TransactionReceipt(ctx, h)
+	if err != nil || rcpt.Status != types.ReceiptStatusSuccessful {
+		t.Fatalf("deploy receipt: %v", err)
+	}
+	registry := rcpt.ContractAddress
+	client, err := NewClient(s, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A second funded key, the next arbiter.
+	key2, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	from2 := crypto.PubkeyToAddress(key2.PublicKey)
+	s.mustSend(ctx, from2, big.NewInt(1e18), nil)
+	sendAs2 := func(data []byte) *types.Receipt {
+		t.Helper()
+		nonce, err := s.client.PendingNonceAt(ctx, from2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		gasPrice, err := s.client.SuggestGasPrice(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tx := types.MustSignNewTx(key2, types.LatestSignerForChainID(s.chainID), &types.LegacyTx{
+			Nonce: nonce, GasPrice: gasPrice, Gas: 300_000, To: &registry, Data: data,
+		})
+		if err := s.client.SendTransaction(ctx, tx); err != nil {
+			t.Fatal(err)
+		}
+		s.backend.Commit()
+		r, err := s.client.TransactionReceipt(ctx, tx.Hash())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	pack := func(method string, args ...any) []byte {
+		t.Helper()
+		data, err := regABI.Pack(method, args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+	arbiterIs := func(want common.Address) {
+		t.Helper()
+		vals, err := client.call(ctx, "arbiter")
+		if err != nil || vals[0].(common.Address) != want {
+			t.Fatalf("arbiter() = %v, %v; want %s", vals, err, want.Hex())
+		}
+	}
+
+	arbiterIs(s.from)
+
+	// Step one: the owner names the next key. Nothing has changed yet.
+	s.mustSend(ctx, registry, nil, pack("transferOwnership", from2))
+	arbiterIs(s.from)
+	if r := sendAs2(pack("setGateways", []string{"https://new/{sender}/{data}"})); r.Status == types.ReceiptStatusSuccessful {
+		t.Fatal("pending owner could setGateways before accepting")
+	}
+
+	// Step two: the next key accepts, and the old one is out.
+	if r := sendAs2(pack("acceptOwnership")); r.Status != types.ReceiptStatusSuccessful {
+		t.Fatal("acceptOwnership from the pending owner failed")
+	}
+	arbiterIs(from2)
+	if err := client.Simulate(ctx, s.from, "setGateways", []string{"https://old2/{sender}/{data}"}); err == nil {
+		t.Fatal("old owner can still setGateways after rotation")
+	}
+	if r := sendAs2(pack("setGateways", []string{"https://new/{sender}/{data}"})); r.Status != types.ReceiptStatusSuccessful {
+		t.Fatal("new owner cannot setGateways")
+	}
+	gws, err := client.Gateways(ctx)
+	if err != nil || len(gws) != 1 || gws[0] != "https://new/{sender}/{data}" {
+		t.Fatalf("gateways after rotation = %v, %v", gws, err)
+	}
+	mode, err := client.Mode(ctx)
+	if err != nil || mode.Arbiter != from2 {
+		t.Fatalf("Mode after rotation = %+v, %v", mode, err)
+	}
+}

@@ -206,6 +206,27 @@ The tool will print `local-arbiter (FALLBACK)`, and §6's "deploy again" does no
 apply: that is the mode the live Base registry already runs in, chosen on purpose
 (docs/TOKENOMICS.md §6.2), and the arbiter above is the live one.
 
+### 6c. Rotating the arbiter key
+
+Since the Ownable2Step change the arbiter is the registry's owner and a leaked key is
+rotated, not redeployed. Two transactions from two keys, and nothing changes until the
+second lands, so a mistyped address cannot orphan the registry:
+
+```bash
+# from the current owner
+./bin/evmscan-deploy -node https://<base rpc> -key 0x<current key> \
+  -registry 0x<registry> -transfer-owner 0x<new address>
+# from the new key
+./bin/evmscan-deploy -node https://<base rpc> -key 0x<new key> \
+  -registry 0x<registry> -accept-owner
+```
+
+`arbiter()` follows the owner, so `/v1/status` and the deploy tool's mode summary
+show the new key as soon as it accepts. The publisher key is a separate matter: it is
+whatever `EVMSCAN_PUBLISHER_KEY` holds and needs no on-chain step. The two registries
+deployed before this change (`0xE51e…1375`, `0xCDe4…98f2`) have an immutable arbiter
+and cannot be rotated; they are abandoned.
+
 Done on 2026-09-12: the registry with votes is
 `0xcde45355570e25b90e9aadf6cb1a999ee7f198f2` on Base, deploy tx
 `0x246795448ad651997076311cc37121fa71359bbe80cc0018dda0db3a1fb25096`, same economics

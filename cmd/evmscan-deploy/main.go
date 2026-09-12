@@ -71,6 +71,8 @@ type opts struct {
 	gateways            []string
 	votes               []string
 	voteChain           uint64
+	transferOwner       string
+	acceptOwner         bool
 }
 
 func main() {
@@ -99,6 +101,8 @@ func main() {
 	flag.Var(&funds, "fund", "fundAsset for a token on this chain as token:valueWei (repeatable)")
 	flag.Var(&votes, "vote", "vote for a token to be indexed (repeatable); the token lives on -vote-chain")
 	flag.Uint64Var(&o.voteChain, "vote-chain", 0, "chain id the -vote tokens live on (default: the node's chain)")
+	flag.StringVar(&o.transferOwner, "transfer-owner", "", "start rotating the arbiter of an existing registry to this address (Ownable2Step step one, sent by the current owner)")
+	flag.BoolVar(&o.acceptOwner, "accept-owner", false, "finish a rotation: acceptOwnership on an existing registry, sent by the pending owner")
 	flag.Var(&gateways, "gateway", "ERC-3668 gateway URL template for contractsOf, e.g. https://host/ccip/{sender}/{data}.json (repeatable; set at deployment, or replaces the list on an existing local-arbiter registry)")
 	flag.Parse()
 
@@ -107,7 +111,8 @@ func main() {
 	}
 	// Inspecting an existing registry only reads, so it does not need a key. Anything
 	// that sends a transaction does.
-	sends := o.registry == "" || len(requests) > 0 || len(funds) > 0 || len(gateways) > 0 || len(votes) > 0
+	sends := o.registry == "" || len(requests) > 0 || len(funds) > 0 || len(gateways) > 0 || len(votes) > 0 ||
+		o.transferOwner != "" || o.acceptOwner
 	if sends && o.key == "" {
 		log.Fatal("-key (or EVMSCAN_DEPLOYER_KEY) is required to deploy or send; " +
 			"pass only -node and -registry to inspect one")
@@ -225,6 +230,32 @@ func run(ctx context.Context, o opts) error {
 		}
 		registry = common.HexToAddress(o.registry)
 		fmt.Printf("registry   %s\n", registry.Hex())
+
+		// Rotation is two transactions from two keys, so the flags are separate: the
+		// current owner names the next, the next accepts. Nothing changes until the
+		// second lands, which is what makes a mistyped address harmless.
+		if o.transferOwner != "" {
+			if !common.IsHexAddress(o.transferOwner) {
+				return fmt.Errorf("bad -transfer-owner address %q", o.transferOwner)
+			}
+			data, err := regABI.Pack("transferOwnership", common.HexToAddress(o.transferOwner))
+			if err != nil {
+				return fmt.Errorf("pack transferOwnership: %w", err)
+			}
+			if err := send(ctx, sub, registry, nil, data, "transferOwnership "+o.transferOwner); err != nil {
+				return fmt.Errorf("%w (only the current owner may start a rotation)", err)
+			}
+			fmt.Printf("\npending: the new key must now run -accept-owner against this registry\n")
+		}
+		if o.acceptOwner {
+			data, err := regABI.Pack("acceptOwnership")
+			if err != nil {
+				return fmt.Errorf("pack acceptOwnership: %w", err)
+			}
+			if err := send(ctx, sub, registry, nil, data, "acceptOwnership"); err != nil {
+				return fmt.Errorf("%w (only the pending owner may accept)", err)
+			}
+		}
 
 		if len(o.gateways) > 0 {
 			data, err := regABI.Pack("setGateways", o.gateways)

@@ -26,6 +26,32 @@ const sources = {};
 for (const f of fs.readdirSync(SRC)) {
   if (f.endsWith('.sol')) sources[f] = { content: fs.readFileSync(path.join(SRC, f), 'utf8') };
 }
+
+// Library imports (@openzeppelin/...) are pulled into `sources` under their import
+// path rather than handed to solc through an import callback, so the standard input
+// written below is complete: an explorer verifies by recompiling exactly this
+// document, and a file solc fetched through a callback would be missing from it.
+const NODE_MODULES = path.join(process.env.SOLC_HOME || __dirname, 'node_modules');
+const importRe = /^\s*import\s+(?:[^'"]*from\s+)?["']([^"']+)["']/gm;
+const queue = Object.keys(sources);
+while (queue.length) {
+  const key = queue.shift();
+  for (const m of sources[key].content.matchAll(importRe)) {
+    let dep = m[1];
+    if (dep.startsWith('.')) {
+      // Relative to the importing file's own path, as solc resolves it.
+      dep = path.posix.normalize(path.posix.join(path.posix.dirname(key), dep));
+    }
+    if (sources[dep]) continue;
+    const onDisk = dep.startsWith('@') ? path.join(NODE_MODULES, dep) : path.join(SRC, dep);
+    if (!fs.existsSync(onDisk)) {
+      console.error(`${key} imports ${dep}, which is not in contracts/src or ${NODE_MODULES}`);
+      process.exit(1);
+    }
+    sources[dep] = { content: fs.readFileSync(onDisk, 'utf8') };
+    queue.push(dep);
+  }
+}
 if (Object.keys(sources).length === 0) {
   console.error(`no .sol files in ${SRC}`);
   process.exit(1);

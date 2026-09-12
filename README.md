@@ -307,10 +307,12 @@ permissionless write path, which is why the deploy tool says so in capitals.
 
 In both modes the economics are immutable: asset bond, publisher bond, challenge window,
 minimum funding and reward per block are constructor arguments with public getters and
-no setters, and the arbiter cannot be reassigned. A deployment's rules are therefore
-fully stated by its `RegistryConfigured` event, and changing them means deploying a new
-registry. The one knob a local arbiter keeps is `setGateways`, because gateways are hints
-the callback verifies, not rules.
+no setters. A deployment's rules are therefore fully stated by its `RegistryConfigured`
+event, and changing them means deploying a new registry. The arbiter key is the one
+thing that can change: it is an OpenZeppelin `Ownable2Step` owner, rotated by
+`transferOwnership` and an `acceptOwnership` from the new key, so a leaked key costs a
+rotation and not a redeploy. The one knob a local arbiter keeps is `setGateways`,
+because gateways are hints the callback verifies, not rules.
 
 **Sizing the bonds.** The publisher bond is what a wrong root costs its author, and the
 challenger has to match it, so it also prices how expensive it is to stall an honest

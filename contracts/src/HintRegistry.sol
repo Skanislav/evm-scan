@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {IERC20, IOptimisticOracleV3, IOptimisticOracleV3CallbackRecipient} from "./IOptimisticOracleV3.sol";
 
 /// @title HintRegistry
@@ -38,20 +40,24 @@ import {IERC20, IOptimisticOracleV3, IOptimisticOracleV3CallbackRecipient} from 
 ///  - **Oracle mode** (`oracle != address(0)`): `publishIndex` asserts the commitment to
 ///    UMA's Optimistic Oracle V3 with a bond in `bondCurrency`. Anyone disputes it
 ///    through the oracle, and UMA's DVM — not this contract — decides. There is no
-///    arbiter, no owner, and no admin setter that can be reached: `arbiter` is
-///    `address(0)`, so every `onlyLocalArbiter` entry point is permanently unreachable.
-///    Economics and the gateway list are therefore fixed at construction.
+///    arbiter and no admin setter that can be reached: `arbiter()` is `address(0)` and
+///    every `onlyLocalArbiter` entry point is permanently unreachable, whoever the
+///    Ownable owner is. Economics and the gateway list are therefore fixed at
+///    construction.
 ///
 ///  - **Local-arbiter mode** (`oracle == address(0)`): the pre-oracle fallback, for chains
-///    with no oracle deployment. An `arbiter` address settles challenges. This mode is a
+///    with no oracle deployment. The contract's owner (OpenZeppelin `Ownable2Step`) is
+///    the arbiter: it settles challenges and may edit the gateway list. This mode is a
 ///    concession to reality, not the design: a deployment in it is only as neutral as
 ///    that one key, which is why `evmscan-deploy` prints the mode it is deploying in.
 ///
 /// In both modes the bonds, the challenge window and the coverage pricing are immutable:
 /// they are stated once in the constructor and no key can change them afterwards. The
-/// arbiter cannot hand itself over either. The one thing a local arbiter may still edit
-/// is the gateway list, which is a hint clients verify, never a rule.
-contract HintRegistry is IOptimisticOracleV3CallbackRecipient {
+/// arbiter key itself can be rotated, in two steps — `transferOwnership` by the current
+/// owner, `acceptOwnership` by the next — so a leaked key is replaced rather than the
+/// whole registry, and a mistyped address cannot orphan it. Rotation changes who
+/// settles disputes, never what the rules are.
+contract HintRegistry is IOptimisticOracleV3CallbackRecipient, Ownable2Step {
     // --------------------------------------------------------------------
     // Types
     // --------------------------------------------------------------------
@@ -163,8 +169,6 @@ contract HintRegistry is IOptimisticOracleV3CallbackRecipient {
     /// @notice ERC-20 the oracle bonds are denominated in. Zero in local-arbiter mode.
     IERC20 public immutable bondCurrency;
 
-    /// @notice Settles challenges in local-arbiter mode. Always zero in oracle mode.
-    address public immutable arbiter;
     uint256 public immutable assetBond;
     /// @notice Bond a publisher posts per commitment: wei in local-arbiter mode, units of
     ///         `bondCurrency` in oracle mode.
@@ -288,12 +292,19 @@ contract HintRegistry is IOptimisticOracleV3CallbackRecipient {
     error Unsorted();
 
     /// @dev Guards the entry points that only exist in local-arbiter mode. In oracle mode
-    ///      `arbiter` is zero and `oracle` is not, so both branches are unreachable —
-    ///      there is no admin path at all.
+    ///      the first check fails for everyone, owner included, so there is no admin
+    ///      path at all; in local mode the owner is the arbiter.
     modifier onlyLocalArbiter() {
         if (address(oracle) != address(0)) revert OracleModeOnly();
-        if (msg.sender != arbiter) revert NotArbiter();
+        if (msg.sender != owner()) revert NotArbiter();
         _;
+    }
+
+    /// @notice Who settles challenges: the owner in local-arbiter mode, zero in oracle
+    ///         mode, where nobody does. Kept as a view under the old getter's name so
+    ///         clients that read the mode off it keep working.
+    function arbiter() public view returns (address) {
+        return address(oracle) == address(0) ? owner() : address(0);
     }
 
     modifier onlyOracle() {
@@ -304,7 +315,8 @@ contract HintRegistry is IOptimisticOracleV3CallbackRecipient {
     /// @param oracle_ UMA Optimistic Oracle V3, or `address(0)` to fall back to a local
     ///        arbiter on a chain with no oracle deployment.
     /// @param bondCurrency_ ERC-20 for oracle bonds. Must be zero in local-arbiter mode.
-    /// @param arbiter_ Local arbiter. Must be zero in oracle mode.
+    /// @param arbiter_ Local arbiter, the initial owner. Must be zero in oracle mode,
+    ///        where the deployer becomes an owner with nothing to own.
     /// @param econ_ Bonds, window and coverage pricing. See `Economics`.
     /// @param gateways_ Initial ERC-3668 gateway templates for `contractsOf`. In oracle
     ///        mode this list is final, because no setter is reachable.
@@ -314,7 +326,7 @@ contract HintRegistry is IOptimisticOracleV3CallbackRecipient {
         address arbiter_,
         Economics memory econ_,
         string[] memory gateways_
-    ) {
+    ) Ownable(arbiter_ == address(0) ? msg.sender : arbiter_) {
         if (econ_.challengeWindow == 0 || econ_.challengeWindow > type(uint64).max) revert BadConfig();
 
         if (oracle_ != address(0)) {
@@ -330,7 +342,6 @@ contract HintRegistry is IOptimisticOracleV3CallbackRecipient {
 
         oracle = IOptimisticOracleV3(oracle_);
         bondCurrency = IERC20(bondCurrency_);
-        arbiter = arbiter_;
         assetBond = econ_.assetBond;
         publisherBond = econ_.publisherBond;
         challengeWindow = econ_.challengeWindow;
@@ -915,9 +926,10 @@ contract HintRegistry is IOptimisticOracleV3CallbackRecipient {
     // --------------------------------------------------------------------
     // Local-arbiter admin
     //
-    // Bonds, window and pricing are immutable and the arbiter cannot be reassigned, so
-    // this is the only entry point a key holds, and it reverts permanently in oracle
-    // mode. Gateways are discovery hints: whatever they return is verified by
+    // Bonds, window and pricing are immutable, so this and resolveChallenge are the only
+    // entry points a key holds, and both revert permanently in oracle mode. The key
+    // itself rotates through Ownable2Step (transferOwnership, then acceptOwnership from
+    // the new key). Gateways are discovery hints: whatever they return is verified by
     // `contractsOfCallback`, and an ERC-3668 client may ignore the list and bring its
     // own, so the worst a bad list can do is make a lookup fail.
     // --------------------------------------------------------------------

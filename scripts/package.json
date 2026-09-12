@@ -6,6 +6,7 @@
     "compile": "node compile.js"
   },
   "dependencies": {
+    "@openzeppelin/contracts": "5.4.0",
     "solc": "0.8.28"
   }
 }
