@@ -489,6 +489,19 @@
   .t-signals .judge { font: 400 10.5px/1.4 var(--mono); margin-top: 5px; color: var(--dark-ink-72); }
   .t-signals .judge.v-approved { color: var(--green); }
   .t-signals .judge.v-spam { color: oklch(0.85 0.1 80); }
+  .t-warn {
+    font: 400 10.5px/1.6 var(--mono); padding: 9px 11px; margin-bottom: 13px;
+    border-left: 2px solid currentColor; color: oklch(0.85 0.1 80);
+    background: oklch(0.85 0.1 80 / 0.07);
+  }
+  .t-warn.t-warn-odd { color: var(--dark-ink-82); background: none; border-left-color: var(--dark-line); }
+  .t-flag-odd { background: none; color: var(--dark-ink-82); box-shadow: inset 0 0 0 1px var(--dark-line); }
+  .t-warn b { font-weight: 500; }
+  .t-warn code { font-family: var(--mono); }
+  .t-warn .t-glyph {
+    display: inline-block; padding: 0 3px; border-radius: 2px;
+    background: oklch(0.85 0.1 80 / 0.16); min-width: 8px; text-align: center;
+  }
   .t-read {
     font: 400 11px/1.6 var(--mono); color: var(--dark-ink-82);
     border-left: 2px solid rgba(255,255,255,.2); padding-left: 11px; margin-bottom: 16px;
@@ -1111,9 +1124,11 @@
             <span id="card-symbol"></span>
             <span class="t-std" id="card-standard"></span>
             <span class="t-flag" id="card-flag" hidden></span>
+            <span class="t-flag" id="card-fake" hidden></span>
           </div>
           <div class="t-name" id="card-name"></div>
           <div class="addr t-addr" id="card-address"></div>
+          <div class="t-warn" id="card-warn" hidden></div>
           <div class="t-signals" id="card-signals"></div>
           <div class="t-read" id="card-note"></div>
           <div class="t-actions">
@@ -2303,8 +2318,12 @@ async function loadAssets() {
     const { assets = [] } = await api(onChain('/v1/assets'));
     showErr('assets-err', null);
     ASSETS = assets;
+    await annotateFromList();
     renderAssets();
     renderClaims();
+    // The reference set just changed, so anything judged against it is stale. Cheap and
+    // idempotent; renderTriage is a no-op when there is no card up.
+    renderTriage();
   } catch (e) {
     showErr('assets-err', new Error(`the asset list did not load (${e.message || e}); the wallet and the private lookup need it, and the next poll retries`));
   }
@@ -2567,6 +2586,9 @@ async function loadCandidates() {
     const r = await api(onChain('/v1/candidates?include_spam=true&limit=200'));
     CANDIDATES = r.candidates || [];
     THRESHOLDS = r.thresholds || THRESHOLDS;
+
+    await annotateFromList();
+
     renderQueue();
     renderTriage();
     if (WALLET_ADDR) renderHoldings();
@@ -2680,12 +2702,74 @@ function signalsFor(c) {
     ? ['long-lived', 'v-approved']
     : span > 50 ? ['young' , 'v-none'] : ['everything inside a handful of blocks', 'v-spam'];
 
-  return [
+  const out = [
     ['event volume', num(c.event_count) + ' events', ev[0], ev[1]],
     ['blocks seen', num(c.blocks_seen) + ' distinct blocks', blk[0], blk[1]],
     ['events per block', perBlock.toFixed(1), rate[0], rate[1]],
     ['block span', `${num(c.first_seen_block)} → ${num(c.last_seen_block)}`, life[0], life[1]],
   ];
+
+  // The first signal here that is not arithmetic over what discovery counted. Absent
+  // filter, absent signal: `unlisted` is undefined when no list was configured for this
+  // chain, and when the contract is not an ERC-20, and in both cases "nobody vouched"
+  // and "there was nobody to ask" are different answers. Not vouched is deliberately
+  // not a spam verdict — a token list is curated and therefore incomplete, and the
+  // long tail of real contracts lives outside every one of them.
+  if (c.unlisted !== undefined) {
+    out.push(c.unlisted
+      ? ['token list', 'not vouched', 'no list this deployment loaded carries it', 'v-none']
+      : ['token list', 'vouched for', 'a curated list carries it', 'v-approved']);
+  }
+  return out;
+}
+
+// The warning, above the numbers because it outranks them. An impersonation is not a
+// worse score on one axis — it is a reason the other four axes are describing somebody
+// else's reputation.
+//
+// The symbol is attacker-controlled text from the chain, so every path into this
+// markup goes through esc(), including the individual characters being named. That
+// matters more here than anywhere else on the page: this function exists precisely
+// because the string is hostile.
+function renderLookalike(c) {
+  const el = $('card-warn');
+  const chip = $('card-fake');
+  const hit = lookalikeOf(c);
+  if (!hit) { el.hidden = true; el.innerHTML = ''; chip.hidden = true; return; }
+
+  // The symbol above this is rendered as the chain gave it, which for an impersonation
+  // means the heading says USDT in the same pixels the real one would. The chip is the
+  // first thing on the card that disagrees, and it sits in the heading's own row for
+  // exactly that reason.
+  chip.hidden = false;
+  chip.className = hit.tier === 'impersonates' ? 't-flag' : 't-flag t-flag-odd';
+  chip.textContent = hit.tier === 'impersonates' ? `not ${hit.target}` : 'unusual symbol';
+
+  // Name the characters. An invisible one has nothing to show, so it is described
+  // rather than printed — a blank box where a glyph should be is the honest rendering
+  // of a code point that draws nothing.
+  const named = hit.odd.map(o => {
+    if (o.folded === '') return `<code>${esc(o.hex)}</code>, which draws nothing at all`;
+    const glyph = `<span class="t-glyph">${esc(o.ch)}</span>`;
+    return o.folded
+      ? `${glyph} <code>${esc(o.hex)}</code> standing in for <b>${esc(o.folded)}</b>`
+      : `${glyph} <code>${esc(o.hex)}</code>`;
+  }).join(' · ');
+
+  if (hit.tier === 'impersonates') {
+    el.className = 't-warn';
+    el.innerHTML = `<b>This is not ${esc(hit.target)}.</b> The symbol renders as
+      <code>${esc(hit.target)}</code> and is a different string: ${named}. A curated list carries
+      the real <code>${esc(hit.target)}</code>; it does not carry this contract. Every number below
+      belongs to this contract and none of it belongs to the name it is wearing.`;
+  } else {
+    el.className = 't-warn t-warn-odd';
+    el.innerHTML = `This symbol carries characters outside ASCII: ${named}. No list this deployment
+      loaded vouches for the contract, and nothing it resolves to (<code>${esc(hit.skeleton)}</code>)
+      matches a symbol one does — so this is worth a look rather than a verdict. A token named in
+      another script is perfectly ordinary.`;
+  }
+  el.hidden = false;
 }
 
 function renderTriage() {
@@ -2734,6 +2818,8 @@ function renderTriage() {
   const flag = $('card-flag');
   flag.hidden = !(perBlock > 50);
   if (!flag.hidden) flag.textContent = 'burst shaped';
+
+  renderLookalike(c);
 
   $('card-signals').innerHTML = signalsFor(c).map(([label, value, judge, cls]) => `
     <div>
@@ -3366,6 +3452,7 @@ window.evmscanHints = {
   filter: hintFilter, manifest: hints, decode: xorfDecode, tokenList,
   subkey: xorfSubkey, contains: xorfContains, pairKey, tokenKey,
   interopKey, interopSubkey, interop7930,
+  lookalike: lookalikeOf,
   requestIndexing, registry: () => REG, head: () => HEAD, indexedChain: () => INDEXED_CHAIN,
   weiToEth, ethToWei,
   namehash: async (name) => namehash(await import(VIEM_MODULE), normalizeName(name)),
@@ -3398,6 +3485,169 @@ async function markUnlisted(rows, chainId) {
     if (a.standard && a.standard !== 'erc20') continue;
     a.unlisted = !xorfContains(f, await tokenKey(sub, a.address));
   }
+}
+
+// ---------------------------------------------------------------------------
+// Symbols that are not what they render as
+//
+// Every signal on the triage card is arithmetic over what discovery counted, and
+// arithmetic cannot see this: a contract impersonating USDT has real volume across
+// real blocks, because impersonation only pays if people actually use it. Judged on
+// counters alone it reads as an ordinary, healthy, long-lived token — and on the
+// deployment this was written against, one already got promoted. `꒤5DT` at
+// 0xDd44…9A5F is an indexed asset today, which means it is on its way into a
+// committed root and will be answered for through the ENS resolver like any other.
+//
+// So this is the one judgement here that looks at the string rather than the
+// numbers. Everything the queue was carrying at the time, and how:
+//
+//	 ÚЅDТ     Cyrillic Ѕ (U+0405) and Т (U+0422), plus a combining acute on the U
+//	 US͏DT     a combining grapheme joiner (U+034F) hidden between the S and the D
+//	 USD￰T    U+FFF0, unassigned, rendering as tofu or as nothing at all
+//	 ꒤5DT     U+A4A4 YI RADICAL DDUR for the U, and a digit 5 for the S
+//
+// Note the third one especially: an unassigned code point may render as zero pixels,
+// so "USD￰T" and "USDT" can be the same picture. No amount of care reading the card
+// defends against that, which is why it has to be mechanical.
+//
+// The skeleton is built to collapse all four techniques onto the string they imitate.
+// Order matters: decompose first so an accent becomes a combining mark, then drop
+// everything that carries no glyph of its own, then fold the lookalikes, and only
+// then the digits — running digits earlier would rewrite the Cyrillic table's inputs.
+// ---------------------------------------------------------------------------
+
+// Deliberately a short, explicit table rather than a general confusables database.
+// Every entry is here because it appeared in a real queue or is the obvious neighbour
+// of one that did; a 6,000-line Unicode table shipped into this page would be a
+// dependency nobody reviews and a page weight nobody wants, and it would still be a
+// heuristic. The cost of a miss is a signal that stays quiet, not a wrong answer.
+const CONFUSABLE = {
+  // Cyrillic, the classic. Capitals first: these are the ones that pass unnoticed.
+  'А': 'A', 'В': 'B', 'Е': 'E', 'К': 'K', 'М': 'M', 'Н': 'H', 'О': 'O', 'Р': 'P',
+  'С': 'C', 'Т': 'T', 'Х': 'X', 'Ѕ': 'S', 'І': 'I', 'Ј': 'J', 'Ү': 'Y',
+  'а': 'a', 'е': 'e', 'о': 'o', 'р': 'p', 'с': 'c', 'х': 'x', 'ѕ': 's', 'і': 'i',
+  // Greek.
+  'Α': 'A', 'Β': 'B', 'Ε': 'E', 'Ζ': 'Z', 'Η': 'H', 'Ι': 'I', 'Κ': 'K', 'Μ': 'M',
+  'Ν': 'N', 'Ο': 'O', 'Ρ': 'P', 'Τ': 'T', 'Υ': 'Y', 'Χ': 'X',
+  // And the one nobody would predict, which is the argument for reading real queues
+  // rather than reasoning about which scripts an attacker might reach for.
+  '꒤': 'U', // U+A4A4 YI RADICAL DDUR
+};
+
+// Applied last, and only for this comparison. A digit standing in for a letter is not
+// a Unicode trick — "5" really is a five — so it is the weakest of the transforms and
+// the most likely to over-match. It earns its place because ꒤5DT used it, and it is
+// checked below against every symbol the token list vouches for: none of them collide
+// with another under it.
+const DIGIT_FOR_LETTER = { '5': 'S', '0': 'O', '1': 'I', '3': 'E', '8': 'B' };
+
+// Characters that occupy no glyph position of their own, or none that can be relied
+// on. Combining marks and format characters are folded away by NFKD or carry no
+// width; the Specials block at the end of the BMP is unassigned, and an unassigned
+// code point renders however the font feels like, including not at all.
+const isInvisible = (ch) => {
+  const cp = ch.codePointAt(0);
+  if (cp >= 0xfff0 && cp <= 0xffff) return true;         // Specials: unassigned
+  if (cp >= 0x0300 && cp <= 0x036f) return true;         // combining diacriticals
+  if (cp === 0x034f) return true;                        // combining grapheme joiner
+  if (cp === 0x200b || cp === 0x200c || cp === 0x200d) return true; // zero-width
+  if (cp === 0xfeff || cp === 0x00ad) return true;       // BOM, soft hyphen
+  if (cp >= 0x2060 && cp <= 0x206f) return true;         // invisible operators
+  return cp < 0x20;                                      // control characters
+};
+
+function symbolSkeleton(s) {
+  let out = '';
+  // NFKD so a precomposed Ú becomes U plus a combining acute, which the next step
+  // drops. Without it the accent is part of the character and survives.
+  for (const ch of (s || '').normalize('NFKD')) {
+    if (isInvisible(ch)) continue;
+    const folded = CONFUSABLE[ch] || ch;
+    out += DIGIT_FOR_LETTER[folded] || folded;
+  }
+  return out.toUpperCase();
+}
+
+// The characters worth naming on screen. An operator who is told "this is not USDT"
+// will reasonably ask which part is lying, and "U+0405 where the S is" is an answer
+// they can check against any Unicode table.
+function oddCharacters(s) {
+  const out = [];
+  for (const ch of (s || '')) {
+    const cp = ch.codePointAt(0);
+    if (cp < 0x80) continue;
+    const hex = 'U+' + cp.toString(16).toUpperCase().padStart(4, '0');
+    out.push({ ch, hex, folded: CONFUSABLE[ch] || (isInvisible(ch) ? '' : null) });
+  }
+  return out;
+}
+
+// Skeletons of the symbols a curated token list vouches for, which is what a lookalike
+// gets compared against.
+//
+// Built from list-vouched contracts only, and never from the indexed asset set, which
+// is the part that would have been wrong if it had been reasoned out instead of
+// checked: `꒤5DT` is *already promoted* on the deployment this was written against, so
+// an asset-derived reference set contains the impostor and would vouch for it. The
+// list is the only source here that no operator mistake can contaminate.
+let REF_SKELETONS = new Map();
+
+function refreshLookalikeRefs() {
+  const next = new Map();
+  for (const row of ASSETS.concat(CANDIDATES)) {
+    // unlisted === false means a list was consulted and it carried this contract.
+    // undefined means there was no list to ask, which vouches for nothing.
+    if (row.unlisted !== false || !row.symbol) continue;
+    const sk = symbolSkeleton(row.symbol);
+    if (sk) next.set(sk, row.symbol);
+  }
+  REF_SKELETONS = next;
+}
+
+// Ask the token filter about both row sets, then rebuild the reference set.
+//
+// Called from loadAssets and from loadCandidates, because those are fired concurrently
+// on boot and on every poll and either may land first. Whichever lands second rebuilds
+// with the full picture; a set built from half an arrived page would be missing the
+// very symbols being impersonated, and it would fail as silence rather than as an
+// error. Both tests run against a file this browser already holds, so this costs no
+// request and tells the daemon nothing about what is being judged.
+async function annotateFromList() {
+  const chainId = activeChainID();
+  try {
+    await Promise.all([
+      markUnlisted(CANDIDATES, chainId),
+      markUnlisted(ASSETS, chainId),
+    ]);
+  } catch { /* no list for this chain; every row keeps unlisted === undefined */ }
+  refreshLookalikeRefs();
+}
+
+// What this symbol is pretending to be, if anything.
+//
+// Two tiers, because the evidence differs and flattening them would make the strong
+// case less believable:
+//
+//   impersonates — non-ASCII *and* it collapses onto a symbol the list vouches for.
+//     This is as close to a fact as anything on this card gets: the string is not the
+//     string it renders as, and the string it renders as belongs to somebody else.
+//   odd          — non-ASCII with no collision. A token with a Chinese or Cyrillic
+//     name is perfectly legitimate, and none of the 120 list-vouched contracts in the
+//     live queue carried a non-ASCII symbol — strong, but not a law, so this only
+//     ever says "look at this", never "this is a fake".
+//
+// A contract the list vouches for is never flagged. That is the whole point of having
+// asked the list: it annotates, and here what it annotates is "not an impostor".
+function lookalikeOf(row) {
+  const sym = row && row.symbol;
+  if (!sym || row.unlisted === false) return null;
+  const odd = oddCharacters(sym);
+  if (!odd.length) return null;
+  const sk = symbolSkeleton(sym);
+  const target = REF_SKELETONS.get(sk);
+  // Never against itself: a symbol that is its own skeleton is not imitating anything.
+  if (target && target !== sym) return { tier: 'impersonates', target, odd, skeleton: sk };
+  return { tier: 'odd', target: null, odd, skeleton: sk };
 }
 
 // ---------------------------------------------------------------------------
@@ -4479,6 +4729,30 @@ function renderHintUse() {
   el.hidden = false;
 }
 
+// The same check the triage card runs, on the reader's own rows.
+//
+// It belongs here more than it belongs there. An operator seeing ꒤5DT in a queue is
+// deciding whether to index it; a reader seeing it in their holdings already owns it,
+// already believes it is USDT, and is the person the imitation was built for. The
+// contract at 0xDd44…9A5F has tens of thousands of holders, every one of whom sees a
+// row that says USDT in the pixels their font draws.
+//
+// Only the strong tier is shown here. "Carries characters outside ASCII" is a useful
+// prompt for somebody judging a contract on purpose and it is noise in a list of
+// balances, where the reader is not making that decision and cannot act on it.
+function holdingFake(h) {
+  const hit = lookalikeOf(h);
+  return hit && hit.tier === 'impersonates' ? hit : null;
+}
+
+function holdingFakeTag(h) {
+  const hit = holdingFake(h);
+  const chars = hit.odd.map(o => o.folded === ''
+    ? `${o.hex}, which draws nothing`
+    : o.folded ? `${o.hex} standing in for ${o.folded}` : o.hex).join(', ');
+  return ` <span class="tag tag-flag" title="This contract is not ${esc(hit.target)}. Its symbol renders as ${esc(hit.target)} and is a different string: ${esc(chars)}. A curated token list carries the real ${esc(hit.target)} and does not carry this address. The balance is real; the name is borrowed.">not ${esc(hit.target)}</span>`;
+}
+
 function renderHoldings() {
   if (!WALLET_ADDR) return;
   const rows = HOLDINGS.map(h => ({ ...h, verdict: verdictOf(h.address) }));
@@ -4518,7 +4792,7 @@ function renderHoldings() {
       <div style="min-width:0">
         <div class="sym">${h.symbol ? esc(h.symbol) : '<span class="empty">unknown</span>'}${
           h.name ? ` <span class="nm">${esc(h.name)}</span>` : ''}<span class="std">${esc(stdLabel(h.standard))}</span>${
-          h.unlisted ? ' <span class="tag tag-flag" title="no token list this deployment loaded vouches for this contract. Checked in your browser, against a filter already downloaded — the daemon was not asked.">unlisted</span>' : ''}${
+          holdingFake(h) ? holdingFakeTag(h) : h.unlisted ? ' <span class="tag tag-flag" title="no token list this deployment loaded vouches for this contract. Checked in your browser, against a filter already downloaded — the daemon was not asked.">unlisted</span>' : ''}${
           h.event_count ? '' : ' <span class="tag" title="the index has no rows for this contract and account; the balance was read live at head">live read</span>'}${
           h.hinted && !h.aside ? ' <span class="tag" title="your hint already knew about this contract, so it was asked about first. The balance beside it was still read from the chain just now — the hint says where to look and never what is there.">in your hint</span>' : ''}${
           h.aside ? ' <span class="tag" title="you set this aside, in this browser. It stays out of your hint and it is still read from the chain on every lookup — setting aside decides what your hint spends itself on, not what exists.">set aside</span>' : ''}</div>
