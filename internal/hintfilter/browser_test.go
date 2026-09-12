@@ -227,3 +227,65 @@ func TestGoReadsBrowserSlot(t *testing.T) {
 		t.Errorf("saturation %.0f%%: a filter this full answers yes to nearly everything", 100*s)
 	}
 }
+
+// browserSweepPairs are a few of the 105 (chain, token) pairs the page's cross-chain
+// sweep confirmed for vitalik.eth on 2026-09-12 across mainnet, Base and Arbitrum,
+// when hints.js's buildHint produced testdata/browser-hint-sweep.xorf. The full set
+// is not recorded; these are enough to pin the builder's probe and header for the
+// sized, cross-chain form, and to prove the chain is inside the preimage.
+var browserSweepPairs = []struct {
+	chain uint64
+	token string
+}{
+	{1, "0x111111111117dC0aa78b770fA6A738034120C302"},     // 1INCH, mainnet
+	{1, "0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9"},     // AAVE, mainnet
+	{42161, "0x912CE59144191C1204E64559FE8253a0e49E6548"}, // ARB, Arbitrum
+	{42161, "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"}, // USDC, Arbitrum
+	{42161, "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1"}, // WETH, Arbitrum
+	{42161, "0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1"}, // DAI, Arbitrum
+	{42161, "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9"}, // USDT, Arbitrum
+}
+
+// TestGoReadsBrowserSweepHint pins the cross-chain hint the page builds after a
+// sweep: the same builder as the slot hint, sized by count and carrying pairs from
+// three chains. The Go reader must find every recorded pair, and must not find an
+// Arbitrum pair when asked about it as a Base one.
+func TestGoReadsBrowserSweepHint(t *testing.T) {
+	raw, err := os.ReadFile("testdata/browser-hint-sweep.xorf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := Decode(raw)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if f.Structure != StructureBloom || f.Kind != KindInterop || f.ChainID != 0 || f.Blinded {
+		t.Fatalf("header = %+v", f.Meta)
+	}
+	if f.Count() != 105 {
+		t.Fatalf("count = %d, want 105", f.Count())
+	}
+	m, _ := f.BloomParams()
+	if want := BloomBits(105, 0.01); m != HintBits || want > HintBits {
+		t.Fatalf("m = %d; the page sizes 105 pairs at 1%% to %d, floored at %d", m, want, HintBits)
+	}
+	sub := InteropSubkey(PublicSecret)
+	for _, p := range browserSweepPairs {
+		if !f.Contains(InteropKey(sub, p.chain, common.HexToAddress(p.token))) {
+			t.Errorf("FALSE NEGATIVE: %s on chain %d is missing — the browser's builder and this reader disagree", p.token, p.chain)
+		}
+	}
+	// The chain is in the preimage: the Arbitrum pairs, keyed for Base, must mostly miss.
+	hits := 0
+	for _, p := range browserSweepPairs[2:] {
+		if f.Contains(InteropKey(sub, 8453, common.HexToAddress(p.token))) {
+			hits++
+		}
+	}
+	if hits > 2 {
+		t.Fatalf("%d of 5 Arbitrum pairs hit when keyed for Base; the chain is not in the preimage", hits)
+	}
+	if sat := f.Saturation(); sat > 0.9 {
+		t.Fatalf("saturation %.2f", sat)
+	}
+}
