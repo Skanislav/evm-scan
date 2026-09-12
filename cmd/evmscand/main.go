@@ -167,6 +167,7 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 	var (
 		regClient *hintreg.Client
 		publisher *hintreg.Publisher
+		relay     hintreg.Submitter
 		mirror    *hintreg.Mirror
 	)
 
@@ -223,6 +224,7 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 			if err != nil {
 				return err
 			}
+			relay = sub
 			publisher = hintreg.NewPublisher(regClient, sub, st, log)
 			publisher.StaleAfter = cfg.Registry.Publisher.StaleAfter.D()
 			if raw := cfg.Registry.Publisher.MinExpectedReward; raw != "" {
@@ -252,6 +254,7 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 			Registry:          regClient,
 			RegistryChainID:   cfg.Registry.ChainID,
 			Publisher:         publisher,
+			Relay:             relay,
 			AllowRegistration: cfg.API.AllowRegistration,
 			AuthToken:         cfg.API.AuthToken,
 			Cost:              cfg.Cost,

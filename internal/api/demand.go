@@ -2,11 +2,15 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
+	"math/big"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 
+	"github.com/Skanislav/evm-scan/internal/hintreg"
 	"github.com/Skanislav/evm-scan/internal/store"
 )
 
@@ -137,5 +141,205 @@ func (s *Server) listDemand(w http.ResponseWriter, r *http.Request) {
 		"chain_id":   chainID,
 		"min_voters": minVoters,
 		"demand":     out,
+	})
+}
+
+// --------------------------------------------------------------------------
+// The relay: a vote the voter signed and somebody else pays to land.
+//
+// A reader who wants their vote on the registry rather than only in this
+// deployment's table needs gas on the registry's chain, which most wallets that
+// hold mainnet tokens do not have. So the page asks the wallet for an EIP-712
+// signature over Vote(voter, chainId, tokens, nonce, deadline) instead, and this
+// route carries it to HintRegistry.voteFor with the publisher's key. The contract
+// recovers the signer and counts the vote as theirs; the carrier is nobody.
+//
+// What the relay spends is gas, so it is stingy in three ways: at most
+// relayMaxTokens per vote, one relayed transaction per voter per relayWindow, and a
+// simulation before every send so a bad signature or an expired deadline costs a
+// call and not a transaction. It refuses a vote that would count nothing new,
+// because the contract still spends the nonce and the gas on those.
+// --------------------------------------------------------------------------
+
+const (
+	relayMaxTokens = 20
+	relayWindow    = 10 * time.Minute
+)
+
+var relayLast = struct {
+	sync.Mutex
+	at map[common.Address]time.Time
+}{at: map[common.Address]time.Time{}}
+
+type relayRequest struct {
+	ChainID   uint64   `json:"chain_id"`
+	Voter     string   `json:"voter"`
+	Tokens    []string `json:"tokens"`
+	Nonce     string   `json:"nonce"`
+	Deadline  string   `json:"deadline"`
+	Signature string   `json:"signature"`
+}
+
+// relayInfo tells the page what to sign: the EIP-712 domain, the voter's next
+// nonce, and whether this deployment carries votes at all.
+func (s *Server) relayInfo(w http.ResponseWriter, r *http.Request) {
+	if s.d.Registry == nil {
+		writeErr(w, http.StatusNotFound, "no registry", nil)
+		return
+	}
+	out := map[string]any{
+		"available":      s.d.Relay != nil,
+		"max_tokens":     relayMaxTokens,
+		"window_seconds": int(relayWindow.Seconds()),
+		"domain": map[string]any{
+			"name": "HintRegistry", "version": "1",
+			"chainId": s.d.RegistryChainID, "verifyingContract": s.d.Registry.Address().Hex(),
+		},
+		"types": map[string]any{
+			"Vote": []map[string]string{
+				{"name": "voter", "type": "address"}, {"name": "chainId", "type": "uint64"},
+				{"name": "tokens", "type": "address[]"}, {"name": "nonce", "type": "uint256"},
+				{"name": "deadline", "type": "uint256"},
+			},
+		},
+	}
+	if v := r.URL.Query().Get("voter"); v != "" {
+		if !common.IsHexAddress(v) {
+			writeErr(w, http.StatusBadRequest, "voter must be an address", nil)
+			return
+		}
+		n, err := s.d.Registry.VoteNonce(r.Context(), common.HexToAddress(v))
+		if err != nil {
+			// A registry deployed before voteFor has no nonces(); that is "no relay",
+			// and the page sends the vote from the wallet instead.
+			out["available"] = false
+			out["reason"] = "this registry predates signed votes"
+		} else {
+			out["nonce"] = n.String()
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) relayVote(w http.ResponseWriter, r *http.Request) {
+	if s.d.Registry == nil || s.d.Relay == nil {
+		writeErr(w, http.StatusServiceUnavailable, "this deployment carries no votes; send the transaction from your own wallet", nil)
+		return
+	}
+	var req relayRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad body", err)
+		return
+	}
+	if !common.IsHexAddress(req.Voter) {
+		writeErr(w, http.StatusBadRequest, "voter must be an address", nil)
+		return
+	}
+	if len(req.Tokens) == 0 || len(req.Tokens) > relayMaxTokens {
+		writeErr(w, http.StatusBadRequest, fmt.Sprintf("a relayed vote names 1 to %d tokens", relayMaxTokens), nil)
+		return
+	}
+	if req.ChainID == 0 {
+		writeErr(w, http.StatusBadRequest, "chain_id is required", nil)
+		return
+	}
+	tokens := make([]common.Address, 0, len(req.Tokens))
+	for _, t := range req.Tokens {
+		if !common.IsHexAddress(t) {
+			writeErr(w, http.StatusBadRequest, "tokens must be addresses", nil)
+			return
+		}
+		tokens = append(tokens, common.HexToAddress(t))
+	}
+	nonce, ok := new(big.Int).SetString(req.Nonce, 10)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "nonce must be a decimal integer", nil)
+		return
+	}
+	deadline, ok := new(big.Int).SetString(req.Deadline, 10)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "deadline must be a decimal unix time", nil)
+		return
+	}
+	if deadline.Cmp(big.NewInt(time.Now().Unix())) < 0 {
+		writeErr(w, http.StatusBadRequest, "the signature has expired", nil)
+		return
+	}
+	sig := common.FromHex(req.Signature)
+	if len(sig) != 65 {
+		writeErr(w, http.StatusBadRequest, "signature must be 65 bytes", nil)
+		return
+	}
+	voter := common.HexToAddress(req.Voter)
+	ctx := r.Context()
+
+	// One transaction per voter per window, before anything is read or sent.
+	relayLast.Lock()
+	if last, seen := relayLast.at[voter]; seen && time.Since(last) < relayWindow {
+		relayLast.Unlock()
+		writeErr(w, http.StatusTooManyRequests, fmt.Sprintf("one relayed vote per %s per voter", relayWindow), nil)
+		return
+	}
+	relayLast.Unlock()
+
+	// The nonce the contract expects, and whether any token is new. The signature
+	// covers the whole list, so nothing can be dropped from it; a vote that would
+	// count nothing is refused instead of paid for.
+	want, err := s.d.Registry.VoteNonce(ctx, voter)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, "could not read the nonce", err)
+		return
+	}
+	if want.Cmp(nonce) != 0 {
+		writeErr(w, http.StatusConflict, fmt.Sprintf("nonce %s is not the voter's next (%s); sign again", nonce, want), nil)
+		return
+	}
+	fresh := 0
+	for _, t := range tokens {
+		voted, err := s.d.Registry.HasVoted(ctx, hintreg.AssetKey(req.ChainID, t), voter)
+		if err != nil {
+			writeErr(w, http.StatusBadGateway, "could not read the registry", err)
+			return
+		}
+		if !voted {
+			fresh++
+		}
+	}
+	if fresh == 0 {
+		writeErr(w, http.StatusConflict, "this voter already counts for every token named", nil)
+		return
+	}
+
+	// Simulate as the relay would send it: the contract recovers the signer, so a
+	// signature from anyone but the voter reverts here, for the price of a call.
+	if err := s.d.Registry.Simulate(ctx, s.d.Relay.Sender(), "voteFor", voter, req.ChainID, tokens, deadline, sig); err != nil {
+		writeErr(w, http.StatusBadRequest, "the registry rejected the signed vote", err)
+		return
+	}
+	data, err := s.d.Registry.ABI().Pack("voteFor", voter, req.ChainID, tokens, deadline, sig)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "pack failed", err)
+		return
+	}
+
+	relayLast.Lock()
+	relayLast.at[voter] = time.Now()
+	relayLast.Unlock()
+	tx, err := s.d.Relay.Submit(ctx, s.d.Registry.Address(), nil, data)
+	if err != nil {
+		relayLast.Lock()
+		delete(relayLast.at, voter)
+		relayLast.Unlock()
+		writeErr(w, http.StatusBadGateway, "could not send", err)
+		return
+	}
+	s.d.Log.Info("relayed a signed vote", "voter", voter.Hex(), "tokens", len(tokens), "new", fresh, "tx", tx.Hex())
+	writeJSON(w, http.StatusOK, map[string]any{
+		"tx":       tx.Hex(),
+		"voter":    voter.Hex(),
+		"tokens":   len(tokens),
+		"new":      fresh,
+		"registry": s.d.Registry.Address().Hex(),
+		"chain_id": s.d.RegistryChainID,
 	})
 }

@@ -31,6 +31,10 @@ func TestAuthorizedGuardsOnlySpendingEndpoints(t *testing.T) {
 		// token it would only ever be the operator voting.
 		{http.MethodPost, "/v1/demand"},
 		{http.MethodGet, "/v1/demand"},
+		// The relay carries a vote the signer already authorised; the signature is
+		// the credential, checked by the contract.
+		{http.MethodPost, "/v1/demand/relay"},
+		{http.MethodGet, "/v1/demand/relay"},
 	}
 	for _, r := range reads {
 		if !s.authorized(httptest.NewRequest(r.method, r.path, nil)) {

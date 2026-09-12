@@ -206,6 +206,15 @@ The tool will print `local-arbiter (FALLBACK)`, and §6's "deploy again" does no
 apply: that is the mode the live Base registry already runs in, chosen on purpose
 (docs/TOKENOMICS.md §6.2), and the arbiter above is the live one.
 
+### 6b′. Signed votes
+
+Since `voteFor` the registry accepts a vote signed by its voter and carried by
+anyone. The daemon carries them with the publisher key (`POST /v1/demand/relay`),
+so a reader needs no gas on Base. A registry deployed before `voteFor` makes the
+relay report `available: false` and the page sends `vote` from the wallet instead.
+Deploying the signed-vote registry is the same command as §6b with the current
+arbiter; the daemon must be redeployed with the matching artifacts afterwards.
+
 ### 6c. Rotating the arbiter key
 
 Since the Ownable2Step change the arbiter is the registry's owner and a leaked key is

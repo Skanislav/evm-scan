@@ -63,10 +63,15 @@ type Deps struct {
 	// ENSParent is the name a HintResolver serves the index under (docs/ENS.md).
 	// Set, it lets account responses carry the account's hint name; the daemon
 	// never resolves anything through it.
-	ENSParent         string
-	Registry          *hintreg.Client
-	RegistryChainID   uint64
-	Publisher         *hintreg.Publisher
+	ENSParent       string
+	Registry        *hintreg.Client
+	RegistryChainID uint64
+	Publisher       *hintreg.Publisher
+	// Relay carries signed votes to the registry and pays their gas. It is the
+	// publisher's own sender; nil when this deployment holds no key, in which case
+	// the relay route answers 503 and the page falls back to the wallet's own
+	// transaction.
+	Relay             hintreg.Submitter
 	AllowRegistration bool
 	// AuthToken, when set, is required as a bearer token on every endpoint that
 	// spends something. Empty leaves those endpoints open.
@@ -202,6 +207,8 @@ func New(d Deps) *Server {
 	// Demand: a public vote for what to index next. Open on purpose, see guarded().
 	s.mux.HandleFunc("GET /v1/demand", s.listDemand)
 	s.mux.HandleFunc("POST /v1/demand", s.recordDemand)
+	s.mux.HandleFunc("GET /v1/demand/relay", s.relayInfo)
+	s.mux.HandleFunc("POST /v1/demand/relay", s.relayVote)
 	s.mux.HandleFunc("GET /v1/candidates", s.listCandidates)
 	s.mux.HandleFunc("POST /v1/candidates/{address}/promote", s.promoteCandidate)
 	s.mux.HandleFunc("POST /v1/candidates/{address}/spam", s.markCandidateSpam)
@@ -274,7 +281,7 @@ func guarded(r *http.Request) bool {
 	case http.MethodGet, http.MethodHead, http.MethodOptions:
 		return false
 	}
-	return r.URL.Path != "/ccip" && r.URL.Path != "/v1/demand"
+	return r.URL.Path != "/ccip" && !strings.HasPrefix(r.URL.Path, "/v1/demand")
 }
 
 // authorized checks the bearer token on the endpoints that mutate. With no token

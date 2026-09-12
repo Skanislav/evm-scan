@@ -3,6 +3,9 @@ pragma solidity ^0.8.24;
 
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
+import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
+import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import {Nonces} from "@openzeppelin/contracts/utils/Nonces.sol";
 import {IERC20, IOptimisticOracleV3, IOptimisticOracleV3CallbackRecipient} from "./IOptimisticOracleV3.sol";
 
 /// @title HintRegistry
@@ -57,7 +60,7 @@ import {IERC20, IOptimisticOracleV3, IOptimisticOracleV3CallbackRecipient} from 
 /// owner, `acceptOwnership` by the next — so a leaked key is replaced rather than the
 /// whole registry, and a mistyped address cannot orphan it. Rotation changes who
 /// settles disputes, never what the rules are.
-contract HintRegistry is IOptimisticOracleV3CallbackRecipient, Ownable2Step {
+contract HintRegistry is IOptimisticOracleV3CallbackRecipient, Ownable2Step, EIP712, Nonces {
     // --------------------------------------------------------------------
     // Types
     // --------------------------------------------------------------------
@@ -262,6 +265,12 @@ contract HintRegistry is IOptimisticOracleV3CallbackRecipient, Ownable2Step {
     event GatewaysUpdated(string[] urls);
     event Voted(bytes32 indexed key, uint64 indexed chainId, address indexed token, address voter, uint64 voters);
 
+    /// @dev EIP-712 type of a vote somebody else carries to the chain.
+    bytes32 private constant VOTE_TYPEHASH =
+        keccak256("Vote(address voter,uint64 chainId,address[] tokens,uint256 nonce,uint256 deadline)");
+    error ExpiredSignature();
+    error BadSigner();
+
     // --------------------------------------------------------------------
     // Errors
     // --------------------------------------------------------------------
@@ -326,7 +335,7 @@ contract HintRegistry is IOptimisticOracleV3CallbackRecipient, Ownable2Step {
         address arbiter_,
         Economics memory econ_,
         string[] memory gateways_
-    ) Ownable(arbiter_ == address(0) ? msg.sender : arbiter_) {
+    ) Ownable(arbiter_ == address(0) ? msg.sender : arbiter_) EIP712("HintRegistry", "1") {
         if (econ_.challengeWindow == 0 || econ_.challengeWindow > type(uint64).max) revert BadConfig();
 
         if (oracle_ != address(0)) {
@@ -509,10 +518,36 @@ contract HintRegistry is IOptimisticOracleV3CallbackRecipient, Ownable2Step {
     ///         signal and never a verdict — a bad vote wastes an indexer's queue
     ///         slot, not a reader's trust.
     function vote(uint64 chainId, address[] calldata tokens) external {
+        _vote(msg.sender, chainId, tokens);
+    }
+
+    /// @notice The same vote, signed by `voter` and carried by whoever pays the gas.
+    ///         The signature is EIP-712 over `Vote(voter, chainId, tokens, nonce,
+    ///         deadline)` with this contract as the verifying contract; the nonce is
+    ///         `nonces(voter)` and is spent whether or not any token was new, so a
+    ///         signature is good for exactly one transaction. Nothing about the
+    ///         carrier matters: the vote is the voter's, counted once like any other.
+    function voteFor(
+        address voter,
+        uint64 chainId,
+        address[] calldata tokens,
+        uint256 deadline,
+        bytes calldata signature
+    ) external {
+        if (block.timestamp > deadline) revert ExpiredSignature();
+        uint256 nonce = _useNonce(voter);
+        bytes32 structHash = keccak256(
+            abi.encode(VOTE_TYPEHASH, voter, chainId, keccak256(abi.encodePacked(tokens)), nonce, deadline)
+        );
+        if (ECDSA.recover(_hashTypedDataV4(structHash), signature) != voter) revert BadSigner();
+        _vote(voter, chainId, tokens);
+    }
+
+    function _vote(address voter, uint64 chainId, address[] calldata tokens) private {
         for (uint256 i = 0; i < tokens.length; i++) {
             bytes32 key = assetKey(chainId, tokens[i]);
-            if (_voted[key][msg.sender]) continue;
-            _voted[key][msg.sender] = true;
+            if (_voted[key][voter]) continue;
+            _voted[key][voter] = true;
             Demand storage d = _demand[key];
             if (d.voters == 0) {
                 d.chainId = chainId;
@@ -520,7 +555,7 @@ contract HintRegistry is IOptimisticOracleV3CallbackRecipient, Ownable2Step {
                 _demandKeys.push(key);
             }
             d.voters += 1;
-            emit Voted(key, chainId, tokens[i], msg.sender, d.voters);
+            emit Voted(key, chainId, tokens[i], voter, d.voters);
         }
     }
 

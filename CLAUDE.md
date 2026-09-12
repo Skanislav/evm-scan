@@ -292,7 +292,19 @@ shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module 
 - A reader's act on their own wallet is a **vote, not a list**. The held contracts
   the index does not keep are voted for with `POST /v1/demand` (`vote` in
   `web/hints.js`), and the same counter lives on chain as `HintRegistry.vote`,
-  mirrored by `Mirror.syncDemand` into `asset_demand_onchain`. Demand is a priority
+  mirrored by `Mirror.syncDemand` into `asset_demand_onchain`. The on-chain vote
+  is **signed, not sent**: the wallet signs an EIP-712 `Vote(voter, chainId,
+  tokens, nonce, deadline)` and `POST /v1/demand/relay` carries it to
+  `HintRegistry.voteFor` with the publisher's sender (`Deps.Relay`), because a
+  wallet holding mainnet tokens rarely has gas on the registry's chain. The
+  contract recovers the signer and spends `nonces(voter)`, so the carrier is
+  nobody and a signature lands once; the relay simulates first, allows one
+  transaction per voter per ten minutes and at most twenty tokens, and refuses a
+  vote that would count nothing new. `GET /v1/demand/relay?voter=` hands the page
+  the domain, types and nonce, and reports `available: false` on a registry that
+  predates `voteFor`, where the page falls back to a plain `vote` transaction.
+  The same account voting through the API and on chain counts twice, since the
+  mirror sees only aggregates. Demand is a priority
   signal and nothing else: `PromotableCandidates` orders by it and, with
   `min_voters` above zero, promotes on it alone (`DemandedUnseen` reaches a voted
   contract discovery never counted, promoted with source `demand`); `spam_at` still

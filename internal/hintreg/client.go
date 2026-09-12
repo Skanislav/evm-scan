@@ -267,6 +267,20 @@ func (c *Client) ListDemand(ctx context.Context, pageSize uint64) ([]Demand, err
 	return out, nil
 }
 
+// VoteNonce is the next EIP-712 nonce a signed vote from `voter` must carry.
+func (c *Client) VoteNonce(ctx context.Context, voter common.Address) (*big.Int, error) {
+	return c.uintCall(ctx, "nonces", voter)
+}
+
+// HasVoted reports whether `voter` already counts for the asset under `key`.
+func (c *Client) HasVoted(ctx context.Context, key common.Hash, voter common.Address) (bool, error) {
+	vals, err := c.call(ctx, "hasVoted", key, voter)
+	if err != nil {
+		return false, err
+	}
+	return vals[0].(bool), nil
+}
+
 // AssetBond is the fee registerAsset requires.
 func (c *Client) AssetBond(ctx context.Context) (*big.Int, error) {
 	vals, err := c.call(ctx, "assetBond")

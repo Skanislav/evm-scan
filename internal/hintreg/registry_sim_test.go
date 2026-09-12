@@ -3,6 +3,7 @@ package hintreg
 import (
 	"context"
 	"crypto/ecdsa"
+	"fmt"
 	"log/slog"
 	"math/big"
 	"os"
@@ -11,9 +12,11 @@ import (
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/math"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient/simulated"
+	"github.com/ethereum/go-ethereum/signer/core/apitypes"
 
 	"github.com/Skanislav/evm-scan/contracts"
 	"github.com/Skanislav/evm-scan/internal/merkle"
@@ -655,5 +658,130 @@ func TestArbiterRotatesInTwoSteps(t *testing.T) {
 	mode, err := client.Mode(ctx)
 	if err != nil || mode.Arbiter != from2 {
 		t.Fatalf("Mode after rotation = %+v, %v", mode, err)
+	}
+}
+
+// TestVoteForCarriesASignedVote checks the relay path on the real contract: a key
+// with no gas signs an EIP-712 vote, a funded key carries it, and the vote counts as
+// the signer's — once, since the nonce is spent, and not after its deadline.
+func TestVoteForCarriesASignedVote(t *testing.T) {
+	ctx := context.Background()
+	s := newSim(t)
+
+	art, err := contracts.Load("HintRegistry")
+	if err != nil {
+		t.Fatal(err)
+	}
+	regABI, err := art.Parsed()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctor, err := regABI.Pack("", ConstructorArgs(common.Address{}, common.Address{}, s.from, Economics{
+		AssetBond: big.NewInt(0), PublisherBond: big.NewInt(1e15), ChallengeWindow: big.NewInt(5),
+		MinFunding: big.NewInt(0), RewardPerBlock: big.NewInt(1e12),
+	}, nil)...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := s.sendTx(ctx, nil, nil, append(art.Creation(), ctor...))
+	if err != nil {
+		t.Fatalf("deploy: %v", err)
+	}
+	rcpt, err := s.client.TransactionReceipt(ctx, h)
+	if err != nil || rcpt.Status != types.ReceiptStatusSuccessful {
+		t.Fatalf("deploy receipt: %v", err)
+	}
+	registry := rcpt.ContractAddress
+	client, err := NewClient(s, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The voter: a key that never holds a wei.
+	voterKey, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	voter := crypto.PubkeyToAddress(voterKey.PublicKey)
+	a := common.HexToAddress("0x00000000000000000000000000000000000000aa")
+	b := common.HexToAddress("0x00000000000000000000000000000000000000bb")
+
+	sign := func(chainID uint64, tokens []common.Address, nonce, deadline *big.Int) []byte {
+		t.Helper()
+		toks := make([]any, len(tokens))
+		for i, tk := range tokens {
+			toks[i] = tk.Hex()
+		}
+		td := apitypes.TypedData{
+			Types: apitypes.Types{
+				"EIP712Domain": {{Name: "name", Type: "string"}, {Name: "version", Type: "string"}, {Name: "chainId", Type: "uint256"}, {Name: "verifyingContract", Type: "address"}},
+				"Vote":         {{Name: "voter", Type: "address"}, {Name: "chainId", Type: "uint64"}, {Name: "tokens", Type: "address[]"}, {Name: "nonce", Type: "uint256"}, {Name: "deadline", Type: "uint256"}},
+			},
+			PrimaryType: "Vote",
+			Domain: apitypes.TypedDataDomain{
+				Name: "HintRegistry", Version: "1",
+				ChainId: (*math.HexOrDecimal256)(s.chainID), VerifyingContract: registry.Hex(),
+			},
+			Message: apitypes.TypedDataMessage{
+				"voter": voter.Hex(), "chainId": fmt.Sprint(chainID), "tokens": toks,
+				"nonce": nonce.String(), "deadline": deadline.String(),
+			},
+		}
+		digest, _, err := apitypes.TypedDataAndHash(td)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sig, err := crypto.Sign(digest, voterKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sig[64] += 27 // ECDSA.recover wants v in {27, 28}
+		return sig
+	}
+
+	nonce, err := client.VoteNonce(ctx, voter)
+	if err != nil || nonce.Sign() != 0 {
+		t.Fatalf("initial nonce = %v, %v", nonce, err)
+	}
+	deadline := big.NewInt(s.chainTime(ctx).Unix() + 600)
+	sig := sign(1, []common.Address{a, b}, nonce, deadline)
+
+	// Anyone but the voter can carry it; here the funded sim key does.
+	if err := client.Simulate(ctx, s.from, "voteFor", voter, uint64(1), []common.Address{a, b}, deadline, sig); err != nil {
+		t.Fatalf("simulate voteFor: %v", err)
+	}
+	data, err := regABI.Pack("voteFor", voter, uint64(1), []common.Address{a, b}, deadline, sig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := s.mustSend(ctx, registry, nil, data); len(r.Logs) != 2 {
+		t.Fatalf("voteFor emitted %d logs, want 2", len(r.Logs))
+	}
+	if ok, err := client.HasVoted(ctx, AssetKey(1, a), voter); err != nil || !ok {
+		t.Fatalf("hasVoted(a, voter) = %v, %v", ok, err)
+	}
+	if ok, err := client.HasVoted(ctx, AssetKey(1, a), s.from); err != nil || ok {
+		t.Fatalf("the carrier was counted as a voter")
+	}
+	got, err := client.ListDemand(ctx, 200)
+	if err != nil || len(got) != 2 || got[0].Voters != 1 {
+		t.Fatalf("ListDemand = %+v, %v", got, err)
+	}
+
+	// The nonce is spent: the same signature does not land twice.
+	if err := client.Simulate(ctx, s.from, "voteFor", voter, uint64(1), []common.Address{a, b}, deadline, sig); err == nil {
+		t.Fatal("a spent signature was accepted")
+	}
+	// A signature for the wrong voter is rejected.
+	nonce, _ = client.VoteNonce(ctx, voter)
+	sig2 := sign(1, []common.Address{a}, nonce, deadline)
+	if err := client.Simulate(ctx, s.from, "voteFor", s.from, uint64(1), []common.Address{a}, deadline, sig2); err == nil {
+		t.Fatal("a signature attributed to the wrong voter was accepted")
+	}
+	// An expired deadline is rejected.
+	past := big.NewInt(s.chainTime(ctx).Unix() - 1)
+	sig3 := sign(1, []common.Address{a}, nonce, past)
+	if err := client.Simulate(ctx, s.from, "voteFor", voter, uint64(1), []common.Address{a}, past, sig3); err == nil {
+		t.Fatal("an expired signature was accepted")
 	}
 }

@@ -912,13 +912,14 @@ function renderPreserve(account, holdings, indexed, commit) {
       </p>
       ${reg.address ? `
       <div class="row" style="gap:10px; margin-top:14px; flex-wrap:wrap">
-        <button class="btn btn-secondary btn-sm" id="vote-chain">Vote on chain ${H.esc(String(reg.chain_id ?? ''))}</button>
+        <button class="btn btn-secondary btn-sm" id="vote-chain">Sign a vote for the registry</button>
         <span class="hint" id="vote-chain-status"></span>
       </div>
       <p class="hint" style="margin:8px 0 0; max-width:74ch; text-wrap:pretty">
-        The same vote, on the registry itself — <code>HintRegistry.vote</code> from your wallet, one transaction,
-        gas only. Counted once per address by the contract and read by every indexer that mirrors the registry,
-        this one included, so it outlives this deployment. Your wallet address is on chain with it.
+        The same vote, on the registry itself. Your wallet signs it (EIP-712, no gas, nothing sent from it) and this
+        deployment carries it to <code>HintRegistry.voteFor</code> on chain ${H.esc(String(reg.chain_id ?? ''))} with its own
+        key. The contract recovers your signature, so the vote is yours and counts once — read by every indexer that
+        mirrors the registry, this one included, so it outlives this deployment. Your wallet address is on chain with it.
       </p>` : ''}
     </div>` : '';
 
@@ -992,10 +993,11 @@ function wireVote(account, commit, wanted) {
     onchain.addEventListener('click', async () => {
       const status = $('vote-chain-status');
       onchain.disabled = true;
-      status.textContent = 'confirm in your wallet…';
+      status.textContent = 'asking the registry for your nonce…';
       try {
-        const tx = await H.voteOnChain(commit.chainId, wanted);
-        status.innerHTML = `sent · <code>${H.esc(String(tx).slice(0, 12))}…</code> · the mirror picks it up within a minute of it mining`;
+        const r = await H.voteOnChain(commit.chainId, wanted, status);
+        status.innerHTML = `${r.relayed ? 'carried' : 'sent'} · <code>${H.esc(String(r.tx).slice(0, 12))}…</code>${
+          r.relayed ? ` · ${H.esc(String(r.fresh))} new` : ''} · the mirror picks it up within a minute of it mining`;
         onchain.textContent = 'voted on chain';
       } catch (e) {
         status.textContent = e.message || String(e);

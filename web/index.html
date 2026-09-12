@@ -2578,10 +2578,13 @@ async function requestIndexing(token, kind, from, value) {
   });
 }
 
-// voteOnChain is the registry's own counter: HintRegistry.vote(chainId, tokens) from
-// the reader's wallet on the registry's chain. Free apart from gas, one count per
-// address per asset, and read back by every indexer that mirrors the registry — the
-// daemon-side vote above is this deployment's; this one outlives it.
+// voteOnChain puts the vote on the registry itself, as the voter's own: the wallet
+// signs an EIP-712 Vote and the daemon carries it to HintRegistry.voteFor with its
+// key, paying the gas. The contract recovers the signer, so the carrier is nobody
+// and the vote counts once like any other. A wallet full of mainnet tokens rarely
+// has gas on the registry's chain, which is the whole reason for the detour; when
+// this deployment carries no votes the same call falls back to a plain vote(...)
+// transaction from the wallet.
 const VOTE_SELECTOR = '0x7c6afb33'; // vote(uint64,address[])
 function encodeVote(chainId, tokens) {
   const addrs = tokens.map(t => {
@@ -2591,13 +2594,42 @@ function encodeVote(chainId, tokens) {
   });
   return VOTE_SELECTOR + word(chainId) + word(64) + word(addrs.length) + addrs.join('');
 }
-async function voteOnChain(chainId, tokens) {
+async function voteOnChain(chainId, tokens, status) {
   if (!REG.address) throw new Error('this deployment names no registry');
   if (!WALLET) await ensureWallet();
-  return await window.ethereum.request({
-    method: 'eth_sendTransaction',
-    params: [{ from: WALLET, to: REG.address, data: encodeVote(chainId, tokens) }],
+  const say = (t) => { if (status) status.textContent = t; };
+
+  const info = await api(`/v1/demand/relay?voter=${WALLET}`).catch(() => null);
+  if (!info || !info.available) {
+    say('this deployment carries no votes — confirm the transaction in your wallet…');
+    const tx = await window.ethereum.request({
+      method: 'eth_sendTransaction',
+      params: [{ from: WALLET, to: REG.address, data: encodeVote(chainId, tokens) }],
+    });
+    return { tx, relayed: false };
+  }
+  if (tokens.length > info.max_tokens) throw new Error(`the relay carries at most ${info.max_tokens} tokens per vote`);
+
+  const deadline = String(Math.floor(Date.now() / 1000) + 600);
+  const typed = {
+    types: { EIP712Domain: [
+      { name: 'name', type: 'string' }, { name: 'version', type: 'string' },
+      { name: 'chainId', type: 'uint256' }, { name: 'verifyingContract', type: 'address' },
+    ], ...info.types },
+    primaryType: 'Vote',
+    domain: info.domain,
+    message: { voter: WALLET, chainId: String(chainId), tokens, nonce: info.nonce, deadline },
+  };
+  say('sign the vote in your wallet — no gas, nothing is sent from it…');
+  const signature = await window.ethereum.request({
+    method: 'eth_signTypedData_v4', params: [WALLET, JSON.stringify(typed)],
   });
+  say('carrying it to the registry…');
+  const r = await api('/v1/demand/relay', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ chain_id: chainId, voter: WALLET, tokens, nonce: info.nonce, deadline, signature }),
+  });
+  return { tx: r.tx, relayed: true, fresh: r.new };
 }
 
 // --------------------------------------------------------------------------
