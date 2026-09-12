@@ -882,7 +882,10 @@ function renderPreserve(account, holdings, indexed, commit) {
   if (!section || !body) return;
 
   const rows = unkept(holdings, indexed);
-  const kept = new Set((indexed || []).map(a => (a.address || '').toLowerCase()));
+  // What the index keeps for anyone, not just for this account: a contract that is
+  // an asset already has its backfill, and a vote for it would be a vote for
+  // nothing. `indexed` is this account's rows; the asset list is the deployment's.
+  const kept = new Set((indexed || []).concat(H.assets() || []).map(a => (a.address || '').toLowerCase()));
   const reg = H.registry() || {};
   section.hidden = false;
   $('preserve-count').textContent = rows.length ? ` · ${rows.length}` : '';
