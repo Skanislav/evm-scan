@@ -222,7 +222,7 @@ let PRIVATE_HITS = [];
 
 function renderResult(out, r) {
   const { account, resolved, assets, hits, manifest } = r;
-  PRIVATE_HITS = hits.map(a => ({ address: a.address, symbol: a.symbol || '', name: a.name || '', standard: a.standard }));
+  PRIVATE_HITS = hits.map(a => ({ address: a.address, symbol: a.symbol || '', name: a.name || '', standard: a.standard, unlisted: a.unlisted }));
   
   // How far behind head the answer is, and whether the digest is the chain's word or
   // the host's. A manifest an epoch names was fixed inside a bonded publishIndex; one
@@ -273,17 +273,29 @@ function renderResult(out, r) {
       what the account holds elsewhere.</p>`;
     return;
   }
-  rows.innerHTML = hits.map(a => `
+  // The same impersonation check the wallet table and the triage card run. This panel
+  // draws its own rows rather than going through renderHoldings, so without this the
+  // one reader who came here *because* they did not want to name their address is the
+  // one reader who is not told that the contract they hold is wearing somebody else's
+  // name. Only the strong tier: a list of balances is not where a reader adjudicates a
+  // symbol, it is where they need a contract they already own to stop lying to them.
+  rows.innerHTML = hits.map(a => {
+    const fake = H.lookalike ? H.lookalike(a) : null;
+    const impostor = fake && fake.tier === 'impersonates' ? fake : null;
+    return `
     <div class="tablerow cols-hold" data-addr="${H.esc(a.address)}"
          style="grid-template-columns: 2fr 1.4fr 1fr">
       <span>
         <strong>${H.esc(a.symbol || '—')}</strong>
-        <span class="hint" style="margin-left:8px">${H.esc(a.name || '')}</span>
+        <span class="hint" style="margin-left:8px">${H.esc(a.name || '')}</span>${impostor
+          ? ` <span class="tag tag-flag" title="This contract is not ${H.esc(impostor.target)}. Its symbol renders as ${H.esc(impostor.target)} and is a different string. A curated token list carries the real ${H.esc(impostor.target)} and does not carry this address.">not ${H.esc(impostor.target)}</span>`
+          : ''}
         <div class="addr">${H.esc(a.address)}</div>
       </span>
       <span class="num" data-balance>…</span>
       <span class="num"><span class="tag">in the index</span></span>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 
 // Confirm every hit against the chain.
