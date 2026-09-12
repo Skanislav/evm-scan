@@ -183,6 +183,51 @@ what you want; deploy again.
 Then set `EVMSCAN_REGISTRY_ADDRESS` on Railway to the printed address and redeploy the
 service.
 
+### 6b. Redeploying the live Base registry for votes
+
+The registry that has been live since 2026-09-10 (`0xE51eFF3d13Cc857a2aA1F6335592Fb2B80fA1375`
+on Base, local-arbiter mode) predates `vote`/`listDemand`. Nothing on a registry has
+setters, so on-chain demand means a new deployment with the same economics and the
+same gateway, read back off the live contract so nothing is retyped:
+
+```bash
+make build
+./bin/evmscan-deploy -node https://<base rpc> -key 0x<deployer key> \
+  -arbiter 0x9cC4B3F6f0da6a5DbBa587d15Df7332e290EeeFf \
+  -asset-bond 0 \
+  -publisher-bond 0 \
+  -challenge-window 3600 \
+  -min-funding 100000000000000 \
+  -reward-per-block 10000000000 \
+  -gateway 'https://evm-scan-production.up.railway.app/ccip/{sender}/{data}.json'
+```
+
+The tool will print `local-arbiter (FALLBACK)`, and §6's "deploy again" does not
+apply: that is the mode the live Base registry already runs in, chosen on purpose
+(docs/TOKENOMICS.md §6.2), and the arbiter above is the live one.
+
+Done on 2026-09-12: the registry with votes is
+`0xcde45355570e25b90e9aadf6cb1a999ee7f198f2` on Base, deploy tx
+`0x246795448ad651997076311cc37121fa71359bbe80cc0018dda0db3a1fb25096`, same economics
+and gateway as its predecessor. Reading the receipt back off `base-rpc.publicnode.com`
+lagged by minutes while `mainnet.base.org` had it at once; the tool's receipt wait
+timed out on the first and the deployment was fine, which is exactly the "do NOT
+deploy again" case the tool warns about.
+
+Then point `EVMSCAN_REGISTRY_ADDRESS` on Railway at the printed address and redeploy.
+Three things follow from a fresh registry and none of them is a fault:
+
+- It has no finalized epoch until the publisher posts one and the challenge window
+  passes, so `contractsOf`, the ENS record and `read.html` answer `NoFinalizedEpoch`
+  for at least an hour. Check the first epoch actually lands: `Build` refuses an
+  unchanged root, so the publisher posts only once the local table differs from what
+  the last registry saw.
+- Assets registered on the old registry (GHO, unfunded) keep their local rows with
+  `source: onchain`; the new registry does not list them and the mirror does not
+  revoke what it cannot see.
+- Until then the mirror logs once that the registry serves no demand and keeps
+  going; API votes work regardless.
+
 Approve the bond. The daemon does this itself on its first publish
 (`ensureBondAllowance` approves exactly one bond, never unlimited), but it needs the
 tokens to be there: send the publisher EOA at least one bond's worth of the bond

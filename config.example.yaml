@@ -97,6 +97,10 @@ chains:
       min_events: 100
       min_blocks: 25
       max_promotions_per_tick: 5
+      # Promote a contract once this many distinct accounts have voted for it
+      # (POST /v1/demand, or HintRegistry.vote), busy or not. 0 means votes only
+      # order the queue.
+      min_voters: 0
 
     # On-chain price discovery: Chainlink feeds and Uniswap pools, read through your
     # own node by a second deployless lens. No quote API is ever consulted.

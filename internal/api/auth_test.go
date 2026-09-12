@@ -26,6 +26,11 @@ func TestAuthorizedGuardsOnlySpendingEndpoints(t *testing.T) {
 		// of assertions is the thing keeping it reachable.
 		{http.MethodGet, "/ccip/0x0/0x0"},
 		{http.MethodPost, "/ccip"},
+		// A vote is the one write a reader makes. It buys nothing by itself —
+		// promotion is budgeted and gated by min_voters — and behind the operator's
+		// token it would only ever be the operator voting.
+		{http.MethodPost, "/v1/demand"},
+		{http.MethodGet, "/v1/demand"},
 	}
 	for _, r := range reads {
 		if !s.authorized(httptest.NewRequest(r.method, r.path, nil)) {

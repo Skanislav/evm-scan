@@ -66,6 +66,7 @@ func (sv *supervisor) startConfigChain(ctx context.Context, c config.Chain) erro
 			MinEvents:            c.Discovery.MinEvents,
 			MinBlocks:            c.Discovery.MinBlocks,
 			MaxPromotionsPerTick: c.Discovery.MaxPromotionsPerTick,
+			MinVoters:            c.Discovery.MinVoters,
 		},
 	}
 

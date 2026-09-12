@@ -437,3 +437,111 @@ func TestReRegisterAfterRevokeKeepsOneKey(t *testing.T) {
 		t.Fatalf("assetCount after register/revoke/register = %s, want 1", n)
 	}
 }
+
+// TestVoteCountsOnceAndLists checks the demand half of the registry: one address
+// counts once per asset however often it votes, a second address makes two, and
+// listDemand pages what the mirror reads.
+func TestVoteCountsOnceAndLists(t *testing.T) {
+	ctx := context.Background()
+	s := newSim(t)
+
+	art, err := contracts.Load("HintRegistry")
+	if err != nil {
+		t.Fatal(err)
+	}
+	regABI, err := art.Parsed()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctor, err := regABI.Pack("", ConstructorArgs(common.Address{}, common.Address{}, s.from, Economics{
+		AssetBond: big.NewInt(0), PublisherBond: big.NewInt(1e15), ChallengeWindow: big.NewInt(5),
+		MinFunding: big.NewInt(0), RewardPerBlock: big.NewInt(1e12),
+	}, nil)...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := s.sendTx(ctx, nil, nil, append(art.Creation(), ctor...))
+	if err != nil {
+		t.Fatalf("deploy: %v", err)
+	}
+	rcpt, err := s.client.TransactionReceipt(ctx, h)
+	if err != nil || rcpt.Status != types.ReceiptStatusSuccessful {
+		t.Fatalf("deploy receipt: %v", err)
+	}
+	registry := rcpt.ContractAddress
+
+	a := common.HexToAddress("0x00000000000000000000000000000000000000aa")
+	b := common.HexToAddress("0x00000000000000000000000000000000000000bb")
+	vote := func(tokens ...common.Address) []byte {
+		data, err := regABI.Pack("vote", uint64(1), tokens)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+
+	// First vote: two assets, two Voted logs.
+	if r := s.mustSend(ctx, registry, nil, vote(a, b)); len(r.Logs) != 2 {
+		t.Fatalf("first vote emitted %d logs, want 2", len(r.Logs))
+	}
+	// Same voter again: a no-op, no logs, counts unchanged.
+	if r := s.mustSend(ctx, registry, nil, vote(a, b)); len(r.Logs) != 0 {
+		t.Fatalf("repeat vote emitted %d logs, want 0", len(r.Logs))
+	}
+
+	client, err := NewClient(s, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := client.ListDemand(ctx, 1) // page size 1 exercises the paging
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Token != a || got[0].Voters != 1 || got[1].Token != b || got[1].Voters != 1 || got[0].ChainID != 1 {
+		t.Fatalf("ListDemand after one voter = %+v", got)
+	}
+
+	// A second, funded key votes for `a` only.
+	key2, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	from2 := crypto.PubkeyToAddress(key2.PublicKey)
+	s.mustSend(ctx, from2, big.NewInt(1e18), nil)
+	nonce, err := s.client.PendingNonceAt(ctx, from2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gasPrice, err := s.client.SuggestGasPrice(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx := types.MustSignNewTx(key2, types.LatestSignerForChainID(s.chainID), &types.LegacyTx{
+		Nonce: nonce, GasPrice: gasPrice, Gas: 200_000, To: &registry, Data: vote(a),
+	})
+	if err := s.client.SendTransaction(ctx, tx); err != nil {
+		t.Fatal(err)
+	}
+	s.backend.Commit()
+	if r, err := s.client.TransactionReceipt(ctx, tx.Hash()); err != nil || r.Status != types.ReceiptStatusSuccessful {
+		t.Fatalf("second voter's tx failed: %v", err)
+	}
+
+	got, err = client.ListDemand(ctx, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Voters != 2 || got[1].Voters != 1 {
+		t.Fatalf("ListDemand after two voters = %+v", got)
+	}
+
+	// hasVoted answers for both keys.
+	vals, err := client.call(ctx, "hasVoted", AssetKey(1, a), from2)
+	if err != nil || !vals[0].(bool) {
+		t.Fatalf("hasVoted(a, second) = %v, %v", vals, err)
+	}
+	vals, err = client.call(ctx, "hasVoted", AssetKey(1, b), from2)
+	if err != nil || vals[0].(bool) {
+		t.Fatalf("hasVoted(b, second) = %v, %v", vals, err)
+	}
+}

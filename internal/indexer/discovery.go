@@ -34,6 +34,12 @@ type DiscoveryOptions struct {
 	MinEvents            uint64
 	MinBlocks            uint64
 	MaxPromotionsPerTick int
+	// MinVoters lets demand alone promote: a contract this many distinct accounts
+	// have asked for is indexed whether or not it is busy, and whether or not
+	// AutoPromote is on. Zero, the default, means votes only order the queue. Each
+	// promotion spends a backfill, so on a metered node this should be above one —
+	// a single fresh address must not be able to buy a backfill for free.
+	MinVoters uint64
 }
 
 func (o DiscoveryOptions) withDefaults() DiscoveryOptions {
@@ -211,18 +217,41 @@ func (s *Service) indexedAddresses(ctx context.Context) (map[common.Address]bool
 
 func (s *Service) autoPromote(ctx context.Context) error {
 	d := s.opt.Discovery
-	if !d.AutoPromote {
+	if !d.AutoPromote && d.MinVoters == 0 {
 		return nil
 	}
 
-	cands, err := s.st.PromotableCandidates(ctx, s.chainID, d.MinEvents, d.MinBlocks, d.MaxPromotionsPerTick)
+	rule := store.PromotionRule{Activity: d.AutoPromote, MinEvents: d.MinEvents, MinBlocks: d.MinBlocks, MinVoters: d.MinVoters}
+	budget := d.MaxPromotionsPerTick
+	cands, err := s.st.PromotableCandidates(ctx, s.chainID, rule, budget)
 	if err != nil {
 		return err
 	}
 	for _, c := range cands {
 		reason := fmt.Sprintf("auto: %d events across %d blocks", c.EventCount, c.BlocksSeen)
+		if d.MinVoters > 0 && c.Voters >= d.MinVoters {
+			reason = fmt.Sprintf("demand: %d voters (%d events across %d blocks)", c.Voters, c.EventCount, c.BlocksSeen)
+		}
 		if err := s.Promote(ctx, c.Address, reason); err != nil {
 			s.log.Error("promotion failed", "asset", c.Address.Hex(), "err", err)
+		}
+		budget--
+	}
+
+	// Voted contracts discovery never counted. A wallet can hold a token that has
+	// not emitted inside the window, so demand is the only way it reaches here, and
+	// the same budget covers it: a tick promotes at most MaxPromotionsPerTick.
+	if d.MinVoters == 0 || budget <= 0 {
+		return nil
+	}
+	unseen, err := s.st.DemandedUnseen(ctx, s.chainID, d.MinVoters, budget)
+	if err != nil {
+		return err
+	}
+	for _, u := range unseen {
+		reason := fmt.Sprintf("demand: %d voters, never seen by discovery", u.Voters)
+		if err := s.promoteAs(ctx, u.Address, reason, store.SourceDemand); err != nil {
+			s.log.Error("promotion failed", "asset", u.Address.Hex(), "err", err)
 		}
 	}
 	return nil
@@ -234,6 +263,12 @@ func (s *Service) autoPromote(ctx context.Context) error {
 // per-account index and a backfill down to whatever history the node retains. Nothing
 // before this point costs more than a counter.
 func (s *Service) Promote(ctx context.Context, addr common.Address, reason string) error {
+	return s.promoteAs(ctx, addr, reason, store.SourceDiscovered)
+}
+
+// promoteAs is Promote with the asset's source spelled out: "discovered" for a
+// candidate the sweep counted, "demand" for one only votes brought here.
+func (s *Service) promoteAs(ctx context.Context, addr common.Address, reason, source string) error {
 	head, err := s.src.HeadBlock(ctx)
 	if err != nil {
 		return err
@@ -265,7 +300,7 @@ func (s *Service) Promote(ctx context.Context, addr common.Address, reason strin
 		Name:          meta.Name,
 		Decimals:      meta.Decimals,
 		HintFromBlock: floor,
-		Source:        store.SourceDiscovered,
+		Source:        source,
 		Promoted:      true,
 	}, head); err != nil {
 		return err
@@ -281,8 +316,9 @@ func (s *Service) Promote(ctx context.Context, addr common.Address, reason strin
 	return nil
 }
 
-// DiscoveryThresholds reports the activity levels at which a candidate qualifies for
-// promotion, so callers can show why something is or is not eligible.
-func (s *Service) DiscoveryThresholds() (minEvents, minBlocks uint64) {
-	return s.opt.Discovery.MinEvents, s.opt.Discovery.MinBlocks
+// DiscoveryThresholds reports the levels at which a candidate qualifies for
+// promotion — activity, or demand when minVoters is above zero — so callers can
+// show why something is or is not eligible.
+func (s *Service) DiscoveryThresholds() (minEvents, minBlocks, minVoters uint64) {
+	return s.opt.Discovery.MinEvents, s.opt.Discovery.MinBlocks, s.opt.Discovery.MinVoters
 }

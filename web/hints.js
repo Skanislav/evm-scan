@@ -31,6 +31,8 @@
 // page and a second copy here would be a second thing to keep byte-identical with
 // the Go writer in internal/hintfilter.
 
+import * as R from './ensrec.js';
+
 const H = window.evmscanHints;
 const $ = (id) => document.getElementById(id);
 const KIND_ACCOUNT_TOKEN = 2;
@@ -781,359 +783,86 @@ async function readBack(f, d) {
   }
 }
 
-
 // ---------------------------------------------------------------------------
 // What happens after a lookup
 //
-// Two things, and they answer the same question from opposite ends: a balance read
-// at head is true for one moment and belongs to nobody once the tab closes.
+// A balance read at head is true for one moment and belongs to nobody once the tab
+// closes. Three things outlive it, and they answer different questions:
 //
-//   - The set is remembered here, as a bloom, automatically. No file, no prompt. On
-//     the next visit it is the fast path: the contracts this account has actually
-//     held, asked about immediately, instead of walking a token list to rediscover
-//     them. It is deliberately NOT blinded. The balances are public on chain, so a
-//     hint that only saves someone the work they could already do leaks nothing —
-//     and a secret that has to be re-derived on every page load to read a cache is a
-//     secret that makes the cache slower than not having one. Blinding stays for the
-//     watchlist above, which is a set the reader chose rather than one the chain
-//     already shows.
+//   - The set of contracts this account holds is remembered here, automatically, as
+//     the same two records a commitment is made of. On the next visit it is asked
+//     about first instead of being rediscovered by whatever the index happens to
+//     hold. It is deliberately not secret: these balances are public on chain, so a
+//     note that saves someone work they could already do gives away nothing.
 //
-//   - The holdings the index does not keep get offered the on-chain action, which is
-//     the only thing here that outlives the browser: requestIndexing funds the asset,
-//     the publisher commits it to a root, and HintRegistry answers for it from then
-//     on — through the ENS resolver, to any client, with this daemon out of the path.
+//   - The held contracts the index does not keep can be voted for. A vote is a
+//     priority signal for what gets indexed next, counted once per account and
+//     stored blinded; the registry keeps the same counter on chain. Once a
+//     contract is indexed its rows are committed to a root, and read.html reads
+//     the account back from the registry's ENS name with this daemon out of the
+//     path.
+//
+//   - The holdings the index does not keep get offered the on-chain action:
+//     requestIndexing funds the asset, the publisher commits it to a root, and
+//     HintRegistry answers for it from then on, with this daemon out of the path.
+//
+// The list format lives in ensrec.js and nowhere else.
 // ---------------------------------------------------------------------------
 
-const KIND_INTEROP = 3;
-
-// A bloom sized for a wallet.
+// commitFor is the set this browser remembers and the vote offers: everything on
+// screen that the reader has not set aside. `aside` is the reader's own verdict,
+// stored per account in this browser, and honouring it here is what makes that
+// verdict mean anything — the memory is what the next lookup spends, so one rebuilt
+// from everything on screen would hand the reader their dust back every visit.
 //
-// The reader for this lives in index.html and the writer is here, which is the one
-// direction that is safe to implement twice: a builder that is wrong produces a file
-// whose own reader rejects it, loudly, rather than one that quietly answers no. The
-// probe has to match internal/hintfilter/bloom.go exactly all the same —
-// testdata/public-bloom-interop.xorf is what holds the three of them together, and
-// testdata/browser-slot-interop.xorf pins this direction.
-//
-// 1024 bits, matching hintfilter.HintBits. Not 256 — one storage slot is the obvious
-// size and the wrong one: measured, it is 9.1% false positives at fifty tokens and
-// 13.7% at sixty-five, where 128 bytes is 0.05% and 0.12%. The slot was never
-// actually cheaper in any way that matters, either; on Base the difference between
-// writing one word and four is a tenth of a cent.
-//
-// Only the bloom is built here. The fuse filter needs a peeling loop with retries and
-// a second implementation of that in a second language is a bad trade at this size;
-// a bloom is an OR.
-const HINT_BITS = 1024;
-
-function bloomK(m, n) {
-  if (n <= 0) return 1;
-  return Math.min(24, Math.max(1, Math.round((m / n) * Math.LN2)));
-}
-
-// Kirsch-Mitzenmacher, in the same order Go does it: uint32 wrap first, then mod m.
-function bloomProbe(key, i, m) {
-  const h1 = Number(key & 0xffffffffn);
-  const h2 = Number((key >> 32n) & 0xffffffffn) | 1;
-  return ((h1 + Math.imul(i, h2)) >>> 0) % m;
-}
-
-function bloomAdd(bitmap, key, k, m) {
-  for (let i = 0; i < k; i++) {
-    const p = bloomProbe(key, i, m);
-    bitmap[p >>> 3] |= 0x80 >> (p & 7);
-  }
-}
-
-// buildSlotHint returns { bytes, bitmap, k, hex } for a set of (chainId, token)
-// pairs. `bytes` is the whole .xorf; `hex` is the bare bitmap, which is what gets
-// published — whatever stores it already knows its own m and k.
-async function buildSlotHint(pairs) {
-  const sub = await H.interopSubkey(new Uint8Array(0));
-  const keys = [];
-  for (const p of pairs) keys.push(await H.interopKey(sub, p.chainId, p.address));
-  const uniq = [...new Set(keys.map(String))].map(BigInt);
-
-  const m = HINT_BITS;
-  const k = bloomK(m, uniq.length);
-  const bitmap = new Uint8Array(m / 8);
-  for (const key of uniq) bloomAdd(bitmap, key, k, m);
-
-  // The .xorf wrapper, matching internal/hintfilter/codec.go. chainId 0 because the
-  // chain is inside every preimage; epochId -1 because nothing vouches for this.
-  const out = new Uint8Array(34 + 8 + 5 + bitmap.length);
-  const dv = new DataView(out.buffer);
-  out.set(new TextEncoder().encode('XORF'), 0);
-  out[4] = 1;
-  out[5] = 0;            // not blinded
-  out[6] = 3;            // StructureBloom
-  dv.setBigUint64(7, 0n);
-  out[15] = KIND_INTEROP;
-  dv.setBigInt64(16, -1n);
-  dv.setBigUint64(24, 0n);
-  dv.setUint16(32, 0);   // no descriptor
-  dv.setBigUint64(34, BigInt(uniq.length));
-  dv.setUint32(42, m);
-  out[46] = k;
-  out.set(bitmap, 47);
-
-  const hex = '0x' + [...bitmap].map(b => b.toString(16).padStart(2, '0')).join('');
-  return { bytes: out, bitmap, k, m, hex, count: uniq.length };
+// ERC-1155 contracts are left out: the lens reads them per id, so a reader page that
+// found one in the list could not confirm the balance, and a row it cannot confirm is
+// a row it has to explain.
+function commitFor(holdings, chainId) {
+  const addrs = (holdings || [])
+    .filter(h => h.address && !h.aside && h.standard !== 'erc1155')
+    .map(h => h.address);
+  const text = R.formatContracts(addrs);
+  return { chainId, text, contracts: text ? text.split(',') : [] };
 }
 
 const CACHE_PREFIX = 'evmscan.seen.';
 const cacheKey = (account) => `${CACHE_PREFIX}${account.toLowerCase()}`;
 
-// Stored as the filter's own bytes, base64, so what sits in localStorage is the same
-// artifact that gets published. One representation, not two that can disagree.
-function storeSeen(account, bytes) {
+// Stored as the two records HintResolver serves, under their record keys, so the
+// memory and the registry's answer share one format (ensrec.js). One
+// representation, not two that can disagree.
+function storeSeen(account, commit) {
   try {
-    localStorage.setItem(cacheKey(account), H.bytesToB64url(bytes));
+    if (!commit.contracts.length) { localStorage.removeItem(cacheKey(account)); return; }
+    localStorage.setItem(cacheKey(account), JSON.stringify({
+      [R.KEY_CONTRACTS]: commit.text, [R.KEY_CHAIN]: String(commit.chainId),
+    }));
   } catch { /* private window, or full; a cache that cannot be written is not an error */ }
 }
 
+// Returns { chainId, contracts } or null. Anything that does not parse — including
+// the base64 filter an earlier version of this page stored under the same key — is
+// no cache, not a broken one.
 export function loadSeen(account) {
   try {
     const s = localStorage.getItem(cacheKey(account));
     if (!s) return null;
-    const bytes = H.b64urlToBytes(s);
-    return { bytes, filter: H.decode(bytes.buffer) };
+    const rec = JSON.parse(s);
+    const contracts = R.parseContracts(rec[R.KEY_CONTRACTS]);
+    const chainId = R.parseChain(rec[R.KEY_CHAIN]);
+    return contracts.length && chainId !== null ? { chainId, contracts } : null;
   } catch { return null; }
 }
 
-// ---------------------------------------------------------------------------
-// Spending one
-//
-// Everything above writes a hint. This is the half that reads one back, and without
-// it the rest is a write-only feature: a lookup rebuilt the bloom on every visit,
-// stored it, offered to publish it, and then started the next visit from nothing.
-//
-// Two places a hint comes from, and they are not the same thing:
-//
-//   - localStorage, written by afterLookup last visit. Free, instant, and gone with
-//     the browser profile.
-//   - an evmscan.hint text record on the name that was typed, one eth_call on
-//     mainnet. Costs a round trip and survives a new laptop, which is the entire
-//     reason anyone paid 244,000 gas to put it there.
-//
-// Only a name that was actually typed is read. Reverse-resolving a pasted address to
-// go looking for a record would spend a call to pick a name the reader did not
-// choose, and the name a reader types is the one they mean.
-//
-// What a hint is allowed to do is the part worth being exact about, because the
-// index filter got this wrong once and hid 64 of an account's 65 holdings:
-//
-//   - It ADDS contracts to the list of what gets asked about, from the enumerable
-//     token list this deployment already publishes. This is the part that makes the
-//     stored promise true — the contracts this account actually held, asked about
-//     immediately, rather than rediscovered by whatever the index happens to hold.
-//   - It ORDERS the candidates the index offered, so a wallet with more of them than
-//     the per-lookup cap spends that cap on contracts this account has held.
-//   - It REMOVES nothing, ever. A bloom miss means "not held when this was built",
-//     which is not a statement about now, and a hit is checked against the chain
-//     like every other row.
-// ---------------------------------------------------------------------------
-
-// A record under this key is written by the button above, but the key is public and
-// so is the format, so anything can write one. The failure mode is the quiet kind: a
-// blinded watchlist, or a token filter for one chain, decodes perfectly here and then
-// answers no to every question, which on screen is indistinguishable from a wallet
-// that holds nothing. Check the shape before believing it, and say which way it was
-// wrong — "that is a watchlist, not a holdings hint" is a fixable complaint.
-function hintFault(f) {
-  if (!f) return 'there is nothing under that key';
-  if (f.blinded) return 'its keys are blinded under a secret, so nothing here can test it';
-  if (f.kind !== KIND_INTEROP) return 'it is keyed for single-chain tokens, not for holdings';
-  if (f.structure !== 3) return 'it is not the bloom a holdings hint uses';
-  return null;
-}
-
-// seedFor gathers what this reader already knows about this account.
-//
-// Fail-open throughout. This sits on the critical path of every lookup, and a name
-// with no resolver, a dead RPC or a full localStorage must cost the reader a slower
-// answer and never the answer itself — every one of them lands as a note on screen
-// and an empty seed.
-export async function seedFor(account, name) {
-  const sources = [], notes = [];
-
-  const local = loadSeen(account);
-  if (local) {
-    const fault = hintFault(local.filter);
-    if (fault) notes.push(`the copy this browser kept is unusable: ${fault}`);
-    else sources.push({ where: 'this browser', filter: local.filter, count: Number(local.filter.count) });
-  }
-
-  if (name) {
-    try {
-      const rec = await readENSHint(name);
-      const fault = hintFault(rec && rec.filter);
-      if (fault) {
-        // Absent is not broken. A name with no record is the overwhelmingly common
-        // case and saying so every time would be noise.
-        if (rec) notes.push(`${H.normalizeName(name)} has an ${ENS_TEXT_KEY} record, but ${fault}`);
-      } else {
-        sources.push({ where: `${H.normalizeName(name)}'s ${ENS_TEXT_KEY} record`, filter: rec.filter, count: Number(rec.filter.count) });
-      }
-    } catch (e) {
-      const msg = String(e.message || e);
-      // A wildcard or offchain name answers text() by reverting OffchainLookup, which
-      // is a working name and not a broken one. Nothing here follows an ERC-3668
-      // gateway on a reader's behalf — that is a standing rule in this codebase, not
-      // an omission — so say which it is rather than reporting it as a failure.
-      notes.push(/OffchainLookup|0x556f1830/i.test(msg)
-        ? `${H.normalizeName(name)} answers its records through an offchain gateway, and nothing here follows one on your behalf — so its ${ENS_TEXT_KEY} record, if it has one, was not read`
-        : `could not read ${H.normalizeName(name)}'s ${ENS_TEXT_KEY} record: ${msg}`);
-    }
-  }
-
-  // The two are tested separately rather than merged. Two blooms sized for different
-  // numbers of keys have different k, and OR-ing their bitmaps produces a filter
-  // neither of them can read — so a hit in either is a hit, and the cost is one more
-  // pass over a 128-byte array.
-  const sub = sources.length ? await H.interopSubkey(new Uint8Array(0)) : null;
-  return {
-    sources, notes,
-    empty: sources.length === 0,
-    async has(chainId, address) {
-      if (!sources.length) return false;
-      const key = await H.interopKey(sub, chainId, address);
-      return sources.some(s => H.contains(s.filter, key));
-    },
-  };
-}
-
-// The token list this deployment publishes, in its enumerable form.
-//
-// A filter can be tested but never walked, which is what makes this pair necessary:
-// the .xorf answers questions and the .json supplies the questions. Both are static
-// and byte-identical for every visitor, so fetching them says nothing about who is
-// asking — the membership test runs here and the daemon is never told the account.
-//
-// A deployment with no token_lists configured serves a 404 here, which is not an
-// error: it means the hint can still order what the index offered, and has nothing
-// extra to name. Fail open to an empty list.
-let listCache = null;
-async function enumerableList(chainId) {
-  if (!listCache || listCache.chainId !== chainId) {
-    listCache = { chainId, p: (async () => {
-      const res = await fetch(`/v1/hints/tokens-${chainId}.json`);
-      if (!res.ok) return { tokens: [], name: '' };
-      const doc = await res.json();
-      return { tokens: doc.tokens || [], name: doc.name || '' };
-    })().catch(() => ({ tokens: [], name: '' })) };
-  }
-  return listCache.p;
-}
-
-// vouchedBy walks that list and keeps what the hint recognises.
-//
-// This is the read path for a filter, and it is also the dictionary attack on one —
-// they are the same walk, which is why blinding exists for the watchlist and
-// deliberately not for this. These balances are public on chain; a hint that saves
-// the reader work they could already do gives away nothing.
-//
-// Cost is one keccak per listed contract and no network at all. Measured against the
-// 5,862 contracts the mainnet deployment publishes: 208ms, and 207ms with viem hoisted
-// out of the loop so no key costs a dynamic import or an await — which is to say the
-// await was free and the keccak is the whole bill, so there is no optimisation here to
-// reach for. That is the same order as the eth_call it saves and it buys more than
-// symmetry: on the account this was measured against it recovered two real balances the
-// per-lookup cap had dropped.
-export async function vouchedBy(seed, chainId) {
-  if (!seed || seed.empty) return { tokens: [], scanned: 0, list: '', dense: false, noise: 0 };
-  const { tokens, name } = await enumerableList(chainId);
-
-  // A hint that is too full to be worth walking a list with.
-  //
-  // The bloom is a fixed 1024 bits, so its error rate is a function of how many
-  // contracts went in, and it does not degrade gently. Measured against the mainnet
-  // deployment's 5,862-contract list, with the sizing in buildSlotHint:
-  //
-  //	 holdings   k   false positives
-  //	       27  24     2   (0.03%)
-  //	       50  14     4   (0.07%)
-  //	       65  11    15   (0.26%)
-  //	      100   7    41   (0.70%)
-  //	      130   5   143   (2.44%)
-  //	      200   4   564   (9.62%)
-  //
-  // Every one of those is a balance read of a contract the account does not hold. At
-  // 27 that is two wasted slots in a batch and worth it for the two real holdings it
-  // recovered; at 200 it is 564, which is not a hint any more, it is a shuffle.
-  //
-  // So the walk is skipped when the noise it would produce exceeds the signal it could
-  // possibly produce — expected false positives over the list against the number of
-  // contracts in the hint, which is its hard ceiling on true ones. Both numbers come
-  // out of the file's own header, so this is arithmetic and not a threshold anybody
-  // has to keep tuned. It lands between 100 and 130 holdings, which is where the table
-  // says it should.
-  //
-  // This is a refusal to ADD, never a removal: skipping it leaves exactly the behaviour
-  // of not having a hint at all, and the ordering half above still runs.
-  const noise = seed.sources.reduce((n, src) => n + fpRate(src.filter) * tokens.length, 0);
-  const ceiling = seed.sources.reduce((n, src) => n + src.count, 0);
-  if (tokens.length && noise > ceiling) {
-    return { tokens: [], scanned: tokens.length, list: name, dense: true, noise: Math.round(noise) };
-  }
-
-  const out = [];
-  for (const t of tokens) if (await seed.has(chainId, t)) out.push(t);
-  return { tokens: out, scanned: tokens.length, list: name, dense: false, noise: Math.round(noise) };
-}
-
-// A bloom's false-positive rate, from the parameters it carries: (1 - e^(-kn/m))^k.
-// Every term is in the header, which is the reason the header carries m and k rather
-// than letting a reader re-derive them.
-function fpRate(f) {
-  if (f.structure !== 3 || !f.k || !f.m) return 0;
-  const n = Number(f.count);
-  return Math.pow(1 - Math.exp(-(f.k * n) / f.m), f.k);
-}
-
-// mark returns the lowercased subset of `addrs` the hint recognises.
-//
-// The caller sorts by it and then applies a cap, which is the one place a hint
-// decides what does *not* get asked about — and it decides it inside a budget that
-// already existed and was previously spent in discovery order. Nothing is dropped
-// that the cap would not have dropped anyway; what changes is which side of it the
-// contracts this account has actually held land on.
-export async function mark(seed, chainId, addrs) {
-  const hit = new Set();
-  if (!seed || seed.empty) return hit;
-  for (const a of addrs) if (await seed.has(chainId, a)) hit.add(a.toLowerCase());
-  return hit;
-}
-
 export async function afterLookup(account, holdings, indexed) {
-  const chainId = H.chainId();
-  // `aside` is the reader's own verdict on their own holdings, set in the table above
-  // and stored per account in this browser. Honouring it here is what makes that
-  // verdict mean anything: the hint is what the next lookup spends, so a hint rebuilt
-  // from everything on screen would hand the reader their dust back every visit and
-  // the triage would last exactly until they looked the account up again.
-  const pairs = (holdings || [])
-    .filter(h => h.address && !h.aside && (!h.standard || h.standard === 'erc20'))
-    .map(h => ({ chainId, address: h.address }));
-
-  // Rebuilt from scratch rather than merged. A filter cannot be enumerated, so the
-  // old one cannot be read back to add to it — and the holdings on screen are the
-  // better answer anyway. (Merging is possible for a bloom, by OR-ing; it is not
-  // done here because it would keep sold tokens forever, and this set is cheap to
-  // rebuild.)
-  let hint = null;
-  if (pairs.length) {
-    try {
-      hint = await buildSlotHint(pairs);
-      storeSeen(account, hint.bytes);
-    } catch { /* the cache is an optimisation; losing it costs a slower next visit */ }
-  }
-
-  renderPreserve(account, holdings, indexed, hint);
+  const commit = commitFor(holdings, H.chainId());
+  storeSeen(account, commit);
+  renderPreserve(account, holdings, indexed, commit);
 }
 
 // ---------------------------------------------------------------------------
-// The on-chain action
+// The on-chain actions
 // ---------------------------------------------------------------------------
 
 // Which of these does the index actually keep? `indexed` is what /v1/accounts
@@ -1147,46 +876,54 @@ function unkept(holdings, indexed) {
 
 const KIND_BY_STANDARD = { erc20: 20, erc721: 21, erc1155: 55 };
 
-function renderPreserve(account, holdings, indexed, hint) {
+function renderPreserve(account, holdings, indexed, commit) {
   const section = $('preserve');
   const body = $('preserve-body');
   if (!section || !body) return;
 
   const rows = unkept(holdings, indexed);
+  const kept = new Set((indexed || []).map(a => (a.address || '').toLowerCase()));
   const reg = H.registry() || {};
   section.hidden = false;
   $('preserve-count').textContent = rows.length ? ` · ${rows.length}` : '';
 
-  const hintLine = hint ? `
-    <p class="hint" style="margin:14px 0 0; max-width:74ch">
-      This browser now holds a ${H.esc(String(hint.m / 8))}-byte hint over the
-      ${H.esc(String(hint.count))} contract${hint.count === 1 ? '' : 's'} above, keyed by
-      <a href="https://eips.ethereum.org/EIPS/eip-7930">ERC-7930</a> so one filter covers every
-      chain. Next visit asks about these first instead of walking a token list.
-      It is not secret — these balances are public on chain, so a hint that saves someone work
-      they could already do gives away nothing.
-      <br><code style="word-break:break-all">${H.esc(abbrev(hint.hex))}</code>
-      <button class="linkbtn" id="preserve-copy">copy all ${H.esc(String(hint.m / 8))} bytes</button>
-    </p>
-    <div class="row" style="gap:10px; margin-top:10px; flex-wrap:wrap">
-      <input class="input" type="text" id="hint-name" style="flex:1 1 240px" spellcheck="false"
-             autocomplete="off" placeholder="your ENS name, to publish it there">
-      <button class="btn btn-secondary btn-sm" id="hint-publish">Publish to ENS</button>
-      <span class="hint" id="hint-status"></span>
-    </div>
-    <p class="hint" style="margin:8px 0 0; max-width:74ch">
-      Written as an <code>${H.esc(ENS_TEXT_KEY)}</code> text record on a name you own, on mainnet —
-      so any ENS client can read it and nothing here has to stay running for it to work. Measured
-      against a real resolver, that is about 244,000 gas: roughly $0.39 at the 0.6 gwei of the day
-      this was written, nearer $12 at a more ordinary 20. Occasional and deliberate; the copy in
-      this browser is the one that gets used every visit.
-    </p>` : '';
+  const n = commit.contracts.length;
+  const wanted = commit.contracts.filter(a => !kept.has(a));
+  const voteCard = wanted.length ? `
+    <div class="commit" id="vote">
+      <div class="unkept-head" style="margin-top:18px">ask for these to be indexed</div>
+      <p class="hint" style="margin:10px 0 0; max-width:74ch; text-wrap:pretty">
+        ${H.esc(String(wanted.length))} of the ${H.esc(String(n))} contract${n === 1 ? '' : 's'} above are held and not indexed,
+        and not set aside. One vote each, counted once per account. Votes order what gets promoted next and, once
+        enough accounts have asked for a contract, promote it on their own — a spam verdict still outranks them, and
+        nothing about a balance changes. Free: no wallet, no gas.
+      </p>
+      <div class="row" style="gap:10px; margin-top:12px; flex-wrap:wrap">
+        <button class="btn btn-primary btn-sm" id="vote-send">Vote for ${H.esc(String(wanted.length))}</button>
+        <span class="hint" id="vote-status"></span>
+      </div>
+      <p class="hint" style="margin:8px 0 0; max-width:74ch; text-wrap:pretty">
+        <strong>What this tells the deployment:</strong> your address and these ${H.esc(String(wanted.length))} contracts,
+        which a lookup by name already told it and a private lookup did not. The vote is hashed under a
+        per-deployment salt, so the daemon counts you once and holds no list of who holds what.
+      </p>
+      ${reg.address ? `
+      <div class="row" style="gap:10px; margin-top:14px; flex-wrap:wrap">
+        <button class="btn btn-secondary btn-sm" id="vote-chain">Vote on chain ${H.esc(String(reg.chain_id ?? ''))}</button>
+        <span class="hint" id="vote-chain-status"></span>
+      </div>
+      <p class="hint" style="margin:8px 0 0; max-width:74ch; text-wrap:pretty">
+        The same vote, on the registry itself — <code>HintRegistry.vote</code> from your wallet, one transaction,
+        gas only. Counted once per address by the contract and read by every indexer that mirrors the registry,
+        this one included, so it outlives this deployment. Your wallet address is on chain with it.
+      </p>` : ''}
+    </div>` : '';
 
   if (!rows.length) {
     body.innerHTML = `<p class="hint" style="max-width:74ch">Everything above is already an indexed
       asset, so it is committed to a root and served from the registry — this deployment could stop
-      running and the answer would still be there.</p>${hintLine}`;
-    wireCopy(hint);
+      running and the answer would still be there.</p>${voteCard}`;
+    wireVote(account, commit, wanted);
     return;
   }
 
@@ -1222,7 +959,7 @@ function renderPreserve(account, holdings, indexed, hint) {
       membership filter. A filter says where to look and is allowed to be wrong about one pair in 256; this decides
       whether to spend money, so it does not get to guess.${paid
         ? ' The deposit is not refundable and the transaction is yours, from your own wallet — the daemon only says where the registry on chain ' + H.esc(String(reg.chain_id ?? '—')) + ' is and what it costs. Paying puts a contract in the index; it does not put it at the top of anyone\'s list.'
-        : ''}</div>${hintLine}`;
+        : ''}</div>${voteCard}`;
 
   for (const btn of body.querySelectorAll('[data-keep]')) {
     btn.addEventListener('click', () => keep(btn, bondWei + fundWei).catch(e => {
@@ -1231,7 +968,7 @@ function renderPreserve(account, holdings, indexed, hint) {
       el.textContent = e.message || String(e);
     }));
   }
-  wireCopy(hint);
+  wireVote(account, commit, wanted);
 }
 
 const STD_LABEL = { erc20: 'ERC-20', erc721: 'ERC-721', erc1155: 'ERC-1155' };
@@ -1246,38 +983,41 @@ function whyUnkept(h) {
   return 'read live at head · no hint registered, not seen by discovery';
 }
 
-// 128 bytes is 258 hex characters, which is a wall rather than a value. Show enough
-// of each end to recognise it and to tell two apart; the button copies the whole
-// thing, which is the only form anyone actually uses.
-const abbrev = (hex) => hex.length <= 42 ? hex : `${hex.slice(0, 22)}…${hex.slice(-18)}`;
-
-function wireCopy(hint) {
-  const pub = $('hint-publish');
-  if (pub && hint) {
-    pub.addEventListener('click', async () => {
-      const status = $('hint-status');
-      const name = ($('hint-name').value || '').trim();
-      if (!name) { status.textContent = 'type the name first'; return; }
-      pub.disabled = true;
+function wireVote(account, commit, wanted) {
+  const onchain = $('vote-chain');
+  if (onchain && wanted.length) {
+    onchain.addEventListener('click', async () => {
+      const status = $('vote-chain-status');
+      onchain.disabled = true;
+      status.textContent = 'confirm in your wallet…';
       try {
-        const { tx } = await publishToENS(name, hint, status);
-        status.innerHTML = `published · <code>${H.esc(String(tx).slice(0, 12))}…</code>`;
+        const tx = await H.voteOnChain(commit.chainId, wanted);
+        status.innerHTML = `sent · <code>${H.esc(String(tx).slice(0, 12))}…</code> · the mirror picks it up within a minute of it mining`;
+        onchain.textContent = 'voted on chain';
       } catch (e) {
         status.textContent = e.message || String(e);
-      } finally {
-        pub.disabled = false;
+        onchain.disabled = false;
       }
     });
   }
-
-  const btn = $('preserve-copy');
-  if (!btn || !hint) return;
+  const btn = $('vote-send');
+  if (!btn || !wanted.length) return;
   btn.addEventListener('click', async () => {
+    const status = $('vote-status');
+    btn.disabled = true;
+    status.textContent = 'sending…';
     try {
-      await navigator.clipboard.writeText(hint.hex);
-      btn.textContent = 'copied';
-    } catch {
-      btn.textContent = 'could not copy — select it by hand';
+      const r = await vote(account, commit.chainId, wanted);
+      const counts = Object.values(r.voters || {});
+      const top = counts.length ? Math.max(...counts) : 0;
+      status.innerHTML = `recorded · ${H.esc(String(r.recorded))} new · the most-wanted of these now has
+        ${H.esc(String(top))} voter${top === 1 ? '' : 's'}${r.min_voters
+          ? ` · ${H.esc(String(r.min_voters))} promote it on this deployment`
+          : ' · this deployment promotes by hand, votes order its queue'}`;
+      btn.textContent = 'voted';
+    } catch (e) {
+      status.textContent = e.message || String(e);
+      btn.disabled = false;
     }
   });
 }
@@ -1310,152 +1050,93 @@ async function keep(btn, minWei) {
 
 
 // ---------------------------------------------------------------------------
-// Publishing the hint to ENS
+// Voting
 //
-// The hint is the one artifact here that belongs to the reader rather than to the
-// deployment, so it goes somewhere the reader owns: a text record on their own name.
-// No new contract, no registry entry, nothing for this project to keep running — any
-// ENS client can read it, and if this daemon disappears the hint does not.
+// A vote is the reader's one write, and it is deliberately small: a POST naming the
+// account and the contracts, no wallet, no gas. It is a priority signal for what the
+// daemon indexes next — the queue orders by it, and with min_voters set a contract
+// enough accounts asked for is promoted on its own. It changes nothing about what is
+// true: a spam verdict still drops a contract from the promotable set and every
+// balance is still read from the chain.
 //
-// What is written is the whole .xorf, base64url-encoded, not the bare bitmap. A
-// bitmap alone is unreadable: the probe count k depends on how many keys went in and
-// a reader has no way to recover it, so something has to carry it. The .xorf header
-// already does, and reusing it keeps one wire format with one pair of implementations
-// and one set of fixtures rather than a second encoding that can drift.
-//
-// base64url rather than hex because an ENS text record is a string, and the string is
-// what gets stored: 175 bytes is 352 hex characters against 234 base64url ones, and
-// measured against the real resolver that is 313,941 gas versus 244,199. Same bytes,
-// 22% less money.
-//
-// The costs, measured with eth_estimateGas against a real ENS resolver as the actual
-// owner of a name rather than derived from SSTORE arithmetic, which got it wrong by
-// more than a factor of two:
-//
-//	 payload                  base64  estimated gas
-//	  32 B                        43        104,369
-//	  64 B                        86        127,552
-//	 128 B bitmap alone          171        197,929
-//	 175 B whole .xorf           234        244,199
-//
-// So the self-describing header costs about 46,000 gas over a bare bitmap. At 0.62
-// gwei that is seven cents and at 20 gwei it is $2.40 — worth knowing, and worth
-// revisiting with a compact two-byte header if this ever gets used in anger.
-//
-// At 244,199 gas: $0.39 at today's 0.62 gwei, about $12.70 at a more ordinary 20.
-// That makes publishing an occasional, deliberate act rather than something to do on
-// every lookup — which is why it is a button, and why the localStorage copy is the
-// one that gets used every visit.
+// The list itself is never published anywhere. An earlier version wrote it to an ENS
+// text record, which cost about 31,000 gas per contract on mainnet and stored, per
+// wallet, what a counter per contract stores once for everyone. The registry keeps
+// that counter on chain (HintRegistry.vote); this is the daemon-side half.
 // ---------------------------------------------------------------------------
 
-// The record key, matching the evmscan.* convention HintResolver already uses for
-// evmscan.contracts and evmscan.uri.
-const ENS_TEXT_KEY = 'evmscan.hint';
-
-// The ENS registry, at the same address on every chain that has one.
-const ENS_REGISTRY = '0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e';
-const SEL_RESOLVER = '0x0178b8bf'; // resolver(bytes32)
-const SEL_OWNER = '0x02571be3';    // owner(bytes32)
-const SEL_SET_TEXT = '0x10f13a8c'; // setText(bytes32,string,string)
-
-const hex32 = (h) => h.replace(/^0x/, '').padStart(64, '0');
-
-// abi-encode setText(bytes32 node, string key, string value) by hand, the way every
-// other call site in this repo does. Two dynamic arguments is not a dependency's
-// worth of work, and viem is already loaded for keccak anyway.
-export function encodeSetText(node, key, value) {
-  const enc = new TextEncoder();
-  const parts = [enc.encode(key), enc.encode(value)];
-  // head: node, offset to key, offset to value
-  const headWords = 3;
-  let offset = headWords * 32;
-  let head = hex32(node);
-  const tails = [];
-  for (const b of parts) {
-    head += hex32(offset.toString(16));
-    const padded = new Uint8Array(Math.ceil(b.length / 32) * 32);
-    padded.set(b);
-    tails.push(hex32(b.length.toString(16)) + [...padded].map(x => x.toString(16).padStart(2, '0')).join(''));
-    offset += 32 + padded.length;
-  }
-  return SEL_SET_TEXT + head + tails.join('');
-}
-
-async function ensCall(to, data) {
-  return await H.rpc(H.nameRpc(), 'eth_call', [{ to, data }, 'latest']);
-}
-
-// Who can write this name's records, and where they live. Read before asking for a
-// signature, because "the transaction reverted" is a worse answer than "that name
-// has no resolver" when the second one is knowable for free.
-async function ensTarget(name) {
-  const node = await H.namehash(name);
-  const resolver = '0x' + (await ensCall(ENS_REGISTRY, SEL_RESOLVER + hex32(node))).slice(-40);
-  if (/^0x0{40}$/.test(resolver)) {
-    throw new Error(`${H.normalizeName(name)} has no resolver set, so it can hold no records`);
-  }
-  const owner = '0x' + (await ensCall(ENS_REGISTRY, SEL_OWNER + hex32(node))).slice(-40);
-  return { node, resolver, owner };
-}
-
-async function publishToENS(name, hint, status) {
-  if (!window.ethereum) throw new Error('no injected wallet found — this needs MetaMask or another EIP-1193 wallet');
-
-  status.textContent = 'reading the name…';
-  const { node, resolver, owner } = await ensTarget(name);
-
-  const [from] = await window.ethereum.request({ method: 'eth_requestAccounts' });
-  // A name can be owned by a wrapper or a safe, so a mismatch is a warning and not a
-  // refusal — but it is the overwhelmingly likely reason a setText reverts, and
-  // saying so first costs nothing.
-  if (owner && from && owner.toLowerCase() !== from.toLowerCase() && !/^0x0{40}$/.test(owner)) {
-    status.innerHTML = `<strong>Heads up:</strong> ${H.esc(H.normalizeName(name))} is owned by
-      ${H.esc(H.short(owner))} and your wallet is ${H.esc(H.short(from))}. Sending anyway — if that
-      owner is a wrapper or a multisig this still works, otherwise it will revert.`;
-  }
-
-  // ENS lives on mainnet. The page may be looking at any chain, so move the wallet
-  // rather than sending a record write to whatever it happened to be on.
-  const want = '0x1';
-  if (await window.ethereum.request({ method: 'eth_chainId' }) !== want) {
-    status.textContent = 'switch your wallet to Ethereum mainnet…';
-    await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: want }] });
-  }
-
-  const value = H.bytesToB64url(hint.bytes);
-  const data = encodeSetText(node, ENS_TEXT_KEY, value);
-
-  status.textContent = 'confirm in your wallet…';
-  const tx = await window.ethereum.request({
-    method: 'eth_sendTransaction',
-    params: [{ from, to: resolver, data }],
+async function vote(account, chainId, assets) {
+  const res = await fetch('/v1/demand', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ chain_id: chainId, account, assets }),
   });
-  return { tx, resolver, node, value };
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error ? `${body.error}${body.detail ? ': ' + body.detail : ''}` : `${res.status} ${res.statusText}`);
+  return body;
 }
 
-// Read one back. Any ENS client can do this — that is the point of putting it here
-// rather than in a contract of ours — so this is the same call a third party makes.
-export async function readENSHint(name) {
-  const { resolver } = await ensTarget(name);
-  const node = await H.namehash(name);
-  const enc = new TextEncoder().encode(ENS_TEXT_KEY);
-  const padded = new Uint8Array(Math.ceil(enc.length / 32) * 32);
-  padded.set(enc);
-  const data = '0x59d1d43c' // text(bytes32,string)
-    + hex32(node) + hex32((64).toString(16))
-    + hex32(enc.length.toString(16))
-    + [...padded].map(x => x.toString(16).padStart(2, '0')).join('');
-  const out = await ensCall(resolver, data);
-  // abi-decoded string: offset, length, bytes.
-  const body = out.slice(2);
-  const len = parseInt(body.slice(64, 128), 16);
-  if (!len) return null;
-  const hex = body.slice(128, 128 + len * 2);
-  const s = new TextDecoder().decode(Uint8Array.from(hex.match(/../g).map(h => parseInt(h, 16))));
-  // base64url is what publishToENS writes; accept 0x-hex too, because it costs three
-  // lines and a record written by some other tool should not be unreadable here.
-  const bytes = s.startsWith('0x')
-    ? Uint8Array.from(s.slice(2).match(/../g).map(h => parseInt(h, 16)))
-    : H.b64urlToBytes(s);
-  return { bytes, filter: H.decode(bytes.buffer) };
+// ---------------------------------------------------------------------------
+// Spending one
+//
+// Everything above remembers what an account held. This is the half that reads it
+// back, from the copy this browser kept last visit — free, instant, and gone with
+// the browser profile. Nothing is read from ENS any more: the list is no longer
+// published there, and a vote cannot be read back into a wallet, which is the point
+// of a vote.
+//
+// What the memory is allowed to do is the part worth being exact about, because the
+// index filter got this wrong once and hid 64 of an account's 65 holdings:
+//
+//   - It ADDS contracts to the list of what gets asked about — the contracts this
+//     account held last visit, whether or not the index has ever heard of them.
+//   - It ORDERS the candidates the index offered, so a wallet with more of them than
+//     the per-lookup cap spends that cap on contracts this account has held.
+//   - It REMOVES nothing, ever. Absence means "not held last visit", which is not a
+//     statement about now, and every row is checked against the chain like every
+//     other.
+// ---------------------------------------------------------------------------
+
+// seedFor gathers what this browser already knows about this account. Fail-open: a
+// full or missing localStorage costs a slower answer, never the answer itself.
+export async function seedFor(account) {
+  const sources = [], notes = [];
+  const local = loadSeen(account);
+  if (local) {
+    sources.push({ where: 'this browser', chainId: local.chainId, set: new Set(local.contracts), count: local.contracts.length });
+  }
+  return {
+    sources, notes,
+    empty: sources.length === 0,
+    has(chainId, address) {
+      const k = String(address || '').toLowerCase();
+      return sources.some(s => String(s.chainId) === String(chainId) && s.set.has(k));
+    },
+  };
+}
+
+// vouchedBy is every contract the commitment names for this chain: the union of the
+// sources, which the caller then asks the chain about whether or not the index ever
+// offered them.
+export async function vouchedBy(seed, chainId) {
+  const out = new Set();
+  if (!seed || seed.empty) return { tokens: [] };
+  for (const s of seed.sources) {
+    if (String(s.chainId) !== String(chainId)) continue;
+    for (const a of s.set) out.add(a);
+  }
+  return { tokens: [...out] };
+}
+
+// mark returns the lowercased subset of `addrs` the commitment names.
+//
+// The caller sorts by it and then applies a cap, which is the one place a
+// commitment decides what does *not* get asked about — and it decides it inside a
+// budget that already existed and was previously spent in discovery order. Nothing
+// is dropped that the cap would not have dropped anyway; what changes is which side
+// of it the contracts this account has actually held land on.
+export async function mark(seed, chainId, addrs) {
+  const hit = new Set();
+  if (!seed || seed.empty) return hit;
+  for (const a of addrs) if (seed.has(chainId, a)) hit.add(a.toLowerCase());
+  return hit;
 }

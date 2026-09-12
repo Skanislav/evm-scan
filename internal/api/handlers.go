@@ -817,12 +817,15 @@ func (s *Server) epochProof(w http.ResponseWriter, r *http.Request) {
 // --------------------------------------------------------------------------
 
 type candidateJSON struct {
-	Address         string  `json:"address"`
-	Standard        string  `json:"standard"`
-	FirstSeenBlock  uint64  `json:"first_seen_block"`
-	LastSeenBlock   uint64  `json:"last_seen_block"`
-	EventCount      uint64  `json:"event_count"`
-	BlocksSeen      uint64  `json:"blocks_seen"`
+	Address        string `json:"address"`
+	Standard       string `json:"standard"`
+	FirstSeenBlock uint64 `json:"first_seen_block"`
+	LastSeenBlock  uint64 `json:"last_seen_block"`
+	EventCount     uint64 `json:"event_count"`
+	BlocksSeen     uint64 `json:"blocks_seen"`
+	// Voters is how many distinct accounts asked for this contract, through the
+	// API and on the registry together.
+	Voters          uint64  `json:"voters"`
 	Promotable      bool    `json:"promotable"`
 	Promoted        bool    `json:"promoted"`
 	PromotedAt      *string `json:"promoted_at,omitempty"`
@@ -864,21 +867,21 @@ func (s *Server) listCandidates(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var minEvents, minBlocks uint64
+	var minEvents, minBlocks, minVoters uint64
 	if wk, ok := s.d.Chains.Worker(chainID); ok {
-		minEvents, minBlocks = wk.DiscoveryThresholds()
+		minEvents, minBlocks, minVoters = wk.DiscoveryThresholds()
 	}
 
 	out := make([]candidateJSON, len(rows))
 	for i, c := range rows {
-		out[i] = candidateView(c, minEvents, minBlocks)
+		out[i] = candidateView(c, minEvents, minBlocks, minVoters)
 	}
 	s.decorateCandidates(ctx, chainID, out)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"chain_id":   chainID,
 		"candidates": out,
-		"thresholds": map[string]uint64{"min_events": minEvents, "min_blocks": minBlocks},
+		"thresholds": map[string]uint64{"min_events": minEvents, "min_blocks": minBlocks, "min_voters": minVoters},
 	})
 }
 
@@ -938,7 +941,8 @@ func (s *Server) promoteCandidate(w http.ResponseWriter, r *http.Request) {
 // candidateView renders one observed contract. Promotable is a live question, not a
 // stored flag: it is the thresholds the worker is running with right now, and a
 // contract someone has already judged is never offered again.
-func candidateView(c store.Candidate, minEvents, minBlocks uint64) candidateJSON {
+func candidateView(c store.Candidate, minEvents, minBlocks, minVoters uint64) candidateJSON {
+	clears := (c.EventCount >= minEvents && c.BlocksSeen >= minBlocks) || (minVoters > 0 && c.Voters >= minVoters)
 	out := candidateJSON{
 		Address:         c.Address.Hex(),
 		Standard:        standardName(c.Standard),
@@ -946,7 +950,8 @@ func candidateView(c store.Candidate, minEvents, minBlocks uint64) candidateJSON
 		LastSeenBlock:   c.LastSeenBlock,
 		EventCount:      c.EventCount,
 		BlocksSeen:      c.BlocksSeen,
-		Promotable:      c.SpamAt == nil && c.PromotedAt == nil && c.EventCount >= minEvents && c.BlocksSeen >= minBlocks,
+		Voters:          c.Voters,
+		Promotable:      c.SpamAt == nil && c.PromotedAt == nil && clears,
 		Promoted:        c.PromotedAt != nil,
 		PromotionReason: c.PromotionReason,
 		Spam:            c.SpamAt != nil,
@@ -1048,11 +1053,11 @@ func (s *Server) candidateVerdict(w http.ResponseWriter, r *http.Request, spam b
 		writeErr(w, http.StatusInternalServerError, "query failed", err)
 		return
 	}
-	var minEvents, minBlocks uint64
+	var minEvents, minBlocks, minVoters uint64
 	if wk, ok := s.d.Chains.Worker(chainID); ok {
-		minEvents, minBlocks = wk.DiscoveryThresholds()
+		minEvents, minBlocks, minVoters = wk.DiscoveryThresholds()
 	}
-	out := []candidateJSON{candidateView(c, minEvents, minBlocks)}
+	out := []candidateJSON{candidateView(c, minEvents, minBlocks, minVoters)}
 	s.decorateCandidates(ctx, chainID, out)
 	writeJSON(w, http.StatusOK, out[0])
 }

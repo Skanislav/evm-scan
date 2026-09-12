@@ -69,6 +69,8 @@ type opts struct {
 	timeout             time.Duration
 	requests, funds     []string
 	gateways            []string
+	votes               []string
+	voteChain           uint64
 }
 
 func main() {
@@ -77,6 +79,7 @@ func main() {
 		requests listFlag
 		funds    listFlag
 		gateways listFlag
+		votes    listFlag
 		window   uint64
 	)
 	flag.StringVar(&o.node, "node", "", "RPC endpoint of the target chain (ipc path, ws:// or http://)")
@@ -94,6 +97,8 @@ func main() {
 	flag.DurationVar(&o.timeout, "timeout", 3*time.Minute, "how long to wait for each receipt")
 	flag.Var(&requests, "request", "requestIndexing as token:kind:fromBlock:valueWei (repeatable)")
 	flag.Var(&funds, "fund", "fundAsset for a token on this chain as token:valueWei (repeatable)")
+	flag.Var(&votes, "vote", "vote for a token to be indexed (repeatable); the token lives on -vote-chain")
+	flag.Uint64Var(&o.voteChain, "vote-chain", 0, "chain id the -vote tokens live on (default: the node's chain)")
 	flag.Var(&gateways, "gateway", "ERC-3668 gateway URL template for contractsOf, e.g. https://host/ccip/{sender}/{data}.json (repeatable; set at deployment, or replaces the list on an existing local-arbiter registry)")
 	flag.Parse()
 
@@ -102,7 +107,7 @@ func main() {
 	}
 	// Inspecting an existing registry only reads, so it does not need a key. Anything
 	// that sends a transaction does.
-	sends := o.registry == "" || len(requests) > 0 || len(funds) > 0 || len(gateways) > 0
+	sends := o.registry == "" || len(requests) > 0 || len(funds) > 0 || len(gateways) > 0 || len(votes) > 0
 	if sends && o.key == "" {
 		log.Fatal("-key (or EVMSCAN_DEPLOYER_KEY) is required to deploy or send; " +
 			"pass only -node and -registry to inspect one")
@@ -117,7 +122,7 @@ func main() {
 		MinFunding:      mustWei(*minFund),
 		RewardPerBlock:  mustWei(*reward),
 	}
-	o.requests, o.funds, o.gateways = requests, funds, gateways
+	o.requests, o.funds, o.gateways, o.votes = requests, funds, gateways, votes
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
@@ -242,6 +247,29 @@ func run(ctx context.Context, o opts) error {
 			return fmt.Errorf("pack requestIndexing: %w", err)
 		}
 		if err := send(ctx, sub, registry, value, data, "requestIndexing "+token.Hex()); err != nil {
+			return err
+		}
+	}
+
+	if len(o.votes) > 0 {
+		// A vote names the chain the tokens live on, which is the indexed chain and
+		// not necessarily this one — the same footgun requestIndexing has.
+		voteChain := o.voteChain
+		if voteChain == 0 {
+			voteChain = chainID
+		}
+		tokens := make([]common.Address, 0, len(o.votes))
+		for _, v := range o.votes {
+			if !common.IsHexAddress(v) {
+				return fmt.Errorf("bad -vote %q, want a token address", v)
+			}
+			tokens = append(tokens, common.HexToAddress(v))
+		}
+		data, err := regABI.Pack("vote", voteChain, tokens)
+		if err != nil {
+			return fmt.Errorf("pack vote: %w", err)
+		}
+		if err := send(ctx, sub, registry, nil, data, fmt.Sprintf("vote (%d tokens on chain %d)", len(tokens), voteChain)); err != nil {
 			return err
 		}
 	}

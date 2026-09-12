@@ -41,6 +41,8 @@ type Mirror struct {
 	nudge   NudgeFunc
 	log     *slog.Logger
 	regChID uint64
+	// demandUnsupported is set once a registry without listDemand has been logged.
+	demandUnsupported bool
 }
 
 // NewMirror builds a Mirror. regChainID is the chain the registry is deployed on,
@@ -163,6 +165,8 @@ func (m *Mirror) Sync(ctx context.Context) error {
 		}
 	}
 
+	m.syncDemand(ctx)
+
 	for chainID := range touched {
 		if m.nudge == nil {
 			break
@@ -176,6 +180,30 @@ func (m *Mirror) Sync(ctx context.Context) error {
 		return m.st.SetRegistrySyncCursor(ctx, m.regChID, m.client.Address(), head)
 	}
 	return nil
+}
+
+// syncDemand mirrors the registry's vote counts into asset_demand_onchain, for the
+// chains this daemon runs. The contract deduplicates voters itself, so what lands
+// here is an aggregate. A registry deployed before votes existed has no listDemand;
+// that is logged once and is not an error.
+func (m *Mirror) syncDemand(ctx context.Context) {
+	votes, err := m.client.ListDemand(ctx, 200)
+	if err != nil {
+		if !m.demandUnsupported {
+			m.demandUnsupported = true
+			m.log.Info("registry serves no demand; on-chain votes are not mirrored", "err", err)
+		}
+		return
+	}
+	m.demandUnsupported = false
+	for _, v := range votes {
+		if _, ok, err := m.head(ctx, v.ChainID); err != nil || !ok {
+			continue
+		}
+		if err := m.st.SetOnchainDemand(ctx, v.ChainID, v.Token, v.Voters); err != nil {
+			m.log.Warn("could not mirror on-chain demand", "chain_id", v.ChainID, "token", v.Token.Hex(), "err", err)
+		}
+	}
 }
 
 // AssetKey mirrors HintRegistry.assetKey: keccak256(abi.encodePacked(chainId, token)).

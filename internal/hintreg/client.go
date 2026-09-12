@@ -223,6 +223,50 @@ func (c *Client) ListAssets(ctx context.Context, pageSize uint64) ([]RegisteredA
 	return out, nil
 }
 
+// abiDemand matches HintRegistry.Demand field-for-field for decoding.
+type abiDemand struct {
+	ChainId uint64
+	Token   common.Address
+	Voters  uint64
+}
+
+// Demand is one asset's on-chain vote count.
+type Demand struct {
+	ChainID uint64
+	Token   common.Address
+	Voters  uint64
+}
+
+// ListDemand pages through every asset anyone has voted for. A registry deployed
+// before votes existed has no listDemand and the call reverts; callers treat that
+// as "no on-chain demand" rather than as a broken registry.
+func (c *Client) ListDemand(ctx context.Context, pageSize uint64) ([]Demand, error) {
+	vals, err := c.call(ctx, "demandCount")
+	if err != nil {
+		return nil, err
+	}
+	total := (*abi.ConvertType(vals[0], new(*big.Int)).(**big.Int)).Uint64()
+	if pageSize == 0 {
+		pageSize = 200
+	}
+	var out []Demand
+	for offset := uint64(0); offset < total; offset += pageSize {
+		vals, err := c.call(ctx, "listDemand",
+			new(big.Int).SetUint64(offset), new(big.Int).SetUint64(pageSize))
+		if err != nil {
+			return nil, err
+		}
+		page := *abi.ConvertType(vals[0], new([]abiDemand)).(*[]abiDemand)
+		if len(page) == 0 {
+			break
+		}
+		for _, d := range page {
+			out = append(out, Demand{ChainID: d.ChainId, Token: d.Token, Voters: d.Voters})
+		}
+	}
+	return out, nil
+}
+
 // AssetBond is the fee registerAsset requires.
 func (c *Client) AssetBond(ctx context.Context) (*big.Int, error) {
 	vals, err := c.call(ctx, "assetBond")

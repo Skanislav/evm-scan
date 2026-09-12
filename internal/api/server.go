@@ -199,6 +199,9 @@ func New(d Deps) *Server {
 	s.mux.HandleFunc("GET /v1/lens", s.listLenses)
 	s.mux.HandleFunc("GET /v1/hints", s.listHints)
 	s.mux.HandleFunc("GET /v1/hints/{file}", s.serveHintFilter)
+	// Demand: a public vote for what to index next. Open on purpose, see guarded().
+	s.mux.HandleFunc("GET /v1/demand", s.listDemand)
+	s.mux.HandleFunc("POST /v1/demand", s.recordDemand)
 	s.mux.HandleFunc("GET /v1/candidates", s.listCandidates)
 	s.mux.HandleFunc("POST /v1/candidates/{address}/promote", s.promoteCandidate)
 	s.mux.HandleFunc("POST /v1/candidates/{address}/spam", s.markCandidateSpam)
@@ -259,8 +262,11 @@ func (s *Server) withMiddleware(next http.Handler) http.Handler {
 // The rule is "every mutating method, minus an allowlist" rather than a list of guarded
 // paths. The two fail in opposite directions: a path forgotten from a guard list leaves
 // a new mutation open, while a route forgotten from an exception list only makes one too
-// strict, and someone notices immediately. The single exception is the ERC-3668
-// callback, which a resolver anywhere on the internet has to be able to reach.
+// strict, and someone notices immediately. Two exceptions: the ERC-3668 callback,
+// which a resolver anywhere on the internet has to be able to reach, and a vote,
+// which is the one write a reader is meant to make — it spends nothing by itself,
+// since promotion is budgeted per tick and gated by min_voters, and a vote that
+// needed the operator's token would be the operator voting.
 //
 // Reads are never guarded — the whole point of the index is that anyone can query it.
 func guarded(r *http.Request) bool {
@@ -268,7 +274,7 @@ func guarded(r *http.Request) bool {
 	case http.MethodGet, http.MethodHead, http.MethodOptions:
 		return false
 	}
-	return r.URL.Path != "/ccip"
+	return r.URL.Path != "/ccip" && r.URL.Path != "/v1/demand"
 }
 
 // authorized checks the bearer token on the endpoints that mutate. With no token
@@ -536,7 +542,7 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		}
 		if w, ok := s.d.Chains.Worker(id); ok {
 			cs.HistoryFloor = w.HistoryFloor()
-			minEvents, minBlocks := w.DiscoveryThresholds()
+			minEvents, minBlocks, _ := w.DiscoveryThresholds()
 			if cst, err := s.d.Store.CandidateStats(ctx, id, minEvents, minBlocks); err == nil {
 				cs.Candidates, cs.CandidatesReady = cst.Observed, cst.Promotable
 				cs.CandidatesSpam = cst.Spam

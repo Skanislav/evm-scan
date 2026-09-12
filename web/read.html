@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Read a committed wallet</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  /* The reader's half of the commitment. One name in, one wallet out, and this page
+     never tells the daemon which account it is about: the records come from ENS on
+     an RPC the reader chose, the balances from a lens call on another, and the only
+     thing fetched from this origin is the lens bytecode, which is the same for
+     everyone. Same paper, ink and two colours as index.html. */
+  :root {
+    --bg: #fbfaf8; --bg-2: #f6f5f2; --surface: #fff; --card: #faf9f7;
+    --ink: #14161a;
+    --ink-70: rgba(20,22,26,.7); --ink-65: rgba(20,22,26,.65); --ink-62: rgba(20,22,26,.62); --ink-45: rgba(20,22,26,.45);
+    --line: rgba(20,22,26,.09); --line-2: rgba(20,22,26,.14); --line-3: rgba(20,22,26,.22);
+    --fill: rgba(20,22,26,.055);
+    --blue: oklch(0.55 0.13 250); --blue-text: oklch(0.50 0.13 250); --blue-wash: oklch(0.96 0.02 250);
+    --amber: oklch(0.62 0.13 66); --amber-text: oklch(0.40 0.10 66);
+    --amber-bg: oklch(0.93 0.05 80); --amber-line: oklch(0.80 0.08 75); --amber-wash: oklch(0.985 0.012 80);
+    --green-text: oklch(0.45 0.12 155); --green-wash: oklch(0.96 0.03 155);
+    --sans: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+    --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --r-md: 6px; --r-lg: 9px; --r-xl: 11px;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink); font: 400 14px/1.55 var(--sans); }
+  a { color: var(--blue-text); }
+  code { font-family: var(--mono); font-size: 0.92em; }
+  .wrap { max-width: 980px; margin: 0 auto; padding-inline: 24px; }
+  .top { border-bottom: 1px solid var(--line); background: rgba(251,250,248,.93); }
+  .bar { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding-block: 11px; }
+  .brand { font: 600 14px/1 var(--mono); letter-spacing: -0.01em; color: var(--ink); text-decoration: none; }
+  .toplinks { margin-left: auto; display: flex; gap: 16px; font: 400 12px/1 var(--sans); color: var(--ink-65); }
+  .toplinks a { color: inherit; }
+  .kicker { font: 500 10px/1 var(--mono); letter-spacing: .09em; text-transform: uppercase; color: var(--ink-65); margin: 40px 0 14px; }
+  h1 { font: 600 38px/1.1 var(--sans); letter-spacing: -0.024em; margin: 0 0 14px; text-wrap: pretty; }
+  .lede { font: 400 14.5px/1.55 var(--sans); color: var(--ink-70); margin: 0 0 24px; max-width: 640px; text-wrap: pretty; }
+  .hint { color: var(--ink-70); font-size: 12.5px; line-height: 1.6; }
+  .hint strong { color: var(--ink); font-weight: 600; }
+  .empty { color: var(--ink-62); }
+  .err { color: var(--amber-text); font-size: 12.5px; line-height: 1.5; margin-top: 10px; }
+
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer;
+    text-decoration: none; font: 500 12.5px/1 var(--sans); color: var(--ink); background: var(--surface);
+    border: 1px solid var(--line-3); padding: 9px 15px; border-radius: var(--r-md); white-space: nowrap;
+  }
+  .btn:hover:not(:disabled) { border-color: rgba(20,22,26,.4); }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .btn-primary { background: var(--ink); color: #fff; border-color: var(--ink); }
+  .btn-ghost { border-color: transparent; background: transparent; color: var(--blue-text); padding-inline: 8px; }
+  .btn.big { height: 52px; padding-inline: 22px; font-size: 14px; border-radius: var(--r-lg); }
+  .input {
+    min-height: 38px; padding: 8px 12px; font: 400 13px/1.3 var(--mono); color: var(--ink); caret-color: var(--blue);
+    background: var(--surface); border: 1px solid var(--line-3); border-radius: var(--r-md);
+  }
+  .input::placeholder { color: var(--ink-45); opacity: 1; }
+  .input:focus { outline: 2px solid var(--blue); outline-offset: 1px; }
+  .input.big { height: 52px; padding: 0 15px; font-size: 14.5px; border-radius: var(--r-lg); }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .label { font: 500 10px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-65); margin: 18px 0 8px; }
+
+  .howto { margin-top: 26px; border: 1px solid rgba(20,22,26,.13); border-radius: var(--r-xl); background: var(--surface); overflow: hidden; }
+  .howto-head { padding: 12px 16px 11px; border-bottom: 1px solid var(--line); font: 500 10px/1 var(--mono); letter-spacing: .09em; text-transform: uppercase; color: var(--ink-65); }
+  .howto-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+  .mode { display: block; width: 100%; text-align: left; border: 0; background: var(--surface); color: var(--ink); padding: 15px 16px 16px; cursor: pointer; font-family: var(--sans); }
+  .mode + .mode { border-left: 1px solid var(--line); }
+  .mode:hover { background: var(--card); }
+  .mode.on { background: var(--ink); color: #fff; cursor: default; }
+  .mode-t { display: flex; align-items: center; gap: 8px; font: 500 13px/1.3 var(--sans); margin-bottom: 6px; }
+  .mode-dot { width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid rgba(20,22,26,.3); flex: none; }
+  .mode.on .mode-dot { border: 0; background: oklch(0.72 0.13 250); }
+  .mode-d { font: 400 11.5px/1.55 var(--mono); color: var(--ink-65); }
+  .mode.on .mode-d { color: rgba(255,255,255,.72); }
+  .howto-body { padding: 16px; border-top: 1px solid var(--line); background: var(--card); }
+
+  /* What happened, in order. Each step names the host it touched, because the
+     privacy here is in the mechanism and not in a promise. */
+  .trail { margin-top: 22px; display: flex; flex-direction: column; gap: 8px; max-width: 760px; }
+  .step { display: flex; gap: 12px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface); }
+  .step .n { flex: none; width: 20px; height: 20px; border-radius: 50%; background: var(--fill); font: 500 10.5px/20px var(--mono); text-align: center; }
+  .step.amber { border-color: var(--amber-line); background: var(--amber-wash); }
+  .step.amber .n { background: var(--amber-bg); color: var(--amber-text); }
+  .step.green { border-color: oklch(0.85 0.06 155); background: var(--green-wash); }
+  .step.green .n { background: oklch(0.90 0.06 155); color: var(--green-text); }
+  .step .t { font: 500 13px/1.4 var(--sans); }
+  .step .d { font: 400 11.5px/1.55 var(--mono); color: var(--ink-65); word-break: break-word; }
+
+  .head { margin-top: 30px; display: flex; gap: 14px; align-items: baseline; flex-wrap: wrap; }
+  .head .nm { font: 600 22px/1.2 var(--sans); letter-spacing: -0.015em; }
+  .head .addr { font: 400 12px/1 var(--mono); color: var(--ink-65); word-break: break-all; }
+  .verdict { display: inline-block; font: 500 10.5px/1 var(--mono); letter-spacing: .05em; text-transform: uppercase; padding: 5px 9px; border-radius: 20px; }
+  .verdict.self { background: var(--amber-bg); color: var(--amber-text); }
+  .verdict.verified { background: var(--blue-wash); color: var(--blue-text); }
+  .totals { margin: 12px 0 0; font: 400 12.5px/1.6 var(--sans); color: var(--ink-70); }
+
+  .tablewrap { overflow-x: auto; margin-top: 18px; }
+  .tablehead, .tablerow { display: grid; grid-template-columns: minmax(120px, 1.2fr) minmax(160px, 1.6fr) minmax(140px, 1fr) 80px minmax(150px, 1fr); column-gap: 14px; align-items: center; min-width: 720px; }
+  .tablehead { padding-bottom: 9px; border-bottom: 1px solid var(--line-2); font: 500 10px/1 var(--mono); letter-spacing: .07em; text-transform: uppercase; color: var(--ink-65); }
+  .tablerow { padding: 12px 0; border-bottom: 1px solid var(--line); }
+  .tablerow.dim { opacity: .5; }
+  .sym { font: 500 13.5px/1.3 var(--sans); }
+  .nmcell { font: 400 12.5px/1.4 var(--sans); color: var(--ink-70); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bal { font: 400 12.5px/1.3 var(--mono); }
+  .std { font: 400 10.5px/1 var(--mono); color: var(--ink-65); }
+  .ad { font: 400 11px/1.3 var(--mono); color: var(--ink-65); }
+  .tag { display: inline-block; font: 500 10px/1 var(--mono); padding: 4px 7px; border-radius: 4px; background: var(--fill); color: var(--ink-70); margin-left: 6px; vertical-align: middle; }
+  .tag.flag { background: var(--amber-bg); color: var(--amber-text); }
+
+  .disclose { margin-top: 26px; padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--r-xl); background: var(--surface); max-width: 760px; }
+  .disclose .h { font: 500 10px/1 var(--mono); letter-spacing: .09em; text-transform: uppercase; color: var(--ink-65); margin-bottom: 10px; }
+  .disclose ul { margin: 0; padding-left: 18px; font: 400 12.5px/1.6 var(--sans); color: var(--ink-70); }
+  footer { margin: 56px 0 40px; font: 400 11.5px/1.6 var(--mono); color: var(--ink-62); }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="wrap bar">
+    <a class="brand" href="index.html">evm-scan</a>
+    <span class="hint">read a committed wallet</span>
+    <nav class="toplinks">
+      <a href="index.html">Look up &amp; commit</a>
+      <a href="https://github.com/Skanislav/evm-scan" target="_blank" rel="noopener">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="kicker">The other end</div>
+  <h1>What did this name commit to?</h1>
+  <p class="lede">An account the index has committed to a root is read back here through ENS alone: every
+    account has a name under the registry's resolver, its contracts come from that name's text records, verified on
+    chain before they are returned, and the balances from one call to a node you choose. This page never sends the
+    daemon an account.</p>
+
+  <div class="howto">
+    <div class="howto-head">the registry's name for an account</div>
+    <div class="howto-body">
+      <p class="hint" style="margin:0 0 12px; max-width:74ch"><code>&lt;address as hex&gt;.hints.&lt;parent&gt;</code> · served by
+        HintResolver · reading its contracts record means following the registry's gateway from this browser, and the
+        callback checks the answer against the latest finalized root before returning it. The step is shown when it happens.</p>
+      <div class="row">
+        <input class="input big" type="text" id="name" style="flex:1 1 360px; min-width:0" spellcheck="false"
+               autocomplete="off" placeholder="0x… or a name">
+        <button class="btn btn-primary big" id="go">Read</button>
+      </div>
+      <div class="row" id="parent-row" style="margin-top:10px">
+        <input class="input" type="text" id="parent" style="flex:1 1 260px; min-width:0" spellcheck="false"
+               autocomplete="off" placeholder="parent name the resolver hangs under, e.g. evm-scan.eth">
+        <span class="hint" id="parent-note"></span>
+      </div>
+      <div class="label">ens, read on</div>
+      <div class="row">
+        <input class="input" type="text" id="ens-rpc" style="flex:1 1 320px; min-width:0" spellcheck="false" autocomplete="off">
+        <span class="hint">a mainnet RPC · sees the name you typed, not an address</span>
+      </div>
+      <div class="label">balances, read at head from</div>
+      <div class="row">
+        <input class="input" type="text" id="chain-rpc" style="flex:1 1 320px; min-width:0" spellcheck="false" autocomplete="off">
+        <span class="hint" id="chain-rpc-note">an RPC for the chain the record names · this one sees the address</span>
+      </div>
+      <div class="err" id="err" hidden></div>
+    </div>
+  </div>
+
+  <div class="trail" id="trail" hidden></div>
+
+  <div id="result" hidden>
+    <div class="head">
+      <span class="nm" id="r-name"></span>
+      <span class="addr" id="r-addr"></span>
+      <span class="verdict" id="r-verdict"></span>
+    </div>
+    <p class="totals" id="r-totals"></p>
+    <div class="tablewrap">
+      <div class="tablehead"><span>symbol</span><span>name</span><span>balance now</span><span>kind</span><span>contract</span></div>
+      <div id="rows"></div>
+    </div>
+    <p class="hint" id="r-foot" style="margin-top:14px; max-width:74ch"></p>
+  </div>
+
+  <div class="disclose" id="disclose" hidden>
+    <div class="h">what left this browser</div>
+    <ul id="disclose-list"></ul>
+  </div>
+
+  <footer>
+    The record is what <code>HintResolver.sol</code> serves: lowercase addresses joined by commas under
+    <code>evmscan.contracts</code>, the chain id under <code>evmscan.chain</code>, the epoch and root beside them. Any ENS
+    client reads it; this page only adds the balances.
+    The lens is <code>AssetLens.sol</code>, run as a deployless <code>eth_call</code> with its creation code as
+    the payload, so there is no contract address to trust and no upgrade key.
+  </footer>
+</main>
+
+<script type="module" src="read.js"></script>
+</body>
+</html>

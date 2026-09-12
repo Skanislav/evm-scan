@@ -39,7 +39,7 @@ type Worker interface {
 	HistoryFloor() uint64
 	// DiscoveryThresholds are the activity levels at which a candidate qualifies
 	// for promotion.
-	DiscoveryThresholds() (minEvents, minBlocks uint64)
+	DiscoveryThresholds() (minEvents, minBlocks, minVoters uint64)
 	// Health reports whether the worker is still doing its job.
 	Health() error
 }

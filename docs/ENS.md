@@ -196,3 +196,22 @@ Mixing tools: `ens … --json` prints unsigned calldata, and
   the name first, then look up the hex form; the page does exactly that.
 - The daemon never follows an ERC-3668 gateway for a name. Clients do, and the
   callback verifies what they bring back.
+
+## The reader page
+
+`read.html` is the other end of the index: an account or a name in, the registry's
+`<hex>.hints.<parent>` name built from it, and the `evmscan.contracts` record read
+through the Universal Resolver on an RPC the reader chose. The resolver reverts
+`OffchainLookup`; the page follows it in the browser by hand — the reader's own
+choice, with the gateway named on screen — and the callback verifies the answer
+against the latest finalized root before the page sees it. `evmscan.chain`,
+`evmscan.epoch`, `evmscan.range` and `evmscan.root` are read beside it, and the
+balances at head come from the deployless `AssetLens` call on a second RPC. The only
+request to this origin is `GET /v1/lens`, for the lens bytecode, which is the same
+bytes for everyone and carries no account.
+
+A wallet's own list was briefly publishable to its owner's name under the same two
+keys and readable here as a second mode. It cost about 31,000 gas per contract and
+stored per wallet what the registry's vote counter (`HintRegistry.vote`) stores once
+for everyone, so it was cut; the lookup page offers a vote instead, and a vote's
+result is an indexed account, which is what this page reads.

@@ -23,6 +23,7 @@ const (
 	SourceOnchain    = "onchain"    // mirrored from HintRegistry
 	SourceLocal      = "local"      // added directly via the API
 	SourceDiscovered = "discovered" // observed at the head and promoted
+	SourceDemand     = "demand"     // voted for and promoted; discovery never saw it emit
 )
 
 // Asset is a registered contract that we are willing to scan.

@@ -191,6 +191,21 @@ contract HintRegistry is IOptimisticOracleV3CallbackRecipient {
     ///         operators may run one; a client may also bring its own.
     string[] private _gateways;
 
+    /// @notice Who wants a contract indexed. A vote is a priority signal for
+    ///         indexers and nothing else: it buys no position, needs no
+    ///         registration and no bond, and an indexer may weigh it however it
+    ///         likes. One address counts once per asset. Kept enumerable, like
+    ///         assets, so an indexer reads it as state rather than replaying logs.
+    struct Demand {
+        uint64 chainId;
+        address token;
+        uint64 voters;
+    }
+
+    mapping(bytes32 => Demand) private _demand;
+    mapping(bytes32 => mapping(address => bool)) private _voted;
+    bytes32[] private _demandKeys;
+
     // --------------------------------------------------------------------
     // Events
     // --------------------------------------------------------------------
@@ -241,6 +256,7 @@ contract HintRegistry is IOptimisticOracleV3CallbackRecipient {
         uint256 reward
     );
     event GatewaysUpdated(string[] urls);
+    event Voted(bytes32 indexed key, uint64 indexed chainId, address indexed token, address voter, uint64 voters);
 
     // --------------------------------------------------------------------
     // Errors
@@ -469,6 +485,55 @@ contract HintRegistry is IOptimisticOracleV3CallbackRecipient {
         page = new Asset[](end - offset);
         for (uint256 i = offset; i < end; i++) {
             page[i - offset] = _assets[_assetKeys[i]];
+        }
+    }
+
+    // --------------------------------------------------------------------
+    // Demand
+    // --------------------------------------------------------------------
+
+    /// @notice Ask for these contracts on `chainId` to be indexed. Free apart from
+    ///         gas; a repeat vote from the same address for the same asset is a
+    ///         no-op. Anyone can vote for anything, which is why this is a priority
+    ///         signal and never a verdict — a bad vote wastes an indexer's queue
+    ///         slot, not a reader's trust.
+    function vote(uint64 chainId, address[] calldata tokens) external {
+        for (uint256 i = 0; i < tokens.length; i++) {
+            bytes32 key = assetKey(chainId, tokens[i]);
+            if (_voted[key][msg.sender]) continue;
+            _voted[key][msg.sender] = true;
+            Demand storage d = _demand[key];
+            if (d.voters == 0) {
+                d.chainId = chainId;
+                d.token = tokens[i];
+                _demandKeys.push(key);
+            }
+            d.voters += 1;
+            emit Voted(key, chainId, tokens[i], msg.sender, d.voters);
+        }
+    }
+
+    function demandOf(bytes32 key) external view returns (Demand memory) {
+        return _demand[key];
+    }
+
+    function hasVoted(bytes32 key, address voter) external view returns (bool) {
+        return _voted[key][voter];
+    }
+
+    function demandCount() external view returns (uint256) {
+        return _demandKeys.length;
+    }
+
+    /// @notice Page through voted assets, in first-vote order.
+    function listDemand(uint256 offset, uint256 limit) external view returns (Demand[] memory page) {
+        uint256 n = _demandKeys.length;
+        if (offset >= n) return new Demand[](0);
+        uint256 end = offset + limit;
+        if (end > n) end = n;
+        page = new Demand[](end - offset);
+        for (uint256 i = offset; i < end; i++) {
+            page[i - offset] = _demand[_demandKeys[i]];
         }
     }
 

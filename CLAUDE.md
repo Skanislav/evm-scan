@@ -157,11 +157,11 @@ shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module 
   once false positives fall below the real holdings the holdings decide the batch
   count; the headroom that is left absorbs incremental `|=` additions before a
   rebuild. Its bitmap is MSB-first bytes, not packed words, so the JavaScript reader
-  indexes it without reproducing Go's word endianness. The browser builds these
-  itself — the daemon never sees the account — so three implementations of the probe
-  have to agree, and `testdata/public-bloom-interop.xorf` (Go-written, 256 bits) plus
-  `testdata/browser-slot-interop.xorf` (browser-written, 1024) pin both directions
-  and both sizes. **The Go writer and the JavaScript
+  indexes it without reproducing Go's word endianness. `testdata/public-bloom-interop.xorf`
+  (Go-written, 256 bits) pins the JavaScript reader; `testdata/browser-slot-interop.xorf`
+  (1024 bits) was written by a browser bloom builder that no longer exists — the
+  reader's own wallet is committed as an enumerable list now, see below — and stays as
+  a reader fixture only. **The Go writer and the JavaScript
   reader in `web/index.html` must agree byte-for-byte** — `internal/hintfilter/testdata`
   is the fixture that enforces it, regenerated with `go test ./internal/hintfilter
   -update`, and `testdata/browser-watch.xorf` (WebAuthn prf) plus
@@ -217,8 +217,9 @@ shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module 
   revoke, un-index or refund: the funding already bought a backfill and the coverage
   is already in a root.
 - A candidate carries at most one live verdict. `spam_at` drops it out of
-  `PromotableCandidates` — the only query auto-promote reads, so that one clause is the
-  whole rule — and promotion clears the mark rather than sitting beside it, which is what
+  `PromotableCandidates` — the only candidate query auto-promote reads, so that one
+  clause is the whole rule, and `DemandedUnseen` excludes candidates entirely — and
+  promotion clears the mark rather than sitting beside it, which is what
   lets `/v1/decisions` be a single ordered scan over `COALESCE(promoted_at, spam_at)`.
   Discovery keeps counting a spam contract; a verdict is about what to index, not what to
   watch.
@@ -229,12 +230,23 @@ shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module 
   imported the same way and for the same reason — the index filter is well over a
   megabyte — and holds the two things that read one: the private lookup, which answers
   "which indexed contracts has this account touched" from the downloaded file so the
-  daemon never learns the address, and the blinded-watchlist builder. It cannot close
+  daemon never learns the address, and the blinded-watchlist builder; plus the
+  browser's memory of an account and the vote (below). It cannot close
   over this file's scope, so the filter primitives are handed to it on
   `window.evmscanHints`; there is deliberately only one implementation of the
   arithmetic on the page, because a second one would be a second thing to keep
-  byte-identical with Go. Token metadata is attacker-controlled text from the chain, so
-  everything interpolated into markup goes through `esc()`.
+  byte-identical with Go. `ensrec.js` is the ENS record codec — the list format
+  `HintResolver` serves, the `text`/`resolve` ABI by hand, a Universal Resolver read
+  that reports `OffchainLookup` rather than following it — imported by `hints.js`
+  and by `read.js`, so the format has one implementation. `read.html` + `read.js` is
+  the **separate reader flow**: an account or name in, the registry's
+  `<hex>.hints.<parent>` name, its `evmscan.contracts` record read through ENS on the
+  reader's RPC (the resolver's `OffchainLookup` is followed in the browser by hand so
+  the gateway is named on screen, and the callback verifies the answer against the
+  latest finalized root), balances from a deployless `AssetLens` call on another
+  RPC; the only request to this origin is `GET /v1/lens`, which never carries an
+  account. Token metadata is attacker-controlled text from the chain, so everything
+  interpolated into markup goes through `esc()`.
 - `mirror/` is a separate TypeScript package (`make test-mirror`, own `node_modules`, not
   in the Go build): the commitment encoding ported for clients, plus a local-first mirror
   that keeps the committed rows in the client's SQLite via Evolu and rebuilds the keccak
@@ -268,41 +280,47 @@ shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module 
 - Account names resolve in the client: the page through the Universal Resolver on the
   reader's RPC, the mirror through its injected `EthCall`. The daemon never resolves a
   name, no API parameter takes one, and nobody here follows an ERC-3668 gateway on a
-  reader's behalf.
-- A reader's own hint is published to their own ENS name, as an `evmscan.hint` text
-  record on mainnet (`publishToENS` in `web/hints.js`), not to a contract of ours:
-  any ENS client can read it and nothing here has to keep running for it to work.
-  The value is the whole `.xorf`, base64url-encoded. base64url rather than hex
-  because a text record stores the string — 175 bytes is 234 base64url characters
-  against 352 hex, measured as 244,199 gas versus 313,941 against a real resolver.
-  The whole file rather than the bare bitmap because `k` depends on the key count and
-  a reader cannot recover it; the header costs about 46,000 gas over a bitmap alone,
-  which is the price of keeping one wire format instead of two that can drift. Cost
-  the writes with `eth_estimateGas` against a real resolver, never from SSTORE
-  arithmetic: ENS stores a dynamic string, so reasoning from fixed slots understated
-  it by more than a factor of two.
-- A reader's hint is spent on the next lookup, and the shape of the spending is the
-  invariant. It **adds**: `vouchedBy` walks `/v1/hints/tokens-<chain>.json` — the
-  enumerable half of a filter that can be tested and never listed — and names the
-  contracts this account has held whether or not the index offers them. It **orders**:
-  hinted candidates go ahead of the per-lookup cap, though never ahead of an indexed
-  asset. It **removes nothing**. The ENS record is read only for a name the reader
-  typed, never by reverse-resolving a pasted address, and what comes back has its kind
-  and structure checked before it is believed — a blinded watchlist under the same key
-  decodes fine and then answers no to everything, which on screen is a wallet that
-  holds nothing. Every failure is a note on screen and an empty seed, never a lost
-  lookup. Because the hint is a fixed 1,024 bits, its error rate is a function of how
-  many contracts went in (0.03% at 27, 9.62% at 200 over 5,862), so the walk is skipped
-  when expected false positives exceed the hint's key count; that is a refusal to add,
-  which leaves exactly the behaviour of having no hint.
+  reader's behalf — the one exception is `read.html`'s registry mode, which follows the
+  resolver's `OffchainLookup` in the reader's own browser with the gateway named on
+  screen; that is the reader following it, not us.
+- A reader's act on their own wallet is a **vote, not a list**. The held contracts
+  the index does not keep are voted for with `POST /v1/demand` (`vote` in
+  `web/hints.js`), and the same counter lives on chain as `HintRegistry.vote`,
+  mirrored by `Mirror.syncDemand` into `asset_demand_onchain`. Demand is a priority
+  signal and nothing else: `PromotableCandidates` orders by it and, with
+  `min_voters` above zero, promotes on it alone (`DemandedUnseen` reaches a voted
+  contract discovery never counted, promoted with source `demand`); `spam_at` still
+  outranks any number of votes, a vote buys no position, and no vote changes what a
+  balance read says. Promotion stays budgeted by `max_promotions_per_tick`, and
+  `min_voters` must sit above one on a metered node — a single fresh address must
+  not buy a backfill. The API voter is stored as `keccak256(salt ‖ chainId ‖
+  account)` under a salt generated once in migration 0010, so an account counts
+  once and the table cannot be walked back to who holds what. `POST /v1/demand` is
+  the second allowlisted write in `guarded()` after `/ccip`, and `auth_test.go`
+  holds it open. Two earlier shapes were built and cut: a 1,024-bit bloom under an
+  `evmscan.hint` text record (unreadable without walking the daemon's token list),
+  then the enumerable list as `evmscan.contracts` on the reader's own name
+  (measured 418,386 gas for 10 contracts, 1,043,335 for 30, 2,131,297 for 65 on
+  mainnet ENS — per wallet, for what a counter stores once). Cost any ENS write
+  with `eth_estimateGas` against a real resolver, never from SSTORE arithmetic.
+- What a browser remembers about an account is spent on the next lookup, and the
+  shape of the spending is the invariant. It **adds**: every contract the memory
+  names is asked about whether or not the index offers it. It **orders**: named
+  candidates go ahead of the per-lookup cap, though never ahead of an indexed
+  asset. It **removes nothing**. It is read from localStorage only
+  (`evmscan.seen.<account>`, the two `HintResolver` records as JSON; an older
+  base64 filter under that key is no cache, not a broken one). Nothing is read from
+  ENS on the lookup page. Every failure is a note on screen and an empty seed, never
+  a lost lookup.
 - A reader's own triage of their own holdings ("set aside", `evmscan.aside.<account>`
-  in localStorage) decides what goes into their hint and nothing else. Set-aside
+  in localStorage) decides what the browser remembers and what the vote offers, and
+  nothing else. Set-aside
   contracts are still asked about, still read from the chain, still shown behind a
   toggle, and the valuation is untouched — it is the only reader-owned set stored as
   addresses rather than as a filter, because an undo that cannot be enumerated is not
-  an undo. `afterLookup` and `openWatchlist` must both honour it: a hint rebuilt from
-  everything on screen hands the dust back on the next lookup and the triage lasts
-  until the button is pressed again.
+  an undo. `afterLookup` and `openWatchlist` must both honour it: a memory rebuilt
+  from everything on screen hands the dust back on the next lookup and the triage
+  lasts until the button is pressed again.
 - Hint filters annotate, never filter. A token list is curated and therefore
   incomplete, so dropping what is not on one hides real holdings of long-tail tokens.
   `known` rides alongside a portfolio row and is absent — not false — when no list is

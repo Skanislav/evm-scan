@@ -26,6 +26,20 @@ type Candidate struct {
 	// candidate carries at most one live verdict: promoting clears this.
 	SpamAt     *time.Time
 	SpamReason string
+	// Voters is how many distinct accounts asked for this contract, through the API
+	// and on the registry together. A priority signal, never a verdict.
+	Voters uint64
+}
+
+// PromotionRule is what qualifies a candidate for automatic promotion. Either leg
+// alone is enough: activity when Activity is on, or demand when MinVoters is above
+// zero. Demand goes first in the order, because a contract people asked for beats
+// one that is merely busy.
+type PromotionRule struct {
+	Activity  bool
+	MinEvents uint64
+	MinBlocks uint64
+	MinVoters uint64
 }
 
 // CandidateFilter narrows a candidate listing. The zero value is the working view —
@@ -125,14 +139,16 @@ func (s *Store) ListCandidates(ctx context.Context, chainID uint64, f CandidateF
 	// every unjudged row, so with nothing marked the order is byte-identical to what it
 	// was before verdicts existed.
 	rows, err := s.pool.Query(ctx, `
-		SELECT chain_id, address, standard, first_seen_block, last_seen_block,
-		       event_count, blocks_seen, promoted_at, COALESCE(promotion_reason, ''),
-		       spam_at, COALESCE(spam_reason, '')
-		FROM candidates
-		WHERE chain_id = $1
-		  AND ($2 OR promoted_at IS NULL)
-		  AND ($3 OR spam_at IS NULL)
-		ORDER BY (spam_at IS NOT NULL), promoted_at NULLS FIRST, event_count DESC, blocks_seen DESC
+		SELECT c.chain_id, c.address, c.standard, c.first_seen_block, c.last_seen_block,
+		       c.event_count, c.blocks_seen, c.promoted_at, COALESCE(c.promotion_reason, ''),
+		       c.spam_at, COALESCE(c.spam_reason, ''), COALESCE(t.voters, 0)
+		FROM candidates c
+		LEFT JOIN asset_demand_totals t ON t.chain_id = c.chain_id AND t.address = c.address
+		WHERE c.chain_id = $1
+		  AND ($2 OR c.promoted_at IS NULL)
+		  AND ($3 OR c.spam_at IS NULL)
+		ORDER BY (c.spam_at IS NOT NULL), c.promoted_at NULLS FIRST, COALESCE(t.voters, 0) DESC,
+		         c.event_count DESC, c.blocks_seen DESC
 		LIMIT $4`, int64(chainID), f.IncludePromoted, f.IncludeSpam, f.Limit)
 	if err != nil {
 		return nil, err
@@ -141,18 +157,21 @@ func (s *Store) ListCandidates(ctx context.Context, chainID uint64, f CandidateF
 	return scanCandidates(rows)
 }
 
-// PromotableCandidates returns unpromoted contracts that clear the activity
-// thresholds, most active first.
-func (s *Store) PromotableCandidates(ctx context.Context, chainID, minEvents, minBlocks uint64, limit int) ([]Candidate, error) {
+// PromotableCandidates returns unpromoted, unjudged contracts that clear the rule,
+// most wanted first and then most active. spam_at is the whole spam rule: a
+// verdict drops a contract here and nowhere else.
+func (s *Store) PromotableCandidates(ctx context.Context, chainID uint64, rule PromotionRule, limit int) ([]Candidate, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT chain_id, address, standard, first_seen_block, last_seen_block,
-		       event_count, blocks_seen, promoted_at, COALESCE(promotion_reason, ''),
-		       spam_at, COALESCE(spam_reason, '')
-		FROM candidates
-		WHERE chain_id = $1 AND promoted_at IS NULL AND spam_at IS NULL
-		  AND event_count >= $2 AND blocks_seen >= $3
-		ORDER BY event_count DESC, blocks_seen DESC
-		LIMIT $4`, int64(chainID), int64(minEvents), int64(minBlocks), limit)
+		SELECT c.chain_id, c.address, c.standard, c.first_seen_block, c.last_seen_block,
+		       c.event_count, c.blocks_seen, c.promoted_at, COALESCE(c.promotion_reason, ''),
+		       c.spam_at, COALESCE(c.spam_reason, ''), COALESCE(t.voters, 0)
+		FROM candidates c
+		LEFT JOIN asset_demand_totals t ON t.chain_id = c.chain_id AND t.address = c.address
+		WHERE c.chain_id = $1 AND c.promoted_at IS NULL AND c.spam_at IS NULL
+		  AND (($2 AND c.event_count >= $3 AND c.blocks_seen >= $4)
+		       OR ($5 > 0 AND COALESCE(t.voters, 0) >= $5))
+		ORDER BY COALESCE(t.voters, 0) DESC, c.event_count DESC, c.blocks_seen DESC
+		LIMIT $6`, int64(chainID), rule.Activity, int64(rule.MinEvents), int64(rule.MinBlocks), int64(rule.MinVoters), limit)
 	if err != nil {
 		return nil, err
 	}
@@ -163,10 +182,12 @@ func (s *Store) PromotableCandidates(ctx context.Context, chainID, minEvents, mi
 // GetCandidate loads one observed contract.
 func (s *Store) GetCandidate(ctx context.Context, chainID uint64, addr common.Address) (Candidate, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT chain_id, address, standard, first_seen_block, last_seen_block,
-		       event_count, blocks_seen, promoted_at, COALESCE(promotion_reason, ''),
-		       spam_at, COALESCE(spam_reason, '')
-		FROM candidates WHERE chain_id = $1 AND address = $2`,
+		SELECT c.chain_id, c.address, c.standard, c.first_seen_block, c.last_seen_block,
+		       c.event_count, c.blocks_seen, c.promoted_at, COALESCE(c.promotion_reason, ''),
+		       c.spam_at, COALESCE(c.spam_reason, ''), COALESCE(t.voters, 0)
+		FROM candidates c
+		LEFT JOIN asset_demand_totals t ON t.chain_id = c.chain_id AND t.address = c.address
+		WHERE c.chain_id = $1 AND c.address = $2`,
 		int64(chainID), addr.Bytes())
 	if err != nil {
 		return Candidate{}, err
@@ -192,9 +213,10 @@ func scanCandidates(rows pgx.Rows) ([]Candidate, error) {
 			addr                  []byte
 			std                   int16
 			first, last, ev, blks int64
+			voters                int64
 		)
 		if err := rows.Scan(&cid, &addr, &std, &first, &last, &ev, &blks,
-			&c.PromotedAt, &c.PromotionReason, &c.SpamAt, &c.SpamReason); err != nil {
+			&c.PromotedAt, &c.PromotionReason, &c.SpamAt, &c.SpamReason, &voters); err != nil {
 			return nil, err
 		}
 		c.ChainID = uint64(cid)
@@ -202,6 +224,7 @@ func scanCandidates(rows pgx.Rows) ([]Candidate, error) {
 		c.Standard = uint8(std)
 		c.FirstSeenBlock, c.LastSeenBlock = uint64(first), uint64(last)
 		c.EventCount, c.BlocksSeen = uint64(ev), uint64(blks)
+		c.Voters = uint64(voters)
 		out = append(out, c)
 	}
 	return out, rows.Err()

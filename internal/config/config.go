@@ -202,6 +202,10 @@ type Discovery struct {
 	MinEvents            uint64 `yaml:"min_events"`
 	MinBlocks            uint64 `yaml:"min_blocks"`
 	MaxPromotionsPerTick int    `yaml:"max_promotions_per_tick"`
+	// MinVoters lets demand alone promote a contract that this many distinct
+	// accounts voted for, with auto_promote on or off. 0 (the default) means votes
+	// only order the queue. Keep it above 1 on a metered node.
+	MinVoters uint64 `yaml:"min_voters"`
 }
 
 // Pricing configures on-chain price discovery for one chain.

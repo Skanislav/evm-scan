@@ -145,11 +145,16 @@ where a reader would otherwise assume a protection they do not have:
   `testdata/browser-watch.xorf` (prf) and `testdata/browser-watch-pbkdf2.xorf` (password) |
 | private lookup: the index filter tested in the browser instead of `/v1/accounts` | shipped;
   cross-checked against the hosted mainnet index, same contracts, address never sent |
-| the reader's own holdings hint: built, stored, published to `evmscan.hint` | shipped |
-| that hint **read back and spent** on the next lookup | shipped; from localStorage and
-  from a typed name's record. Adds contracts off the enumerable token list, orders the
-  candidate cap, removes nothing, and says on screen what it did. Skipped when the
-  1,024-bit bloom is too full to answer (see below) |
+| the browser's memory of an account, **spent** on the next lookup | shipped; localStorage
+  only. Adds every contract it names, orders the candidate cap, removes nothing, and
+  says on screen what it did |
+| a vote for the held contracts the index does not keep (`POST /v1/demand`, `HintRegistry.vote`) | shipped;
+  voter hashed under a per-deployment salt so the table cannot be enumerated (it can
+  still be tested by whoever holds the salt), one count per account, promotion by
+  `min_voters` (see below) |
+| a separate reader page (`read.html`) that reads an account from the registry's ENS name | shipped;
+  gateway followed in the browser and named, answer verified against the finalized
+  root, balances by deployless lens on the reader's RPC, no account sent to the daemon |
 | reader triage of their own holdings, deciding what the hint carries | shipped, local
   to the browser; does not change what is asked about or what is valued |
 
@@ -158,24 +163,44 @@ wallet tab can answer "which indexed contracts has this account touched" from a 
 downloaded, without the daemon learning the address. The passkey path still cannot be
 exercised headlessly, so the fixture that pins the format end to end is the password one.
 
-The reader's own hint is no longer write-only. A lookup reads it from this browser and,
-when a name was typed, from that name's `evmscan.hint` record, and spends it locally:
-one fetch of `/v1/hints/tokens-<chain>.json`, which every visitor gets byte for byte,
-and a membership test per contract in the browser. The daemon is never told which
-account any of it was run for. It only ever adds contracts to the read and orders the
-ones already queued — a miss means "not held when this was built", which is not an
-answer about now.
+The reader's act on their own wallet went through three shapes, and the record is
+worth keeping. First a 1,024-bit bloom under an `evmscan.hint` text record: small,
+and unreadable without a dictionary, so reading it back meant walking the daemon's
+token list, which put the daemon back in the path and missed anything off the list.
+Then the enumerable list, `evmscan.contracts` on the reader's own name: readable in
+one call, and measured at 418,386 gas for 10 contracts, 1,043,335 for 30, 2,131,297
+for 65 — per wallet, for what a counter per contract stores once for everyone. So
+the list went, and what is left is a **vote**: the held contracts the index does not
+keep can be asked for, through `POST /v1/demand` or `HintRegistry.vote` on chain. A
+vote is a priority signal for what gets indexed next and nothing else; once a
+contract is indexed the account's rows are in a root, and `read.html` reads them
+back from the registry's ENS name with the daemon out of the path.
 
-The limit is arithmetic and worth stating, because it is the reason the walk sometimes
-does not happen. The hint is a fixed 1,024 bits, so its false-positive rate depends on
-how many contracts went in. Measured against the mainnet deployment's 5,862-contract
-list, at the sizing `buildSlotHint` uses: 0.03% at 27 holdings, 0.26% at 65, 0.70% at
-100, 2.44% at 130, 9.62% at 200. Past the point where expected false positives exceed
-the hint's own key count — between 100 and 130 holdings — walking the list would mostly
-guess, so it is skipped, which leaves exactly the behaviour of having no hint at all.
-An account large enough to hit that is an account the index is the better answer for.
+What the vote discloses is exactly what a hosted lookup already does: the account
+and the contracts it holds. The page says so on the button, because a reader who
+came in through the private mode has so far told the daemon nothing. The daemon
+stores the voter as `keccak256(salt ‖ chainId ‖ account)` under a salt generated once
+at migration. Be exact about what that buys: the table cannot be enumerated back to
+accounts, so a dump is not a list of who holds what. It is not a blinded filter —
+the salt sits in the operator's own `settings` table beside the hashes, so the
+operator, or anyone holding a dump with it, can still test a guessed account
+against a contract. A vote buys no position: `spam_at` still drops a
+contract from the promotable set, promotion is budgeted per tick, and `min_voters`
+sits above one on a metered node so a single fresh address cannot buy a backfill.
 
-The reader's triage of their own holdings is what the hint carries. It never decides
+The browser still remembers what an account held, in localStorage only, and a
+lookup spends that memory: it adds contracts to the read and orders the ones
+already queued — absence means "not held last visit", which is not an answer about
+now. Nothing is read from ENS on the lookup page any more.
+
+`read.html` is the other end: an account or name in, the registry's
+`<hex>.hints.<parent>` name, its contracts record verified against the latest
+finalized root by the registry's own callback, balances from a deployless lens call
+on an RPC the reader names. The page follows the resolver's gateway itself and
+names it, so the hop is visible.
+
+The reader's triage of their own holdings is what the memory carries and what the
+vote offers. It never decides
 what is read: a contract set aside is still asked about at head on every lookup and
 still shown behind a toggle. Nothing about it leaves the browser, and it is stored as
 addresses rather than as a filter because it is the one set here that has to be

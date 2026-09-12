@@ -145,6 +145,11 @@ chains:
       min_events: 2000
       min_blocks: 500
       max_promotions_per_tick: 1
+      # Demand can promote on its own: a contract this many distinct accounts voted
+      # for (through POST /v1/demand or HintRegistry.vote) is indexed whether or not
+      # it is busy, one per tick. Above one, so a single fresh address cannot buy a
+      # backfill on the verified quota for free.
+      min_voters: 3
 
     # Two lists, merged into one membership filter and published at /v1/hints. This
     # is the only third-party HTTP this process does, it happens once at startup, and

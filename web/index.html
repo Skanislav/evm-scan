@@ -624,6 +624,7 @@
     <span class="pill" id="pill-node" hidden></span>
     <span class="pill amber" id="pill-epoch" hidden></span>
     <nav class="toplinks">
+      <a href="read.html">Read a commitment</a>
       <a href="#beat5">Verify</a>
       <a href="#beat4">Operator</a>
       <a href="https://github.com/Skanislav/evm-scan" target="_blank" rel="noopener">GitHub</a>
@@ -2577,6 +2578,28 @@ async function requestIndexing(token, kind, from, value) {
   });
 }
 
+// voteOnChain is the registry's own counter: HintRegistry.vote(chainId, tokens) from
+// the reader's wallet on the registry's chain. Free apart from gas, one count per
+// address per asset, and read back by every indexer that mirrors the registry — the
+// daemon-side vote above is this deployment's; this one outlives it.
+const VOTE_SELECTOR = '0x7c6afb33'; // vote(uint64,address[])
+function encodeVote(chainId, tokens) {
+  const addrs = tokens.map(t => {
+    const a = String(t).toLowerCase().replace(/^0x/, '');
+    if (!/^[0-9a-f]{40}$/.test(a)) throw new Error(`not an address: ${t}`);
+    return a.padStart(64, '0');
+  });
+  return VOTE_SELECTOR + word(chainId) + word(64) + word(addrs.length) + addrs.join('');
+}
+async function voteOnChain(chainId, tokens) {
+  if (!REG.address) throw new Error('this deployment names no registry');
+  if (!WALLET) await ensureWallet();
+  return await window.ethereum.request({
+    method: 'eth_sendTransaction',
+    params: [{ from: WALLET, to: REG.address, data: encodeVote(chainId, tokens) }],
+  });
+}
+
 // --------------------------------------------------------------------------
 // Candidates, verdicts and the ledger
 // --------------------------------------------------------------------------
@@ -2604,10 +2627,10 @@ function queue() {
 function renderQueue() {
   const q = queue();
   $('tab-queue').textContent = num(q.length);
-  $('queue-intro').textContent = THRESHOLDS.min_events
+  $('queue-intro').textContent = (THRESHOLDS.min_events
     ? `Candidates that cleared the promotion thresholds — ${num(THRESHOLDS.min_events)} events across ` +
-      `${num(THRESHOLDS.min_blocks)} blocks — and are waiting on a verdict. Busiest first.`
-    : 'Candidates that cleared the promotion thresholds and are waiting on a verdict. Busiest first.';
+      `${num(THRESHOLDS.min_blocks)} blocks${THRESHOLDS.min_voters ? `, or ${num(THRESHOLDS.min_voters)} accounts asking` : ''} — and are waiting on a verdict.`
+    : 'Candidates that cleared the promotion thresholds and are waiting on a verdict.') + ' Most asked for first, then busiest.';
 
   // The card above shows the head of the queue; this is what follows it.
   const rest = q.slice(1, 6);
@@ -2615,7 +2638,7 @@ function renderQueue() {
     <div class="q-row">
       <div class="q-name" title="${esc(c.address)}"><b>${c.symbol ? esc(c.symbol) : short(c.address, 5)}</b>${
         c.name ? ` <span class="quiet">${esc(c.name)}</span>` : ''}</div>
-      <div class="q-n">${num(c.event_count)} ev · ${num(c.blocks_seen)} blk</div>
+      <div class="q-n">${c.voters ? `<b>${num(c.voters)} voter${c.voters === 1 ? '' : 's'}</b> · ` : ''}${num(c.event_count)} ev · ${num(c.blocks_seen)} blk</div>
       <div class="q-act">
         <button class="btn btn-primary" data-approve="${esc(c.address)}">promote</button>
         <button class="btn btn-spam" data-spam="${esc(c.address)}">spam</button>
@@ -3453,7 +3476,7 @@ window.evmscanHints = {
   subkey: xorfSubkey, contains: xorfContains, pairKey, tokenKey,
   interopKey, interopSubkey, interop7930,
   lookalike: lookalikeOf,
-  requestIndexing, registry: () => REG, head: () => HEAD, indexedChain: () => INDEXED_CHAIN,
+  requestIndexing, voteOnChain, registry: () => REG, head: () => HEAD, indexedChain: () => INDEXED_CHAIN,
   weiToEth, ethToWei,
   namehash: async (name) => namehash(await import(VIEM_MODULE), normalizeName(name)),
   normalizeName, rpc, nameRpc, viem: () => import(VIEM_MODULE),
@@ -4394,13 +4417,10 @@ async function lookup() {
     WALLET_HINT = '';
     showResolved(resolved.name ? resolved : null);
 
-    // The hint read starts here, beside the account fetch rather than after it. The
-    // local half is instant; the ENS half is a mainnet eth_call, and a lookup should
-    // not wait for it in series with the request it was going to make anyway. Only a
-    // name that was typed is read — see hints.js for why a pasted address is not
-    // reverse-resolved to go looking for one.
+    // What this browser remembered about the account last visit, read beside the
+    // account fetch rather than after it. Local only; nothing is read from ENS.
     const seedP = loadHints()
-      .then(m => m.seedFor(addr, ADDRESS_RE.test(typed) ? '' : typed))
+      .then(m => m.seedFor(addr))
       .catch(() => null);
 
     const r = await api(onChain(`/v1/accounts/${addr}?prices=true`));
@@ -4623,30 +4643,30 @@ function wireAsideButtons(root) {
 }
 
 // --------------------------------------------------------------------------
-// Spending the reader's own hint
+// Spending the reader's own commitment
 //
-// A hint is the one artifact on this page that belongs to the reader rather than to
-// the deployment, and until now the page only ever wrote one. This is where it gets
-// spent, and the shape of the spending is the whole argument:
+// A commitment is the one artifact on this page that belongs to the reader rather
+// than to the deployment: the contracts they held, as a list, in this browser and
+// on their ENS name. This is where it gets spent, and the shape of the spending is
+// the whole argument:
 //
-//   - It ADDS. The deployment publishes its token list in an enumerable form
-//     (/v1/hints/tokens-<chain>.json) precisely so a reader can walk it locally, and
-//     the hint picks out of that walk the contracts this account has held before.
-//     Those get asked about whether or not the index has ever heard of them.
+//   - It ADDS. Every contract the list names gets asked about, whether or not the
+//     index has ever heard of it. The list is this browser's memory of last visit
+//     and needs nothing from this deployment.
 //   - It ORDERS. Discovery produces far more candidates than one lookup can ask
 //     about, and the cap that follows was always going to drop some. It now drops the
 //     ones this account has not held instead of the ones discovery happened to see
 //     last.
 //   - It REMOVES nothing. There is no branch below that skips a contract because the
-//     hint missed it. A bloom miss means "not held when this was built", which is not
-//     a claim about now, and e23aa30 is what happens when a filter is allowed to make
+//     list lacks it. Absence means "not held when this was written", which is not a
+//     claim about now, and e23aa30 is what happens when a filter is allowed to make
 //     that claim: 65 real holdings became 1.
 //
-// Every test runs in this browser against files that are byte-identical for every
-// visitor. The daemon is not told which account any of it was run for.
+// The daemon is not told which account any of it was run for: the copy is read
+// here.
 // --------------------------------------------------------------------------
 async function spendHint(seed, chainId, known) {
-  const use = { sources: [], notes: [], hinted: new Set(), vouched: [], scanned: 0, list: '', asked: 0, held: 0 };
+  const use = { sources: [], notes: [], hinted: new Set(), vouched: [], asked: 0, held: 0 };
   // seed is null only when the module itself failed to load, which already cost the
   // reader nothing visible and should not start now.
   if (!seed) return use;
@@ -4658,15 +4678,10 @@ async function spendHint(seed, chainId, known) {
   // Which of the candidates the index is offering has this account held before?
   use.hinted = await m.mark(seed, chainId, CANDIDATES.filter(c => !c.promoted).map(c => c.address));
 
-  // And what does the hint name that the index never offered at all? This is the half
-  // that makes the stored promise true — "the contracts this account has actually
-  // held, asked about immediately, instead of walking a token list to rediscover
-  // them" was written next to storeSeen long before anything read it back.
+  // And what does the commitment name that the index never offered at all? This is
+  // the half that makes the stored promise true: the contracts this account has
+  // actually held, asked about immediately.
   const v = await m.vouchedBy(seed, chainId);
-  use.scanned = v.scanned;
-  use.list = v.list;
-  use.dense = v.dense;
-  use.noise = v.noise;
   const dup = new Set([...use.hinted, ...ASSETS.map(a => a.address.toLowerCase())]);
   use.vouched = v.tokens.filter(a => {
     const k = a.toLowerCase();
@@ -4698,31 +4713,23 @@ function renderHintUse() {
     const from = u.sources
       .map(s => `${esc(s.where)} <span class="empty">(${num(s.count)} contract${s.count === 1 ? '' : 's'})</span>`)
       .join(' and ');
-    parts.push(`Asked the chain about ${num(u.asked)} contract${u.asked === 1 ? '' : 's'}, ordered by your hint — from ${from}.`);
+    parts.push(`Asked the chain about ${num(u.asked)} contract${u.asked === 1 ? '' : 's'}, ordered by what this browser remembered — from ${from}.`);
 
     if (u.vouched.length) {
-      const where = u.list ? `${esc(u.list)}, the token list this deployment publishes` : 'this deployment&rsquo;s token list';
-      parts.push(`${num(u.vouched.length)} of them the index never offered: your hint recognised them out of the
-        ${num(u.scanned)} contracts in ${where}, tested here in your browser against a file every visitor gets
-        byte for byte. ${num(u.held)} of the rows above are held contracts your hint already knew about.`);
-    } else if (u.dense) {
-      parts.push(`Your hint was not walked against this deployment&rsquo;s ${num(u.scanned)}-contract token list:
-        it holds enough contracts that the 1,024-bit filter would have guessed about ${num(u.noise)} of them
-        wrongly, which is more than it could possibly have found. So the list was left alone — the same as
-        having no hint, not less. The ordering above still used it.`);
-    } else if (u.scanned) {
-      parts.push(`It named nothing the index was not already going to ask about, out of the ${num(u.scanned)}
-        contracts in this deployment&rsquo;s token list.`);
+      parts.push(`${num(u.vouched.length)} of them the index never offered: this browser remembered them, so they
+        were read at head like everything else. ${num(u.held)} of the rows above are held contracts it already
+        knew about.`);
+    } else {
+      parts.push(`It named nothing the index was not already going to ask about.`);
     }
 
-    parts.push(`<strong>Nothing was hidden by it.</strong> A hint says where to look and never what is there:
-      a miss means the contract was not held when the hint was built, which is not an answer about now, so
+    parts.push(`<strong>Nothing was hidden by it.</strong> A memory says where to look and never what is
+      there: a contract it lacks was not held last visit, which is not an answer about now, so
       everything the index offered was asked about anyway and every balance above was read from the chain.`);
   }
 
-  // The notes are the reasons a hint was not used, and they are worth more than the
-  // silence they replace. "That name has a record but it is a watchlist" is a fixable
-  // complaint; a wallet that looks empty for the same reason is not.
+  // The notes are the reasons the memory was not used, and they are worth more than
+  // the silence they replace.
   for (const n of u.notes) parts.push(`<span class="empty">${esc(n)}</span>`);
 
   el.innerHTML = parts.join('<br>');
