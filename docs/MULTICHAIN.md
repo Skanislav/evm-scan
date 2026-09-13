@@ -801,10 +801,10 @@ Each step is useful shipped alone, and each is a small commit.
 6. **Done.** The `web/index.html` panel. This is where it becomes "add a network" rather than
    "an endpoint that adds a network".
 7. Migration 0007 + curated seed + `ProbeOrigin` + `/v1/assets/{a}/peers`. This is the
-   "same token elsewhere" feature, with no account flow yet.
-8. Tier-1 live fan-out: `cross_chain=true` and `chain_id=all`.
-9. `chain_demand` recording and `/v1/chains/demand`.
-10. Tier-2 cross-chain promotion, off by default.
+   "same token elsewhere" feature, with no account flow yet. *(Not built.)*
+8. Tier-1 live fan-out: `cross_chain=true` and `chain_id=all`. *(Not built.)*
+9. `chain_demand` recording and `/v1/chains/demand`. *(Not built.)*
+10. Tier-2 cross-chain promotion, off by default. *(Not built.)*
 
 Steps 1–6 make the daemon multichain and give it a way in. 7–8 make it *feel*
 multichain. 9–10 make it pay for itself.

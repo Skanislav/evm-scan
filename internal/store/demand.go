@@ -143,17 +143,30 @@ func (s *Store) SetOnchainDemand(ctx context.Context, chainID uint64, addr commo
 // this deployment has since moved away from does not linger as a phantom voter.
 func (s *Store) ReplaceOnchainDemand(ctx context.Context, rows []DemandRow) error {
 	return s.inTx(ctx, func(tx pgx.Tx) error {
+		// One statement in, one statement out, inside one transaction: CopyFrom
+		// streams the whole set instead of one round trip per row — the table is
+		// small but this runs on every mirror sync, and a registry with thousands
+		// of demand entries turned the row loop into a long transaction holding a
+		// lock on the table. The delete is safe inside the same transaction: the
+		// copy is what a reader outside it sees next, all of it or none of it.
 		if _, err := tx.Exec(ctx, `DELETE FROM asset_demand_onchain`); err != nil {
 			return err
 		}
-		for _, r := range rows {
-			if _, err := tx.Exec(ctx, `
-				INSERT INTO asset_demand_onchain (chain_id, address, voters, synced_at)
-				VALUES ($1, $2, $3, now())
-				ON CONFLICT (chain_id, address) DO UPDATE SET voters = EXCLUDED.voters, synced_at = now()`,
-				int64(r.ChainID), r.Address.Bytes(), int64(r.OnchainVoters)); err != nil {
-				return err
-			}
+		if len(rows) == 0 {
+			return nil
+		}
+		in, err := tx.CopyFrom(ctx,
+			pgx.Identifier{"asset_demand_onchain"},
+			[]string{"chain_id", "address", "voters", "synced_at"},
+			pgx.CopyFromSlice(len(rows), func(i int) ([]any, error) {
+				return []any{int64(rows[i].ChainID), rows[i].Address.Bytes(),
+					int64(rows[i].OnchainVoters), time.Now()}, nil
+			}))
+		if err != nil {
+			return err
+		}
+		if in != int64(len(rows)) {
+			return fmt.Errorf("store: on-chain demand copy wrote %d of %d rows", in, len(rows))
 		}
 		return nil
 	})

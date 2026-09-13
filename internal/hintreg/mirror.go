@@ -162,6 +162,18 @@ func (m *Mirror) Sync(ctx context.Context) error {
 				"chain_id", a.ChainID, "token", a.Token.Hex(),
 				"registrant", a.Registrant.Hex(), "anchor_block", head)
 			touched[a.ChainID] = true
+		} else {
+			// An asset that came back to life on-chain after a revocation must not
+			// keep the scan state of its earlier life: RegisterAsset never touches
+			// an existing cursor, so the reset is explicit. A fresh registration
+			// reads as pending until the backfill starts, which is exactly the
+			// shape a re-registered one has; an asset mid-scan or live is left
+			// alone. Cost when nothing changed: one asset read per hint per sync.
+			if a0, err := m.st.GetAsset(ctx, a.ChainID, a.Token); err == nil && a0.Status == store.StatusPending {
+				if err := m.st.ReRegisterAsset(ctx, a.ChainID, a.Token, head); err != nil {
+					return err
+				}
+			}
 		}
 	}
 

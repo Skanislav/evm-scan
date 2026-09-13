@@ -75,7 +75,7 @@ func (s *Store) InsertPending(ctx context.Context, chainID uint64, evs []Pending
 		INSERT INTO pending_events
 			(chain_id, block_number, block_hash, log_index, asset, account, role)
 		VALUES ($1,$2,$3,$4,$5,$6,$7)
-		ON CONFLICT (chain_id, block_number, log_index, account, role) DO NOTHING`
+		ON CONFLICT (chain_id, block_number, block_hash, log_index, account, role) DO NOTHING`
 
 	return s.inTx(ctx, func(tx pgx.Tx) error {
 		b := &pgx.Batch{}

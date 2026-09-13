@@ -130,7 +130,7 @@ func (s *Store) RegisterAsset(ctx context.Context, a Asset, anchorBlock uint64) 
 			return err
 		}
 
-		// Seed the cursor only on first registration; DO NOTHING protects progress.
+		// Seed the cursor on first registration; DO NOTHING protects progress.
 		ct, err := tx.Exec(ctx, `
 			INSERT INTO asset_cursors (chain_id, address, anchor_block, backfill_next, tail_block)
 			VALUES ($1, $2, $3, $4, $3)
@@ -143,6 +143,23 @@ func (s *Store) RegisterAsset(ctx context.Context, a Asset, anchorBlock uint64) 
 		return nil
 	})
 	return created, err
+}
+
+// ReRegisterAsset resets an asset's scan state after a revocation.
+//
+// RegisterAsset deliberately never touches an existing cursor, so a plain
+// re-register of a revoked asset would keep whatever progress the old
+// registration had bought — including a half-finished backfold and a tail that
+// was never re-verified against the chain. This starts it over: a fresh anchor,
+// a fresh backfill, an empty tail. The rollup rows are left alone; folding
+// again is idempotent per (account, asset) upsert arithmetic.
+func (s *Store) ReRegisterAsset(ctx context.Context, chainID uint64, addr common.Address, anchorBlock uint64) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE asset_cursors
+		SET anchor_block = $3, backfill_next = $4, backfill_done = FALSE, tail_block = $3, updated_at = now()
+		WHERE chain_id = $1 AND address = $2`,
+		int64(chainID), addr.Bytes(), int64(anchorBlock), int64(backfillStart(anchorBlock)))
+	return err
 }
 
 // backfillStart is the first block the backward scan should examine.

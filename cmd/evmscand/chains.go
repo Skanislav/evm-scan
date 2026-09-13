@@ -268,8 +268,16 @@ func (sv *supervisor) launch(e *chainset.Entry, fatal bool) {
 		if entry, ok := sv.set.Remove(e.ID); ok && entry.Source != nil {
 			entry.Source.Close()
 		}
-		_ = sv.st.SetChainError(context.WithoutCancel(sv.runCtx), e.ID, err)
-		_ = sv.st.SetChainTrust(context.WithoutCancel(sv.runCtx), e.ID, store.TrustQuarantined, "daemon")
+		// A failed persist does not undo the quarantine in memory, but a restart
+		// would bring the chain back enabled and verified with no error recorded.
+		// Log it so the operator knows the durable state kept the bad chain.
+		pctx := context.WithoutCancel(sv.runCtx)
+		if err := sv.st.SetChainError(pctx, e.ID, err); err != nil {
+			sv.log.Error("could not persist chain error; restart will lose the quarantine reason", "chain_id", e.ID, "err", err)
+		}
+		if err := sv.st.SetChainTrust(pctx, e.ID, store.TrustQuarantined, "daemon"); err != nil {
+			sv.log.Error("could not persist chain quarantine; restart will rerun the failed chain", "chain_id", e.ID, "err", err)
+		}
 	}()
 }
 

@@ -141,11 +141,24 @@ func (s *Service) run(ctx context.Context) error {
 	// is enough spend to fail. runBackfill probes lazily when an asset actually
 	// needs a floor.
 	//
-	// A failure here is also not fatal any more. It used to return, which stopped
-	// this chain's indexer, which cancelled the context every other chain's indexer
-	// and the publisher share: a throttled RPC on a chain carrying no index could
-	// take the whole deployment down, and did.
-	if s.shouldProbeFloor(ctx) {
+	// A confirmation depth of zero folds every event into the rollup the tick it
+	// is buffered, which is the documented instant-finality mode for a dev chain
+	// and a foot-gun anywhere else: a one-block reorg corrupts the rollup with no
+	// recovery path. Warn rather than refuse — the operator may know their chain
+	// — but make the choice visible in the log.
+	if s.opt.Confirmations == 0 {
+		s.log.Warn("confirmations=0: events are promoted on arrival with no reorg protection; set confirmations >= 1 outside a dev chain")
+	}
+	// The floor is persisted, so a restart should not have to re-buy the probe
+	// before the first backfill, and the status page should not report 0 until
+	// the first probe lands. A stored floor is adopted as-is; the first failed
+	// backfill re-probes if the node has since pruned further.
+	if floor, probed, err := s.st.HistoryFloor(ctx, s.chainID); err != nil {
+		s.log.Warn("stored history floor unreadable; probing instead", "err", err)
+	} else if probed {
+		s.historyFloor.Store(floor)
+		s.floorProbed.Store(true)
+	} else if s.shouldProbeFloor(ctx) {
 		if err := s.resolveHistoryFloor(ctx); err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
@@ -285,8 +298,12 @@ func (s *Service) followTick(ctx context.Context) error {
 		}
 		return s.recordHead(ctx, head)
 	}
-
 	seen := make(map[common.Address]uint64, len(cursors))
+	// lastScan is the highest block the sweep actually read for each asset. A
+	// multi-asset query returns whatever the chunk holds; an asset with no logs in
+	// it cannot have its tail advanced past what was scanned for it, or the
+	// follower would skip blocks it never queried.
+	lastScan := make(map[common.Address]uint64, len(cursors))
 	q := chain.Query{From: from, To: head, Addresses: addrs, Topics: evmlog.WatchedTopics()}
 
 	err = chain.SweepLogs(ctx, s.src, q, chain.ChunkOpts{Max: s.opt.TailWindow},
@@ -299,6 +316,13 @@ func (s *Service) followTick(ctx context.Context) error {
 				if logs[i].BlockNumber > tailOf[logs[i].Address] {
 					kept = append(kept, logs[i])
 					seen[logs[i].Address]++
+				}
+			}
+			// Every asset in the query has now been scanned through `cto` — the
+			// chunk is a getLogs over all of them, so a miss is a scanned miss.
+			for _, a := range addrs {
+				if cto > lastScan[a] {
+					lastScan[a] = cto
 				}
 			}
 
@@ -317,7 +341,7 @@ func (s *Service) followTick(ctx context.Context) error {
 	}
 
 	for _, c := range cursors {
-		if err := s.st.AdvanceTail(ctx, s.chainID, c.Address, head, seen[c.Address]); err != nil {
+		if err := s.st.AdvanceTail(ctx, s.chainID, c.Address, lastScan[c.Address], seen[c.Address]); err != nil {
 			return err
 		}
 	}
@@ -334,8 +358,11 @@ func (s *Service) followTick(ctx context.Context) error {
 // confirmation depth, so there is nothing there to undo.
 func (s *Service) handleReorg(ctx context.Context) error {
 	hashes, err := s.st.PendingBlockHashes(ctx, s.chainID, 0)
-	if err != nil || len(hashes) == 0 {
+	if err != nil {
 		return err
+	}
+	if len(hashes) == 0 {
+		return nil
 	}
 
 	blocks := make([]uint64, 0, len(hashes))
@@ -376,7 +403,11 @@ func (s *Service) rewind(ctx context.Context, from uint64, reason string) error 
 func (s *Service) recordHead(ctx context.Context, head uint64) error {
 	hash, err := s.src.HeaderHash(ctx, head)
 	if err != nil {
-		return nil // head moved under us; the next tick will catch it
+		// Head moved under us or the node hiccuped; the next tick re-reads it.
+		// Not silent: the chain row's head is the status page's evidence, so the
+		// operator should know it went stale.
+		s.log.Debug("head hash unavailable; chain head not recorded", "head", head, "err", err)
+		return nil
 	}
 	return s.st.SetChainHead(ctx, s.chainID, head, hash)
 }
@@ -431,7 +462,14 @@ func (s *Service) backfillAsset(ctx context.Context, c store.Cursor) error {
 	}
 
 	floor := resolveBackfillFloor(asset.HintFromBlock, s.HistoryFloor())
-	if c.AnchorBlock == 0 || c.BackfillNext < floor {
+	// A cursor with no anchor has never been anchored to a block that is known to
+	// exist on this chain, so "nothing below the anchor" is not a fact we hold.
+	// Pretending the backfill is done would mark history complete that was never
+	// read; the walk cannot start until an anchor arrives.
+	if c.AnchorBlock == 0 {
+		return fmt.Errorf("backfill: %s has no anchor block; cannot bound its history walk", c.Address.Hex())
+	}
+	if c.BackfillNext < floor {
 		return s.finishBackfill(ctx, c.Address, floor)
 	}
 	if c.BackfillFloor != floor {
@@ -608,10 +646,12 @@ func (s *Service) resolveHistoryFloor(ctx context.Context) error {
 }
 
 // reprobeHistoryFloor re-runs the probe after a backfill failure and returns the new
-// floor. Errors are swallowed: the caller only wants to know whether the horizon moved.
+// floor. The caller only wants to know whether the horizon moved, but a probe that
+// fails every tick means backfills spin on the same window forever, so the failure
+// is a warning, not a note: an operator has to be able to see it.
 func (s *Service) reprobeHistoryFloor(ctx context.Context) uint64 {
-	if err := s.resolveHistoryFloor(ctx); err != nil {
-		s.log.Debug("history floor re-probe failed", "err", err)
+	if err := s.resolveHistoryFloor(ctx); err != nil && ctx.Err() == nil {
+		s.log.Warn("history floor re-probe failed; backfill will retry the same window", "err", err)
 	}
 	return s.HistoryFloor()
 }

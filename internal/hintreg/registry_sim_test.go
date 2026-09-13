@@ -341,6 +341,58 @@ func TestCoverageRewardsOnSimulatedChain(t *testing.T) {
 	if got, want := s.balance(ctx, registry), new(big.Int).Sub(new(big.Int).Add(funding, big.NewInt(rewardPerBlock*3)), paidOut); got.Cmp(want) != 0 {
 		t.Fatalf("registry balance: want %s, got %s", want, got)
 	}
+	// ------------------------------- a gap leaf is paid for its own span only
+	// The paid range is [5,30]. A leaf [40,50] is entirely outside it and earns 11
+	// blocks; the gap 31..39 it skips is never paid, because payment follows the
+	// leaf's own proof.
+	data, _ = regABI.Pack("fundAsset", [32]byte(fundedKey))
+	s.mustSend(ctx, registry, big.NewInt(rewardPerBlock*40), data)
+	if q, want := mustClaimable(t, client, fundedKey, 40, 50), big.NewInt(rewardPerBlock*11); q.Cmp(want) != 0 {
+		t.Fatalf("gap-skipping leaf: want %s, got %s", want, q)
+	}
+	// A leaf that spans the gap itself, [31,50], does earn for 31..50: 20 blocks.
+	if q, want := mustClaimable(t, client, fundedKey, 31, 50), big.NewInt(rewardPerBlock*20); q.Cmp(want) != 0 {
+		t.Fatalf("gap-spanning leaf: want %s, got %s", want, q)
+	}
+
+	// Both have to hold on-chain, not just in the quote: publish, finalize and claim
+	// a coverage root carrying only the gap-skipping leaf, then check the payout.
+	st.cursors[0].BackfillFloor = 40
+	st.cursors[0].TailBlock = 50
+	st.cursors[1].TailBlock = 0 // drop the free asset from this epoch's coverage
+	st.to = 50
+	e3, err := pub.Build(ctx, chainID, "", false)
+	if err != nil {
+		t.Fatalf("build 3: %v", err)
+	}
+	if _, err := pub.Publish(ctx, e3.ID); err != nil {
+		t.Fatalf("publish 3: %v", err)
+	}
+	s.pastWindow(window)
+	if n, err := pub.FinalizeDue(ctx, chainID); err != nil || n != 1 {
+		t.Fatalf("finalize 3: n=%d err=%v", n, err)
+	}
+	if n, err := pub.ClaimDue(ctx, chainID); err != nil || n != 1 {
+		t.Fatalf("claim 3: n=%d err=%v", n, err)
+	}
+	paid3 := big.NewInt(rewardPerBlock * 11)
+	if got := mustEpoch(t, st, e3.ID); got.RewardWei != paid3.String() {
+		t.Fatalf("epoch 3 claim: want %s, got %+v", paid3, got)
+	}
+	f, _ = client.Funding(ctx, fundedKey)
+	if f.PaidFrom != 5 || f.PaidTo != 50 {
+		t.Fatalf("paid range after gap claim: [%d,%d]", f.PaidFrom, f.PaidTo)
+	}
+	// The gap itself never got paid: epoch 3 earned exactly its 11 proven blocks
+	// (checked above), not 11 + 9 gap blocks. The registry balance confirms it:
+	// every wei that came in minus everything claimed is still here: 100 blocks of
+	// original funding, a 40-block topup, a 3-block topup on the free asset, minus
+	// claims of 16, 10 and 11 blocks. (The free asset's 3-block claim was only
+	// quoted, never submitted, so it stays in the balance.)
+	want := big.NewInt(rewardPerBlock * (100 + 40 + 3 - 16 - 10 - 11))
+	if got := s.balance(ctx, registry); got.Cmp(want) != 0 {
+		t.Fatalf("registry balance after gap claim: want %s, got %s", want, got)
+	}
 }
 
 func mustEpoch(t *testing.T, st *memStore, id int64) store.Epoch {

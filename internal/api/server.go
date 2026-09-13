@@ -250,7 +250,6 @@ func New(d Deps) *Server {
 	s.mux.HandleFunc("GET /v1/accounts/{address}/asset-commit", s.getAssetCommit)
 	s.mux.HandleFunc("POST /v1/accounts/{address}/asset-commit", s.postAssetCommit)
 
-
 	if d.WebDir != "" {
 		s.mux.Handle("/", http.FileServer(http.Dir(d.WebDir)))
 	}

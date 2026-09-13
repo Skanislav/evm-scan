@@ -394,6 +394,7 @@ contract HintRegistry is IOptimisticOracleV3CallbackRecipient, Ownable2Step, EIP
         returns (bytes32 key)
     {
         if (msg.value != assetBond) revert BadBond();
+        _checkHint(token, kind);
         key = assetKey(chainId, token);
         if (_assets[key].active) revert AlreadyRegistered();
         _register(key, chainId, token, kind, fromBlock, msg.value);
@@ -411,6 +412,7 @@ contract HintRegistry is IOptimisticOracleV3CallbackRecipient, Ownable2Step, EIP
         payable
         returns (bytes32 key)
     {
+        _checkHint(token, kind);
         key = assetKey(chainId, token);
         uint256 funding = msg.value;
         if (!_assets[key].active) {
@@ -421,6 +423,16 @@ contract HintRegistry is IOptimisticOracleV3CallbackRecipient, Ownable2Step, EIP
             revert BadFee();
         }
         _fund(key, funding);
+    }
+
+    /// @dev A hint names a real contract of a kind the indexer knows. The zero
+    ///      address cannot be a token, and a kind outside the known set would be a
+    ///      permanent lie in every view that echoes it.
+    function _checkHint(address token, uint8 kind) private pure {
+        if (token == address(0)) revert BadRange();
+        if (kind != KIND_UNKNOWN && kind != KIND_ERC20 && kind != KIND_ERC721 && kind != KIND_ERC1155) {
+            revert BadRange();
+        }
     }
 
     /// @notice Top up a registered asset's funding without touching its hint.
@@ -727,9 +739,13 @@ contract HintRegistry is IOptimisticOracleV3CallbackRecipient, Ownable2Step, EIP
     ///      already covered, pays nothing, so the number of epochs posted does not
     ///      change what a block of coverage is worth.
     ///
-    ///      Gaps are paid as if covered: a claim of [100, 200] after [10, 20] was paid
-    ///      pays for 21..200. The claim is a statement the publisher bonded and nobody
-    ///      challenged, which is the same standing every other leaf in the epoch has.
+    ///      Payment follows the proof: a claim earns for the blocks *inside its own
+    ///      leaf* that no earlier claim has been paid for. Blocks between two paid
+    ///      ranges are not earned by a leaf that skips over them — a claim of
+    ///      [30, 40] after [10, 20] was paid earns for 30..40 only, never for the gap
+    ///      21..29, because the leaf is the only thing the publisher bonded and
+    ///      nobody challenged. A leaf that spans the gap itself, [21, 40], does earn
+    ///      for 21..40.
     ///
     ///      A claim that pays nothing leaves the paid range alone, so covering an
     ///      unfunded asset is not forfeited: whoever funds it later pays for those
@@ -750,8 +766,8 @@ contract HintRegistry is IOptimisticOracleV3CallbackRecipient, Ownable2Step, EIP
             if (!_verify(e.coverageRoot, coverageLeaf(c.key, c.fromBlock, c.toBlock), c.proof)) revert BadProof();
 
             Funding storage f = _funding[c.key];
-            uint64 fresh = _fresh(f, c.fromBlock, c.toBlock);
-            uint256 reward = uint256(fresh) * rewardPerBlock;
+            uint256 fresh = _fresh(f, c.fromBlock, c.toBlock);
+            uint256 reward = fresh * rewardPerBlock;
             if (reward > f.balance) reward = f.balance;
             if (reward > 0) {
                 _extend(f, c.fromBlock, c.toBlock);
@@ -759,7 +775,7 @@ contract HintRegistry is IOptimisticOracleV3CallbackRecipient, Ownable2Step, EIP
                 total += reward;
             }
 
-            emit CoverageRewarded(epochId, c.key, e.publisher, c.fromBlock, c.toBlock, fresh, reward);
+            emit CoverageRewarded(epochId, c.key, e.publisher, c.fromBlock, c.toBlock, uint64(fresh), reward);
         }
 
         _pay(e.publisher, total);
@@ -771,18 +787,27 @@ contract HintRegistry is IOptimisticOracleV3CallbackRecipient, Ownable2Step, EIP
     function claimable(bytes32 key, uint64 fromBlock, uint64 toBlock) external view returns (uint256) {
         if (toBlock < fromBlock || toBlock == 0) return 0;
         Funding storage f = _funding[key];
-        uint256 reward = uint256(_fresh(f, fromBlock, toBlock)) * rewardPerBlock;
+        uint256 reward = _fresh(f, fromBlock, toBlock) * rewardPerBlock;
         return reward > f.balance ? f.balance : reward;
     }
 
-    /// @dev How many blocks of [fromBlock, toBlock] lie outside the paid range.
-    function _fresh(Funding storage f, uint64 fromBlock, uint64 toBlock) private view returns (uint64 fresh) {
-        if (f.paidTo == 0) return toBlock - fromBlock + 1;
-        if (fromBlock < f.paidFrom) fresh += f.paidFrom - fromBlock;
-        if (toBlock > f.paidTo) fresh += toBlock - f.paidTo;
+    /// @dev How many blocks of the leaf's own span lie outside the paid range: the
+    ///      leaf's size minus whatever it overlaps with `[paidFrom, paidTo]`. A replay
+    ///      or a leaf inside the paid range overlaps fully and earns nothing; a leaf
+    ///      that skips over a paid range earns only its own proven blocks, never the
+    ///      gap it does not name. Math is uint256, so a full-range leaf does not
+    ///      revert on the +1.
+    function _fresh(Funding storage f, uint64 fromBlock, uint64 toBlock) private view returns (uint256 fresh) {
+        fresh = uint256(toBlock) - fromBlock + 1;
+        if (f.paidTo != 0) {
+            uint256 lo = fromBlock < f.paidFrom ? f.paidFrom : fromBlock;
+            uint256 hi = toBlock > f.paidTo ? f.paidTo : toBlock;
+            if (lo <= hi) fresh -= hi - lo + 1; // overlap with the paid range
+        }
     }
 
-    /// @dev Grows the paid range to include [fromBlock, toBlock].
+    /// @dev Grows the paid range to include [fromBlock, toBlock]. Only called when a
+    ///      claim actually paid, so a zero-reward claim leaves the range alone.
     function _extend(Funding storage f, uint64 fromBlock, uint64 toBlock) private {
         if (f.paidTo == 0) {
             f.paidFrom = fromBlock;
@@ -809,7 +834,12 @@ contract HintRegistry is IOptimisticOracleV3CallbackRecipient, Ownable2Step, EIP
 
     /// @inheritdoc IOptimisticOracleV3CallbackRecipient
     /// @dev Called by the oracle when anyone disputes, including disputes raised at the
-    ///      oracle rather than through `challengeIndex`.
+    ///      oracle rather than through `challengeIndex`. A dispute raised at the
+    ///      oracle directly leaves `challenger` zero — the oracle's own
+    ///      `AssertionDisputed` event records the disputer, and this contract's
+    ///      narrow oracle interface deliberately has no `getAssertion` to fetch it.
+    ///      In oracle mode the challenger is never paid from this contract, so a zero
+    ///      here is observability, not money.
     function assertionDisputedCallback(bytes32 assertionId) external onlyOracle {
         uint256 epochId = _epochForAssertion(assertionId);
         Epoch storage e = _epochs[epochId];
