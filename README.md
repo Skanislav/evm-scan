@@ -480,7 +480,7 @@ epoch that made verifying it in practice too expensive to bother with.
 | `GET` | `/v1/accounts/{addr}` | Same, enriched with token metadata and live balances. |
 | `POST` | `/v1/verdict` | **The reader's act.** `{chain_id, account, deadline, verdicts: [{address, weight ±1}], signature}` signed as EIP-712 `Verdict(account, chainId, digest, deadline)`. Signer must be the account and the deadline must beat the last one stored; the set replaces the account's previous verdict. Answers `{recorded, cleared, indexed_here}`. |
 | `GET` | `/v1/demand` | Per-contract signer counts, `voters` (for) and `against`, and whether each chain is `indexed_here`. |
-| `POST` | `/v1/demand` | Legacy unsigned +1 for a contract (the old page and curl). `POST /v1/verdict` is what the page sends. |
+| `POST` | `/v1/demand` | Legacy unsigned +1 for a contract, behind the operator token. `POST /v1/verdict` is what the page sends. |
 | `GET` | `/v1/accounts/{addr}/portfolio` | **Live state via the deployless lens**: balances, allowances, NFT ids, nonce, 7702 delegation — one call, one block. With pricing configured, each fungible carries `price` and `value_usd`, and `valuation` sums them with the weakest confidence. |
 | `GET` | `/v1/prices?tokens=` | **Price discovery**: every feed and pool found on-chain for each token, the route chosen, everything that lost, and the sources consulted. |
 | `GET` | `/v1/assets` | Registered hints and their scan progress. |

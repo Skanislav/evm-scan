@@ -26,10 +26,6 @@ func TestAuthorizedGuardsOnlySpendingEndpoints(t *testing.T) {
 		// of assertions is the thing keeping it reachable.
 		{http.MethodGet, "/ccip/0x0/0x0"},
 		{http.MethodPost, "/ccip"},
-		// A vote is the one write a reader makes. It buys nothing by itself —
-		// promotion is budgeted and gated by min_voters — and behind the operator's
-		// token it would only ever be the operator voting.
-		{http.MethodPost, "/v1/demand"},
 		{http.MethodGet, "/v1/demand"},
 		// A verdict is the same act with a direction, under the reader's own
 		// signature; this assertion is what keeps it reachable without a token.
@@ -57,6 +53,9 @@ func TestAuthorizedGuardsOnlySpendingEndpoints(t *testing.T) {
 	// the single highest-value thing this token guards.
 	spends := []struct{ method, path string }{
 		{http.MethodPost, "/v1/epochs"},
+		// The unsigned vote: since the signed verdict replaced it on the page, an
+		// open one would let a made-up account buy a backfill at min_voters 1.
+		{http.MethodPost, "/v1/demand"},
 		{http.MethodPost, "/v1/assets"},
 		{http.MethodPost, "/v1/candidates/0xabc/promote"},
 		{http.MethodPost, "/v1/candidates/0xabc/spam"},

@@ -243,7 +243,7 @@ shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module 
   Routes use Go 1.22 method-prefixed patterns on `http.ServeMux`. `authorized` guards
   everything that is not a read, minus the allowlisted exceptions (`POST /ccip` and
   `POST /ens`, which any ERC-3668 resolver has to reach; `POST /v1/verdict`, a
-  reader's signed verdict; `/v1/demand*`, the unsigned +1 and the relay;
+  reader's signed verdict; `/v1/demand/relay`, a vote the signer already authorised;
   `POST /v1/accounts/{addr}/hint`, written under the reader's own signature) —
   an inverted rule, so a new mutating route is guarded before anyone remembers to add
   it, and `auth_test.go` is what holds the exceptions open.
@@ -359,9 +359,10 @@ shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module 
   `internal/api/testdata/verdict.json` pins both. The voter is stored as
   `keccak256(salt ‖ chainId ‖ account)` under the salt generated once in migration
   0010, so an account counts once and the table cannot be walked back to who holds
-  what. `POST /v1/verdict` is allowlisted in `guarded()` beside `/v1/demand` and
-  `/ccip`, and `auth_test.go` holds it open. `POST /v1/demand` stays as the unsigned
-  +1 (`vote` in `web/hints.js`, curl); `GET /v1/demand` reports `voters` and
+  what. `POST /v1/verdict` is allowlisted in `guarded()` beside `/v1/demand/relay` and
+  `/ccip`, and `auth_test.go` holds it open. `POST /v1/demand`, the unsigned +1
+  (`vote` in `web/hints.js`, curl), is behind the operator token since the verdict
+  replaced it on the page — at `min_voters: 1` an open one buys a backfill per curl; `GET /v1/demand` reports `voters` and
   `against` per contract and `indexed_here` per chain, and a verdict may name a
   chain this deployment does not run — demand for an unindexed chain is what tells
   an operator which chain to add, and `DemandedUnseen` promotes it as soon as that

@@ -133,7 +133,7 @@ FROM (
   the list are deleted, `weight` upserted for the rest. A weight of 0 is not
   sent; absence is 0.
 - Response `{"recorded": n, "cleared": n, "indexed_here": true}`.
-- `POST /v1/demand` stays for the old page and curl, meaning weight +1.
+- `POST /v1/demand` (unsigned +1) is now behind the operator token; only the signed relay stays open.
 
 **`GET /v1/demand`** rows gain `against` beside `voters`.
 
@@ -228,8 +228,11 @@ Live URL, wallet `vitalik.eth` or `skas-me.eth`:
        split into recognized / unrecognized with reason chips. Committed rows
        carry the badge and sit first.
 3. [ ] The split is sensible on this wallet: USDC/WETH recognized (feed, listed,
-       sent); the homoglyph `꒤5DT` in junk with the lookalike chip; airdrop dust
-       unsure or junk.
+       sent); WATTOIN/PPOLY/ECX (balance exactly 5 in every wallet: fake
+       `balanceOf` airdrops) sit in unsure — sign one as junk on stage. The
+       homoglyph `꒤5DT` is not in vitalik's wallet; look up
+       `0x00Efb4cA6B1925ED8D8d92Ad49cfFEDC383C504D` to show it in junk with
+       the lookalike chip.
 4. [ ] Flip one row each way. Click *Sign my verdict*; wallet shows account,
        digest, deadline; page confirms `recorded: n`.
 5. [ ] Reload → the split is remembered. `GET /v1/demand` shows `for`/`against`

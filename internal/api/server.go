@@ -300,7 +300,11 @@ func guarded(r *http.Request) bool {
 		return false
 	}
 	p := r.URL.Path
-	if p == "/ccip" || p == "/ens" || strings.HasPrefix(p, "/v1/demand") {
+	// The relay carries a vote the signer already authorised; the unsigned
+	// POST /v1/demand is behind the token since the verdict replaced it on the
+	// page: with min_voters at 1 an unsigned vote from a made-up account would
+	// buy a verified backfill for one curl.
+	if p == "/ccip" || p == "/ens" || strings.HasPrefix(p, "/v1/demand/relay") {
 		return false
 	}
 	// A verdict is a vote that can point either way, written under the reader's
