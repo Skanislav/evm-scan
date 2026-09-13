@@ -192,6 +192,8 @@ func (s *Store) ListDemand(ctx context.Context, chainID uint64, limit int) ([]De
 func (s *Store) DemandedUnseen(ctx context.Context, chainID, minVoters uint64, limit int) ([]DemandRow, error) {
 	rows, err := s.pool.Query(ctx, demandSelect+`
 		WHERE t.chain_id = $1 AND (t.voters - t.against) >= $2 AND a.address IS NULL AND c.address IS NULL
+		  AND NOT EXISTS (SELECT 1 FROM promotion_cooldowns p
+		      WHERE p.chain_id = t.chain_id AND p.address = t.address AND p.retry_after > now())
 		ORDER BY (t.voters - t.against) DESC
 		LIMIT $3`, int64(chainID), int64(minVoters), limit)
 	if err != nil {

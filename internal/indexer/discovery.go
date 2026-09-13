@@ -2,6 +2,7 @@ package indexer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -232,8 +233,8 @@ func (s *Service) autoPromote(ctx context.Context) error {
 		if d.MinVoters > 0 && int64(c.Voters)-int64(c.Against) >= int64(d.MinVoters) {
 			reason = fmt.Sprintf("demand: %d for, %d against (%d events across %d blocks)", c.Voters, c.Against, c.EventCount, c.BlocksSeen)
 		}
-		if err := s.Promote(ctx, c.Address, reason); err != nil {
-			s.log.Error("promotion failed", "asset", c.Address.Hex(), "err", err)
+		if err := s.tryAutoPromote(ctx, c.Address, reason, store.SourceDiscovered); err != nil {
+			return err
 		}
 		budget--
 	}
@@ -250,9 +251,27 @@ func (s *Service) autoPromote(ctx context.Context) error {
 	}
 	for _, u := range unseen {
 		reason := fmt.Sprintf("demand: %d for, %d against, never seen by discovery", u.Voters, u.Against)
-		if err := s.promoteAs(ctx, u.Address, reason, store.SourceDemand); err != nil {
-			s.log.Error("promotion failed", "asset", u.Address.Hex(), "err", err)
+		if err := s.tryAutoPromote(ctx, u.Address, reason, store.SourceDemand); err != nil {
+			return err
 		}
+	}
+	return nil
+}
+
+var errNoContractCode = errors.New("has no contract code")
+
+const noCodeRetryInterval = 24 * time.Hour
+
+func (s *Service) tryAutoPromote(ctx context.Context, addr common.Address, reason, source string) error {
+	err := s.promoteAs(ctx, addr, reason, source)
+	if errors.Is(err, errNoContractCode) {
+		retryAfter := time.Now().Add(noCodeRetryInterval)
+		if err := s.st.DeferPromotion(ctx, s.chainID, addr, retryAfter); err != nil {
+			return fmt.Errorf("defer promotion of %s: %w", addr.Hex(), err)
+		}
+		s.log.Info("promotion deferred: no contract code", "asset", addr.Hex(), "retry_after", retryAfter)
+	} else if err != nil {
+		s.log.Error("promotion failed", "asset", addr.Hex(), "err", err)
 	}
 	return nil
 }
@@ -279,7 +298,7 @@ func (s *Service) promoteAs(ctx context.Context, addr common.Address, reason, so
 		return err
 	}
 	if len(code) == 0 {
-		return fmt.Errorf("indexer: %s has no contract code", addr.Hex())
+		return fmt.Errorf("indexer: %s %w", addr.Hex(), errNoContractCode)
 	}
 
 	var standard uint8

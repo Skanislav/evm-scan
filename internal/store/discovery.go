@@ -172,6 +172,8 @@ func (s *Store) PromotableCandidates(ctx context.Context, chainID uint64, rule P
 		FROM candidates c
 		LEFT JOIN asset_demand_totals t ON t.chain_id = c.chain_id AND t.address = c.address
 		WHERE c.chain_id = $1 AND c.promoted_at IS NULL AND c.spam_at IS NULL
+		  AND NOT EXISTS (SELECT 1 FROM promotion_cooldowns p
+		      WHERE p.chain_id = c.chain_id AND p.address = c.address AND p.retry_after > now())
 		  AND (($2 AND c.event_count >= $3 AND c.blocks_seen >= $4)
 		       OR ($5 > 0 AND (COALESCE(t.voters, 0) - COALESCE(t.against, 0)) >= $5))
 		ORDER BY (COALESCE(t.voters, 0) - COALESCE(t.against, 0)) DESC, c.event_count DESC, c.blocks_seen DESC
