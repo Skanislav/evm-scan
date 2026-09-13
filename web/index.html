@@ -720,11 +720,10 @@
     <span class="pill" id="pill-node" hidden></span>
     <span class="pill amber" id="pill-epoch" hidden></span>
     <nav class="toplinks">
-      <a class="v2-link" id="v2-explain" href="#pipeline">Explain</a>
-      <a class="v2-link" href="read.html">Read via ENS</a>
+      <a class="v2-link" id="v2-explain" href="#v2-trail">Read details</a>
+      <a class="v2-link" href="https://github.com/Skanislav/evm-scan" target="_blank" rel="noopener">GitHub</a>
       <a href="#beat5">Verify</a>
       <a href="#beat4">Operator</a>
-      <a href="https://github.com/Skanislav/evm-scan" target="_blank" rel="noopener">GitHub</a>
     </nav>
   </div>
   <div class="beats">
@@ -744,7 +743,7 @@
     <div class="narrow">
       <div class="kicker sec" id="live-status">Live on your node</div>
       <h1>What does this address hold?</h1>
-      <p class="lede">Answered from your own node, in one call, at one block. No provider in between.</p>
+      <p class="lede">Find assets and check their live balances.</p>
       <div class="lookup">
         <input class="input big" type="text" id="account" style="flex:1 1 380px; min-width:0" spellcheck="false"
                autocomplete="off" placeholder="0x… or an ENS name">
@@ -768,56 +767,6 @@
         <button class="btn btn-secondary" id="chain-rpc-save">Re-run here</button>
         <button class="btn btn-ghost" id="chain-rpc-clear">Use the daemon</button>
       </div>
-
-      <!-- What happens between the box above and the table below, in order. Numbered
-           because it is a sequence: each step consumes the one before it. -->
-      <div class="howto pipe" id="pipeline">
-        <div class="howto-head">from what you type to a number</div>
-        <div class="pipe-steps">
-          <div class="pstep">
-            <span class="pstepn">1</span>
-            <div>
-              <div class="pstep-t">Whatever you typed becomes one address.</div>
-              <div class="pstep-d">a hex address is checksum-checked · a name is NFC-normalised and lowercased, and the page echoes the exact form it hashed, so a disagreement with your wallet's rendering is visible instead of silent</div>
-              <div class="pstep-d amber">a name resolves through ENS's Universal Resolver on a mainnet RPC, in your browser — the daemon is never handed a name</div>
-            </div>
-          </div>
-          <div class="pstep">
-            <span class="pstepn">2</span>
-            <div>
-              <div class="pstep-t">The index says which contracts are worth reading.</div>
-              <div class="pstep-d">contracts this address has actually touched — not a token list walked hopefully, and not a balance inferred from summed Transfer events, which rebasing and fee-on-transfer tokens make wrong</div>
-            </div>
-          </div>
-          <div class="pstep">
-            <span class="pstepn blue">3</span>
-            <div>
-              <div class="pstep-t">One call reads all of it, at one block.</div>
-              <div class="pstep-d">eth_call with no <b>to</b> address, carrying the lens's creation code as the payload — the constructor returns the answer, so a contract becomes a pure function with no address to trust and no upgrade key</div>
-              <div class="pstep-d">native balance, ERC-20 balances and allowances, ERC-165 detection, NFT ids and URIs, ERC-721Enumerable walking, code hash and the EIP-7702 delegation target — one round trip, one consistent snapshot, instead of a hundred calls landing at a hundred different blocks</div>
-              <div class="pstep-d">the reply is treated as contract code, so EIP-170 caps it at 24 576 bytes; too large a portfolio fails outright rather than truncating, and the client halves the batch when a node says no</div>
-            </div>
-          </div>
-          <div class="pstep">
-            <span class="pstepn">4</span>
-            <div>
-              <div class="pstep-t">The nonce has to come separately.</div>
-              <div class="pstep-d">the EVM has no opcode for another account's nonce, so no contract — deployless or not — can report one. eth_getTransactionCount alongside the call, and the answer says whether that read landed rather than printing a confident 0</div>
-            </div>
-          </div>
-          <div class="pstep">
-            <span class="pstepn">5</span>
-            <div>
-              <div class="pstep-t">Integers become amounts, then a value.</div>
-              <div class="pstep-d">a balance is an integer in the token's own decimals — 18 for ether, so wei, and 1 gwei is 10⁹ of them; 6 for most stablecoins. Scaled by the decimals that same call returned, never by an assumption</div>
-              <div class="pstep-d">then priced from the chain: a Chainlink feed, a Uniswap v3 TWAP, or a spot pool — whichever is defensible, tagged HIGH / MEDIUM / LOW, with the route shown. Nothing defensible means no price at all, never a zero</div>
-            </div>
-          </div>
-        </div>
-        <div class="pipe-foot">Every read inside that one call is a staticcall with capped gas and capped returndata, so nothing a
-          hostile token does can revert the batch. A token that stays silent comes back as <strong>unknown</strong> — never
-          as a balance of nought, because rendering a failed call as zero is a bug, not a rounding error.</div>
-      </div>
     </div>
   </div>
 </section>
@@ -835,9 +784,8 @@
     </div>
     <div class="kicker sec">02 · The answer</div>
 
-    <div class="idle" id="answer-idle">Look an address up and the answer lands here — which indexed
-      contracts it has touched, and what it holds in them right now, read at head in one call.</div>
-    <div class="loading" id="answer-loading" hidden><span class="pulse">reading your node · one eth_call, one block…</span></div>
+    <div class="idle" id="answer-idle">Enter an address to see its holdings.</div>
+    <div class="loading" id="answer-loading" hidden><span class="pulse">Reading balances…</span></div>
     <div id="v2-answer" hidden>
       <div class="v2-answer-address">
         <div class="v2-answer-name" id="v2-wallet-name"></div>
@@ -850,10 +798,8 @@
         <button class="v2-network-change" id="v2-network-change">Change</button>
       </div>
       <div id="v2-commit-wrap" hidden>
-        <a class="btn btn-primary" id="v2-commit-link" href="#portable-state-card" data-open-state>Sweep more networks and commit your list →</a>
-        <div class="hint" style="margin:8px 4px 0">Review the exact list and sign it once — no gas, no transaction. That
-          signature is the record; publishing its root to ENS is a separate, optional step. A later lookup reads the list
-          before broad discovery.</div>
+        <a class="btn btn-primary" id="v2-commit-link" href="#portable-state-card" data-open-state>Remember assets →</a>
+        <div class="hint" style="margin:8px 4px 0">Review and sign your public asset list to use it in future lookups. No gas required.</div>
       </div>
       <div id="v2-filter-bar" hidden>
         <span class="fb">committed filter</span>
@@ -874,9 +820,9 @@
     </div>
 
       <details class="verdict-bar" id="portable-state-card" hidden>
-        <summary>Portable wallet memory · public, signed, recoverable</summary>
-        <p class="hint">Keep your verdicts and remembered assets on this server and in a downloadable backup. Publishing makes the list and your preferences public. The indexer may include your signed state in its ENS checkpoint. A hash cannot restore a missing backup.</p>
-        <p class="hint">ENSv2 Sepolia checkpoints. Your RPC sees the name being read. Publishing from your wallet costs Sepolia ETH. The operator checkpoint is a separate batch. Both halves below read these two; the endpoint defaults to the one viem's chain catalog names, and you can replace it.</p>
+        <summary>Save and restore wallet memory</summary>
+        <p class="hint">Save a signed snapshot of your assets and verdicts on this server, and download a backup. Your list and preferences become public; the indexer may include them in its ENS checkpoint. Keep the backup to restore your data.</p>
+        <p class="hint">Optional ENS checkpoints use Sepolia. Publishing costs Sepolia ETH; the RPC below sees the name you read.</p>
         <div class="row" style="gap:8px">
           <input class="input" id="state-rpc" placeholder="Sepolia RPC (viem's public endpoint by default)" spellcheck="false">
           <input class="input" id="state-ens-name" placeholder="Your ENSv2 Sepolia name" spellcheck="false">
@@ -884,8 +830,8 @@
 
         <div class="state-split">
           <section class="state-panel" id="state-panel-create">
-            <div class="state-panel-head"><strong>Making the record</strong><span class="empty">sign, then write one root</span></div>
-            <p class="hint">Your wallet signs the snapshot; publishing writes the revision it names to <code>evmscan.state</code>. One record, whatever the list holds.</p>
+            <div class="state-panel-head"><strong>Save a snapshot</strong></div>
+            <p class="hint">Sign your snapshot, then optionally publish an ENS checkpoint.</p>
             <label><input type="checkbox" id="state-optin"> Sign public state and submit its verdicts together</label>
             <div class="row" style="gap:8px;margin-top:12px">
               <button class="btn btn-secondary btn-sm" id="state-review-button">Review public state</button>
@@ -897,8 +843,8 @@
           </section>
 
           <section class="state-panel" id="state-panel-view">
-            <div class="state-panel-head"><strong>Reading it back</strong><span class="empty">resolve, read, verify</span></div>
-            <p class="hint">Resolves the name at head, reads the record, fetches the revision it names and checks the signature against the root. Nothing here signs or spends.</p>
+            <div class="state-panel-head"><strong>Restore a snapshot</strong></div>
+            <p class="hint">Restore a saved snapshot and verify its signature. No transaction required.</p>
             <div class="row" style="gap:8px;margin-top:12px">
               <button class="btn btn-secondary btn-sm" id="state-restore-ens">Restore from my ENS checkpoint</button>
               <button class="btn btn-ghost btn-sm" id="state-check-batch">Verify operator checkpoint</button>
@@ -941,7 +887,7 @@
       <div class="vgroup" id="group-recognized">
         <div class="vhead">
           <span class="label">recognized · <span id="recognized-count">0</span></span>
-          <span class="colnote">a feed price, a token list, somebody paying to index it, this wallet sending it — enough to trust the name</span>
+          <span class="colnote">Supported by available signals or your verdict</span>
         </div>
         <div class="scroll">
           <div class="tablehead cols-verdict">
@@ -953,7 +899,7 @@
       <div class="vgroup" id="group-unrecognized">
         <div class="vhead">
           <span class="label">unrecognized · <span id="unrecognized-count">0</span></span>
-          <span class="colnote">nothing vouches for the name, or something speaks against it — the balance is real either way</span>
+          <span class="colnote">Unfamiliar or flagged assets · still included in balances</span>
         </div>
         <div class="scroll">
           <div class="tablehead cols-verdict">
@@ -964,8 +910,7 @@
       </div>
 
       <div class="total" id="holdings-total" hidden>
-        <div class="note">The total carries the <em>weakest</em> confidence in the sum — a portfolio is only as
-          trustworthy as its worst price.</div>
+        <div class="note">Confidence reflects the least reliable price included.</div>
         <div class="sum"><b id="total-val">—</b><span class="badge none" id="total-tier">NONE</span></div>
       </div>
 
@@ -995,9 +940,7 @@
           <span class="colnote" id="hintname-parent"></span>
         </div>
         <div class="sweep-body">
-          <p class="hint" style="margin:0 0 12px; max-width:680px; text-wrap:pretty">Every account already answers at
-            its address. Claiming a label points a readable name at the same records — the same index, proven against
-            the same on-chain root. You sign; this deployment pays the gas.</p>
+          <p class="hint" style="margin:0 0 12px; max-width:680px; text-wrap:pretty">Choose a readable name for your index records. You sign; this deployment pays the gas.</p>
           <div id="hintname-state" class="subrow" style="margin-bottom:10px"></div>
           <div class="row" style="gap:10px; flex-wrap:wrap">
             <input class="input" type="text" id="hintname-label" spellcheck="false" autocomplete="off"
@@ -1018,13 +961,12 @@
       <div id="xchain" class="sweep">
         <div class="sweep-head">
           <span class="label">Read more chains</span>
-          <span class="colnote">enable the networks you want included in this answer</span>
         </div>
         <div class="sweep-body">
-          <p class="hint" style="margin:0 0 14px; max-width:680px; text-wrap:pretty">Choose the chains to read, then review the address disclosure before starting. Holdings are grouped by asset, with every chain balance shown underneath.</p>
+          <p class="hint" style="margin:0 0 14px; max-width:680px; text-wrap:pretty">Choose networks and review which RPCs will receive your address before starting.</p>
           <div class="row" id="xchain-openrow">
             <button class="btn btn-secondary btn-sm" id="xchain-open">Choose networks</button>
-            <span class="hint" id="xchain-load">the public chain registry and token list are fetched only when you open the picker</span>
+            <span class="hint" id="xchain-load"></span>
           </div>
           <div id="xchain-panel" hidden>
             <div class="subrow" style="margin-bottom:9px">
@@ -1043,13 +985,7 @@
             </div>
             <div id="xchain-results"></div>
             <div class="sweep-skipped" id="xchain-skipped"></div>
-            <div class="sweep-foot">The sweep deliberately does <em>not</em> narrow each chain's list with the index
-              filter first. That looked obviously right and was badly wrong: a filter miss means "we do not index that
-              contract", which is nothing like "you hold none of it", and once the read is skipped the two are
-              indistinguishable — on a real account, narrowing took 65 holdings down to 1. Narrowing is only sound
-              where the index is authoritative for the question, which is the lookup above and not this. The cost of
-              being right: the lens returns about 920 bytes per token, so EIP-170's 24 576-byte reply ceiling caps a
-              batch at 24 and batching harder is simply not available.</div>
+            <div class="sweep-foot">Coverage depends on each network’s token list. Assets missing from those lists may not appear.</div>
             <div id="xchain-hint-legacy"></div>
           </div>
         </div>
@@ -1061,10 +997,8 @@
       <div class="ans-addr" id="empty-addr" style="margin-bottom:8px"></div>
       <div class="ans-line" id="empty-line" style="display:block; font-family:var(--mono); font-size:12px"></div>
       <div class="card">
-        <h3>Nothing indexed — and that is an answer, not a failure</h3>
-        <p>This address has touched no contract that anyone has promoted or paid to index. A provider would
-          guess; this returns nothing and says why. Register a hint for a contract and it enters the index
-          at the next epoch.</p>
+        <h3>No indexed contracts found</h3>
+        <p>This index has no recorded interactions for this address. It may still hold assets. Register a contract to request indexing.</p>
         <a class="btn btn-secondary" href="#beat4" id="empty-register">Register a hint →</a>
       </div>
     </div>
@@ -1074,10 +1008,8 @@
   </div>
 </section>
 <footer class="v2-footer">
-  <a class="linkbtn" href="#portable-state-card" data-open-state>Sign and publish your list</a>
-  <a href="#xchain-hint">Register a hint</a>
+  <a class="linkbtn" href="#portable-state-card" data-open-state>Wallet memory</a>
   <a href="#beat4">Operator triage</a>
-  <a href="#beat4">Private watchlist</a>
   <a href="https://github.com/Skanislav/evm-scan" target="_blank" rel="noopener">GitHub</a>
 </footer>
 
@@ -3950,7 +3882,47 @@ let XRPC_EDIT = null;     // the chain whose endpoint row is open, if any
 let XCHAIN_ALL = null;   // the complete viem/token-list view, behind “show more”
 let XCHAIN_MODE = 'all'; // all | published | preselected
 let XCHAIN_SOURCE = 'token-list';
-const PRESELECTED_CHAIN_IDS = [1, 42161, 8453, 10];
+// The chains the picker opens on when there is nothing better to lead with.
+//
+// Four was too few. The question a reader brings is "where are my tokens", and a
+// picker naming Ethereum and three rollups answers it for a wallet that already
+// knew, while quietly saying "nowhere" to one holding on Polygon or Avalanche. So
+// this is the major mainnets, not a shortlist of favourites.
+//
+// Every id here resolves in the pinned viem build (2.56.3) and carries a default
+// RPC; sweepableChains drops any that does not, so a wrong id costs a missing row
+// rather than a broken picker — which is exactly why they were checked against
+// that build rather than remembered. Testnets are deliberately absent: nobody
+// holds anything on one by accident, and they stay reachable through "show more".
+const PRESELECTED_CHAIN_IDS = [
+  1,        // Ethereum
+  10,       // OP Mainnet
+  56,       // BNB Smart Chain
+  100,      // Gnosis
+  130,      // Unichain
+  137,      // Polygon
+  146,      // Sonic
+  252,      // Fraxtal
+  324,      // ZKsync Era
+  480,      // World Chain
+  1101,     // Polygon zkEVM
+  1135,     // Lisk
+  1868,     // Soneium
+  2020,     // Ronin
+  5000,     // Mantle
+  8453,     // Base
+  34443,    // Mode
+  42161,    // Arbitrum One
+  42170,    // Arbitrum Nova
+  42220,    // Celo
+  43114,    // Avalanche
+  57073,    // Ink
+  59144,    // Linea
+  60808,    // BOB
+  81457,    // Blast
+  534352,   // Scroll
+  7777777,  // Zora
+];
 
 function sweepChainView(id, viemChain, tokens) {
   const configured = CHAINS.find(chain => Number(chain.chain_id) === id);
@@ -4048,15 +4020,15 @@ async function openXChain() {
       XCHAIN_MODE = 'published';
       XCHAIN_SOURCE = 'signed-list';
     } else {
-      // What was discovered leads, then every chain this deployment indexes; the
-      // fixed set is only what a wallet with neither has to open on. A lookup
-      // answers for one chain, so "discovered" alone is that chain and nothing
-      // else — which is how the picker ended up naming one network on a daemon
-      // running several.
+      // What was discovered leads, then every chain this deployment indexes, then
+      // the major mainnets. The last used to be a fallback for a wallet with
+      // neither, which meant a deployment that ran even one chain opened the picker
+      // on a handful — and a handful is an answer about where the tokens are, not
+      // an invitation to choose. A reader asking "where are my tokens" should see
+      // the chains they might be on, whatever this daemon happens to index.
       const found = discoveredChainIDs();
       const running = runningChainIDs();
-      const union = [...new Set([...found, ...running])];
-      const lead = union.length ? union : PRESELECTED_CHAIN_IDS;
+      const lead = [...new Set([...found, ...running, ...PRESELECTED_CHAIN_IDS])];
       XCHAIN_ALL = await sweepableChains(lead);
       XCHAIN = lead.map(id => XCHAIN_ALL.find(chain => chain.id === id)).filter(Boolean);
       XLIST = await tokenList();
@@ -5384,9 +5356,9 @@ function updateVerdictBar() {
   connect.textContent = wallet ? short(wallet) : 'Connect wallet';
   // An empty set is still a verdict when one was signed before: it retracts it.
   sign.disabled = !(mine && (pairs.length || VERDICT_MEM));
-  const what = `One signature over the whole split — <b>${num(up)}</b> recognized, <b>${num(down)}</b> junk, unsure rows are left out. EIP-712, no gas, nothing sent from the wallet; the daemon recovers the signer and this set replaces whatever the account signed before.`;
+  const what = `Sign <b>${num(up)}</b> recognized and <b>${num(down)}</b> junk assets to update indexing priority. Unsure rows are left out. This replaces your previous verdict for this network. No gas required.`;
   const who = !window.ethereum
-    ? ' <strong>No wallet found in this browser</strong> — the signature needs an EIP-1193 wallet holding this account.'
+    ? ' <strong>No wallet found in this browser</strong> — connect a wallet for this account to sign.'
     : !wallet ? ' Connect the wallet that holds this account to sign.'
     : mine ? ' The connected wallet is this account.'
     : ` <strong>The connected wallet is ${esc(short(wallet))}, not this account</strong> — only ${esc(short(WALLET_ADDR))} can sign for itself.`;
@@ -5735,7 +5707,7 @@ $('lookup').addEventListener('click', lookup);
 $('v2-explain').addEventListener('click', event => {
   event.preventDefault();
   V2_EXPLAIN = !V2_EXPLAIN;
-  event.currentTarget.textContent = V2_EXPLAIN ? 'Explain: on' : 'Explain';
+  event.currentTarget.textContent = V2_EXPLAIN ? 'Hide details' : 'Read details';
   renderV2Trail();
   if (V2_EXPLAIN && V2_TRAIL.length) $('v2-trail').scrollIntoView({ behavior: 'smooth', block: 'start' });
 });
