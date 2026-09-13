@@ -1332,7 +1332,7 @@ export async function afterSweep(account, rows, { aside } = {}) {
           sweep for this address asks about these pairs first — it drops nothing, it only goes first.
         </p>
         <div class="row" style="gap:10px; margin-top:12px; flex-wrap:wrap">
-          <button class="btn btn-primary btn-sm" id="hint-keep">Sign and keep it on this deployment</button>
+          <button class="btn btn-primary btn-sm" id="hint-keep">Commit to the index</button>
           <span class="hint" id="hint-keep-status"></span>
         </div>
         <p class="hint" style="margin:8px 0 0; max-width:74ch; text-wrap:pretty">
@@ -1353,7 +1353,7 @@ export async function afterSweep(account, rows, { aside } = {}) {
     try {
       const r = await submitHint(account, hint.bytes, status);
       status.innerHTML = `kept · ${H.esc(String(r.count))} pairs · ${H.esc(String(r.m))} bits · <a href="/v1/accounts/${H.esc(account)}/hint.json">served</a>`;
-      btn.textContent = 'kept';
+      btn.textContent = 'committed';
     } catch (e) {
       status.textContent = e.message || String(e);
       btn.disabled = false;

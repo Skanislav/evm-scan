@@ -663,6 +663,22 @@
   .v2-network-row .check.on { border-color: var(--ink); background: var(--ink); color: #fff; }
   .v2-network-row .dot { width: 22px; height: 22px; border-radius: 50%; flex: none; }
   #v2-network-read { width: 100%; margin-top: 12px; border-radius: 999px; }
+  #v2-trail { width: 100%; margin-top: 12px; border-radius: 24px; background: #fff; box-shadow: 0 8px 24px rgba(20,22,26,.1); padding: 16px; }
+  .v2-trail-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; margin-bottom: 12px; }
+  .v2-trail-head strong { font: 600 16px/1.2 'Syne', var(--sans); }
+  .v2-trail-step { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 10px; padding: 9px 0; border-top: 1px solid var(--line); }
+  .v2-trail-step:first-of-type { border-top: 0; }
+  .v2-trail-step .n { color: var(--ink-65); font: 600 13px/1 var(--mono); }
+  .v2-trail-step .detail { color: var(--ink-65); font-size: 12.5px; line-height: 1.45; margin-top: 2px; word-break: break-word; }
+  .v2-trail-step .host { color: var(--blue-text); font-size: 12px; margin-top: 3px; }
+  .v2-trail-step .time { color: var(--ink-65); font: 400 12px/1 var(--mono); white-space: nowrap; }
+  #v2-consent { width: 100%; border-radius: 28px; background: #fff; box-shadow: 0 12px 32px rgba(20,22,26,.13); padding: 20px; }
+  #v2-consent h2 { margin: 0 0 6px; font: 600 20px/1.2 'Syne', var(--sans); }
+  #v2-consent p { margin: 0 0 14px; color: var(--ink-65); font-size: 14px; line-height: 1.5; }
+  #v2-consent .row { justify-content: space-between; }
+  #beat3, #beat4, #beat5 { display: none; }
+  .v2-footer { display: flex; justify-content: center; gap: 16px; flex-wrap: wrap; width: 100%; max-width: 720px; padding: 24px 16px 36px; color: var(--ink-65); font-size: 13px; }
+  .v2-footer a { color: inherit; }
 </style>
 </head>
 <body>
@@ -779,6 +795,14 @@
 <!-- ── 02 THE ANSWER ───────────────────────────────────────────────────── -->
 <section id="beat2" class="beat-sec alt">
   <div class="wrap">
+    <div id="v2-consent" hidden>
+      <h2>Not in the index</h2>
+      <p id="v2-consent-copy"></p>
+      <div class="row">
+        <button class="btn btn-ghost" id="v2-consent-cancel">Cancel</button>
+        <button class="btn btn-primary" id="v2-consent-read">Read anyway</button>
+      </div>
+    </div>
     <div class="kicker sec">02 · The answer</div>
 
     <div class="idle" id="answer-idle">Look an address up and the answer lands here — which indexed
@@ -797,6 +821,11 @@
       </div>
       <div class="v2-assets" id="v2-assets"></div>
       <div class="v2-answer-note" id="v2-answer-note"></div>
+      <div id="xchain-hint"></div>
+    </div>
+    <div id="v2-trail" hidden>
+      <div class="v2-trail-head"><strong>What happened</strong><span class="empty">every call, host and block</span></div>
+      <div id="v2-trail-steps"></div>
     </div>
 
     <div id="wallet-head" hidden>
@@ -907,7 +936,7 @@
               where the index is authoritative for the question, which is the lookup above and not this. The cost of
               being right: the lens returns about 920 bytes per token, so EIP-170's 24 576-byte reply ceiling caps a
               batch at 24 and batching harder is simply not available.</div>
-            <div id="xchain-hint"></div>
+            <div id="xchain-hint-legacy"></div>
           </div>
         </div>
       </div>
@@ -930,6 +959,13 @@
 
   </div>
 </section>
+<footer class="v2-footer">
+  <button class="linkbtn" id="v2-footer-networks">Sweep more chains</button>
+  <a href="#xchain-hint">Register a hint</a>
+  <a href="#beat4">Operator triage</a>
+  <a href="#beat4">Private watchlist</a>
+  <a href="https://github.com/Skanislav/evm-scan" target="_blank" rel="noopener">GitHub</a>
+</footer>
 
 <!-- ── 03 WHERE IT CAME FROM ───────────────────────────────────────────── -->
 <section id="beat3" class="beat-sec">
@@ -1455,6 +1491,25 @@ function ago(iso) {
 // --------------------------------------------------------------------------
 // State
 // --------------------------------------------------------------------------
+let V2_EXPLAIN = false;
+let V2_TRAIL = [];
+let V2_CONSENTED_ADDRESS = '';
+
+function v2Trace(title, detail, host, started) {
+  const elapsed = Math.max(0, Math.round(performance.now() - started));
+  V2_TRAIL.push({ title, detail, host, elapsed });
+  if (!V2_EXPLAIN) return;
+  renderV2Trail();
+}
+
+function renderV2Trail() {
+  $('v2-trail').hidden = !(V2_EXPLAIN && V2_TRAIL.length);
+  $('v2-trail-steps').innerHTML = V2_TRAIL.map((step, index) => `<div class="v2-trail-step">
+    <span class="n">${index + 1}</span>
+    <div><div>${esc(step.title)}</div><div class="detail">${esc(step.detail)}</div><div class="host">${esc(step.host)}</div></div>
+    <span class="time">${num(step.elapsed)} ms</span>
+  </div>`).join('');
+}
 
 let CHAINS = [], PICKED = null, DEFAULT_CHAIN = 0, CAN_ADD = false;
 let INDEXED_CHAIN = 0, HEAD = 0, REG = null, WALLET = null, STATUS = null;
@@ -4269,16 +4324,20 @@ function verdictOf(address) {
 async function lookup() {
   const typed = $('account').value.trim();
   if (!typed) return;
+  V2_TRAIL = [];
+  renderV2Trail();
   showErr('account-err', null);
   $('lookup').disabled = true;
   $('answer-idle').hidden = true;
   $('answer-loading').hidden = false;
   try {
+    const resolveStarted = performance.now();
     const resolved = await resolveAccount(typed);
     const addr = resolved.address;
     WALLET_ADDR = addr;
     WALLET_NAME = resolved.name || '';
     showResolved(resolved.name ? resolved : null);
+    v2Trace(resolved.name ? `Resolved ${resolved.name}` : 'Validated address', resolved.name ? `${resolved.name} → ${short(addr, 4)}` : short(addr, 6), resolved.name ? 'ENS resolver' : 'this browser', resolveStarted);
 
     // What this browser remembers signing for this account, read before the rows
     // exist so the first render is already split the way the signature put it,
@@ -4290,10 +4349,17 @@ async function lookup() {
     $('verdict-status').textContent = '';
     showErr('verdict-err', null);
 
+    const indexStarted = performance.now();
     const r = await api(onChain(`/v1/accounts/${addr}?prices=true`));
     WALLET_CHAIN = Number(r.chain_id) || activeChainID();
     const indexed = r.assets || [];
     VALUATION = indexed.length ? r.valuation : null;
+    v2Trace(indexed.length ? 'Index knows this address' : 'Index has no rows for this address', `${num(indexed.length)} indexed contract${indexed.length === 1 ? '' : 's'} · block ${num((r.valuation || {}).as_of_block || HEAD)}`, location.host || 'this deployment', indexStarted);
+    if (!indexed.length && V2_CONSENTED_ADDRESS !== addr) {
+      $('v2-consent-copy').textContent = `Its activity is older than this index or touches contracts it does not cover. Reading balances sends the address to ${chainRpc() ? hostOf(chainRpc()) : location.host || 'this deployment'} for one lens call.`;
+      $('v2-consent').hidden = false;
+      return;
+    }
 
     // The index knows what it has seen; the lens knows what is held now. An account
     // whose last token event fell out of the node's window has no rows above and may
@@ -4302,8 +4368,10 @@ async function lookup() {
     const known = new Set(indexed.map(a => a.address.toLowerCase()));
     const remembered = VERDICT_MEM ? Object.keys(VERDICT_MEM.pairs) : [];
     const ask = walletTokens(remembered).filter(a => !known.has(a.toLowerCase()));
+    const balancesStarted = performance.now();
     const extra = ask.length ? await heldBalances(addr, ask) : [];
     HOLDINGS = indexed.concat(extra);
+    if (ask.length) v2Trace('Read current balances', `${num(ask.length)} contracts in the lens request · one block`, chainRpc() ? hostOf(chainRpc()) : location.host || 'this deployment', balancesStarted);
 
     // Mark contracts no token list vouches for. The test runs here, against a
     // filter this browser already holds, so it costs no request and tells the
@@ -4333,7 +4401,7 @@ async function lookup() {
     $('lookup').disabled = false;
     $('answer-loading').hidden = true;
     // With nothing on screen the section needs its one-line explanation back.
-    $('answer-idle').hidden = !($('wallet-head').hidden && $('account-empty').hidden);
+    $('answer-idle').hidden = !($('wallet-head').hidden && $('account-empty').hidden) || !$('v2-consent').hidden;
   }
 }
 
@@ -4994,6 +5062,7 @@ $('v2-network-close').addEventListener('click', () => { $('v2-network-modal').hi
 $('v2-network-modal').addEventListener('click', event => {
   if (event.target === $('v2-network-modal')) $('v2-network-modal').hidden = true;
 });
+$('v2-footer-networks').addEventListener('click', openXChain);
 $('v2-network-read').addEventListener('click', async () => {
   $('v2-network-modal').hidden = true;
   await runXChain();
@@ -5018,9 +5087,33 @@ async function buildEpoch() {
 $('lookup').addEventListener('click', lookup);
 $('v2-explain').addEventListener('click', event => {
   event.preventDefault();
-  document.body.classList.toggle('v2-explain');
-  event.currentTarget.textContent = document.body.classList.contains('v2-explain') ? 'Hide explanation' : 'Explain';
-  if (document.body.classList.contains('v2-explain')) $('pipeline').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  V2_EXPLAIN = !V2_EXPLAIN;
+  event.currentTarget.textContent = V2_EXPLAIN ? 'Explain: on' : 'Explain';
+  renderV2Trail();
+  if (V2_EXPLAIN && V2_TRAIL.length) $('v2-trail').scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
+let autoLookupTimer = 0;
+$('v2-consent-read').addEventListener('click', () => {
+  V2_CONSENTED_ADDRESS = WALLET_ADDR;
+  $('v2-consent').hidden = true;
+  lookup();
+});
+$('v2-consent-cancel').addEventListener('click', () => {
+  $('v2-consent').hidden = true;
+  $('account').value = '';
+  V2_TRAIL = [];
+  renderV2Trail();
+});
+let autoLookupValue = '';
+$('account').addEventListener('input', () => {
+  clearTimeout(autoLookupTimer);
+  const typed = $('account').value.trim();
+  if (!(ADDRESS_RE.test(typed) || /^[a-z0-9-]+\.eth$/i.test(typed))) return;
+  autoLookupTimer = setTimeout(() => {
+    if (typed !== $('account').value.trim() || typed === autoLookupValue) return;
+    autoLookupValue = typed;
+    lookup();
+  }, 300);
 });
 $('account').addEventListener('keydown', e => { if (e.key === 'Enter') lookup(); });
 $('verdict-connect').addEventListener('click', connectForVerdict);
