@@ -20,12 +20,10 @@
 // place in the index, and the index is what this page reads.
 
 import * as R from './ensrec.js';
+import { viem, rpc, resolveAddress as resolveAddressOn, balances, fmtUnits, esc, short, host, num, ADDRESS_RE, DEFAULT_NAME_RPC } from './lensread.js';
 
 const $ = (id) => document.getElementById(id);
-const VIEM_MODULE = 'https://esm.sh/viem@2.56.3?bundle';
 const VIEM_CHAINS_MODULE = 'https://esm.sh/viem@2.56.3/es2022/chains.mjs';
-let viemModule = null;
-const viem = () => (viemModule ||= import(VIEM_MODULE));
 let chainsByID = new Map();
 let chainsByIDLoad = null;
 
@@ -54,30 +52,10 @@ function chainNameFor(id) {
 // The same storage keys index.html uses, so a reader who named an RPC there has it
 // here too.
 const NAME_RPC_KEY = 'evmscan.name-rpc';
-const DEFAULT_NAME_RPC = 'https://ethereum-rpc.publicnode.com';
 const chainRpcKey = (id) => `evmscan.chain-rpc.${id}`;
-
-const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const short = (a, n = 4) => a ? `${a.slice(0, 2 + n)}…${a.slice(-n)}` : '';
-const host = (u) => { try { return new URL(u).host; } catch { return u; } };
-const num = (n) => Number(n).toLocaleString('en-US');
-const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
 
 function store(k, v) { try { v ? localStorage.setItem(k, v) : localStorage.removeItem(k); } catch { /* private window */ } }
 function load(k) { try { return localStorage.getItem(k) || ''; } catch { return ''; } }
-
-async function rpc(url, method, params) {
-  const res = await fetch(url, {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
-  });
-  if (!res.ok) throw new Error(`${method}: ${res.status} ${res.statusText}`);
-  const body = await res.json();
-  if (body.error) {
-    throw Object.assign(new Error(`${method}: ${body.error.message || JSON.stringify(body.error)}`), { data: body.error.data });
-  }
-  return body.result;
-}
 
 // ---------------------------------------------------------------------------
 // The trail: what happened, in order, naming every host that was touched.
@@ -117,20 +95,7 @@ async function deps() {
 
 // A typed name becomes an address through the Universal Resolver, the same way the
 // lookup page does it. Only the registry mode needs this, to build the hint name.
-async function resolveAddress(name) {
-  const v = await viem();
-  const norm = R.normalizeName(name);
-  const inner = v.encodeFunctionData({
-    abi: [{ type: 'function', name: 'addr', stateMutability: 'view', inputs: [{ name: 'node', type: 'bytes32' }], outputs: [{ type: 'address' }] }],
-    functionName: 'addr', args: [R.namehash((b) => v.keccak256(b), norm)],
-  });
-  const out = await rpc(ensRpc(), 'eth_call', [{ to: R.UNIVERSAL_RESOLVER, data: R.encodeResolve(R.dnsEncode(norm), inner) }, 'latest']);
-  const { result } = R.decodeResolve(out);
-  if (!result || result.length < 66) throw new Error(`${norm} does not resolve to an address`);
-  const address = v.getAddress('0x' + result.slice(-40));
-  if (/^0x0{40}$/.test(address)) throw new Error(`${norm} does not resolve to an address`);
-  return { address, name: norm };
-}
+const resolveAddress = (name) => resolveAddressOn(name, ensRpc());
 
 // ERC-3668, by hand, so the gateway that was called can be named on screen. viem
 // would follow it too, silently; the whole point of this mode is that the reader
@@ -275,71 +240,7 @@ async function findResolver(name) {
 // ---------------------------------------------------------------------------
 // Balances at head
 // ---------------------------------------------------------------------------
-let lensArtifacts = null;
-async function lens() {
-  if (!lensArtifacts) {
-    lensArtifacts = fetch('/v1/lens').then(async r => {
-      if (!r.ok) throw new Error(`this origin does not serve the lens (${r.status})`);
-      return (await r.json()).lenses.asset;
-    }).catch(e => { lensArtifacts = null; throw e; });
-  }
-  return lensArtifacts;
-}
-
-async function lensCall(url, art, req) {
-  const v = await viem();
-  const encoded = v.encodeAbiParameters(art.request, [req]);
-  const data = art.creation + encoded.slice(2);
-  if (data.length / 2 > art.max_payload_bytes) throw new Error('payload too large');
-  const out = await rpc(url, 'eth_call', [{ data }, 'latest']);
-  if (!out || out === '0x') throw new Error('empty reply from the node');
-  return v.decodeAbiParameters(art.reply, out)[0];
-}
-
-async function balances(url, account, tokens) {
-  const art = await lens();
-  const rows = [];
-  let info = null;
-  let batch = 20;
-  let i = 0;
-  while (i < tokens.length) {
-    const chunk = tokens.slice(i, i + batch);
-    try {
-      const reply = await lensCall(url, art, {
-        account, spenders: [],
-        tokens: chunk.map(t => ({ token: t, ids: [] })),
-        includeUri: false, includeCode: false,
-        enumerateLimit: 0n, gasPerCall: 0n, maxStringBytes: 64n,
-      });
-      info ||= { chain: reply.chain, account: reply.account };
-      for (const t of reply.tokens) rows.push(t);
-      i += chunk.length;
-    } catch (e) {
-      // A reply over EIP-170's ceiling fails outright rather than truncating; halve
-      // the batch and retry, and only give up at one.
-      if (batch > 1) { batch = Math.max(1, Math.floor(batch / 2)); continue; }
-      throw e;
-    }
-  }
-  if (!info) {
-    const reply = await lensCall(url, art, { account, spenders: [], tokens: [], includeUri: false, includeCode: false, enumerateLimit: 0n, gasPerCall: 0n, maxStringBytes: 64n });
-    info = { chain: reply.chain, account: reply.account };
-  }
-  return { rows, info };
-}
-
 const STD = { 20: 'ERC-20', 21: 'ERC-721', 55: 'ERC-1155', 0: '?' };
-
-function fmtUnits(raw, decimals) {
-  const s = BigInt(raw).toString();
-  if (decimals === undefined || decimals === null) return s;
-  const d = Number(decimals);
-  if (d === 0) return num(s);
-  const pad = s.padStart(d + 1, '0');
-  const whole = pad.slice(0, -d), frac = pad.slice(-d).replace(/0+$/, '');
-  const w = BigInt(whole).toLocaleString('en-US');
-  return frac ? `${w}.${frac.slice(0, 6)}` : w;
-}
 
 function render(r, bal, rpcUrl) {
   $('result').hidden = false;

@@ -98,11 +98,6 @@
   .table td { padding: var(--space-2); border-bottom: 1px solid var(--color-divider); }
   .table tbody tr:hover { background: color-mix(in srgb, var(--color-text) 4%, transparent); }
 
-  .dialog-backdrop {
-    position: fixed; inset: 0; display: grid; place-items: center; padding: var(--space-4); z-index: 50;
-    background: color-mix(in srgb, var(--color-neutral-900) 50%, transparent);
-  }
-
   .wrap { max-width: 1280px; margin: 0 auto; padding: 0 var(--space-6); }
   .tile { padding: var(--space-4); box-shadow: 0 0 0 2px var(--color-divider); }
   .tile-n { font-family: var(--font-heading); font-weight: 800; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
@@ -136,8 +131,18 @@
   .rise { animation: rise .25s ease-out; }
   .trail-item { display: grid; grid-template-columns: 24px minmax(0,1fr) auto; gap: 10px; align-items: baseline; animation: rise .25s ease-out; border-top: 1px solid var(--color-divider); padding-top: var(--space-3); }
   .trail-item:first-child { border-top-color: transparent; padding-top: 0; }
-  #nets-dialog .row { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; font: inherit; font-size: 14px; color: var(--color-text); background: transparent; border: 0; padding: 9px var(--space-3); cursor: pointer; }
-  #nets-dialog .row:hover { background: var(--color-surface); }
+  .modes { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 2px; }
+  .mode { display: flex; flex-direction: column; gap: 4px; text-align: left; font: inherit; cursor: pointer;
+    background: transparent; color: var(--color-text); border: 0; box-shadow: 0 0 0 2px var(--color-divider);
+    padding: var(--space-3) var(--space-4); }
+  .mode:hover { background: color-mix(in srgb, var(--color-text) 4%, transparent); }
+  .mode.on { box-shadow: 0 0 0 2px var(--color-accent-700); background: color-mix(in srgb, var(--color-accent-700) 7%, transparent); }
+  .mode .mt { font-family: var(--font-heading); font-weight: 800; font-size: 14px; }
+  .mode.on .mt { color: var(--color-accent-700); }
+  .mode .md { font-size: 12px; line-height: 1.45; color: color-mix(in srgb, var(--color-text) 60%, transparent); }
+  .mode code { font-size: 11.5px; }
+  .pill { font-size: 10px; letter-spacing: .06em; text-transform: uppercase; padding: 2px 6px;
+    background: var(--color-accent-700); color: #fff; white-space: nowrap; }
 
   footer.site { padding: var(--space-6) 0; display: flex; gap: var(--space-6); flex-wrap: wrap; align-items: baseline; }
   footer.site .brand { font-family: var(--font-heading); font-weight: 800; font-size: 15px; }
@@ -175,9 +180,47 @@
   <section id="lookup" class="section">
     <div class="section-head">
       <h2>The read, end to end</h2>
-      <p class="text-muted" style="max-width:56ch">The index says where to look; the read says what is there. A hex address is checksum-checked, a name is NFC-normalised and resolved in your tab. If the index has no rows, one confirmation decides which host gets to see the address — and every call is printed on the right.</p>
+      <p class="text-muted" style="max-width:60ch">This one is live, against mainnet. A hex address is checksum-checked, a name is normalised and resolved in your tab. Then pick who answers: the index, which already knows where to look and costs one request — or nothing but your own RPC, which costs twenty-one and tells no indexer who you are. Every call either way is printed on the right, with the host that saw it.</p>
     </div>
     <div id="lookup-card"></div>
+  </section>
+
+  <!-- The ENS half. Two states, one of which every account already has, and a
+       claim that costs the reader nothing because it is a signature rather than a
+       transaction. Addresses are read from /v1/names at load so this section
+       cannot drift from what is deployed. -->
+  <section id="names" class="section">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:var(--space-8) var(--space-6)">
+      <div style="min-width:0">
+        <h6 style="color:var(--color-accent-700)">ENS</h6>
+        <h2 style="letter-spacing:-0.02em;margin-bottom:var(--space-4)">The index, readable as a name</h2>
+        <p style="font-size:15px;line-height:1.6;max-width:48ch">The committed index is served as ENS text records through an ENSIP-10 wildcard resolver, so <strong>every account already has a name</strong> — nobody registers one. Ask any ENS client for <code style="font-size:13px;background:var(--color-surface);padding:1px 5px">evmscan.contracts</code> and the resolver reverts <code style="font-size:13px;background:var(--color-surface);padding:1px 5px">OffchainLookup</code> at the registry's own gateway; the callback hands the answer back to the registry, which checks it against the latest finalized root. A gateway can withhold an answer. It cannot forge one.</p>
+        <p style="font-size:15px;line-height:1.6;max-width:48ch">Forty hex characters is a name nobody reads, so an account can point a label at itself. That claim is an EIP-712 signature, not a transaction: a wallet holding mainnet tokens rarely holds gas on the registry's chain, and needing some is where the flow would end. The signature is carried by this deployment, which pays for it and is recorded nowhere.</p>
+        <p style="font-size:15px;line-height:1.6;max-width:48ch;margin-bottom:0"><strong>A name is not an identity.</strong> The signature proves the claimant controls the address and says nothing about the label. Names are first come, first served and nothing here adjudicates them — whatever needs to know who an address belongs to has to check the address against something else.</p>
+      </div>
+      <div style="min-width:0;display:flex;flex-direction:column;gap:var(--space-4)">
+        <div style="display:grid;gap:2px;background:var(--color-divider);border:2px solid var(--color-divider)">
+          <div style="background:var(--color-bg);padding:var(--space-4)">
+            <h5 style="margin:0 0 4px">Claimed</h5>
+            <pre style="margin:0 0 6px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;overflow-x:auto;white-space:pre-wrap;word-break:break-word" id="names-claimed">alice.hints.<span id="names-parent">…</span></pre>
+            <p class="text-muted" style="margin:0;font-size:13.5px;line-height:1.5">One label per account. Claiming another releases the first, so asking what an account is called has exactly one answer.</p>
+          </div>
+          <div style="background:var(--color-bg);padding:var(--space-4)">
+            <h5 style="margin:0 0 4px">Only by address</h5>
+            <pre style="margin:0 0 6px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;overflow-x:auto;white-space:pre-wrap;word-break:break-word" id="names-hex">&lt;40 hex chars&gt;.hints.…</pre>
+            <p class="text-muted" style="margin:0;font-size:13.5px;line-height:1.5">The default, and it is not a lesser one: identical records, identical proof. No claim can take it away, because the account is read out of the label itself.</p>
+          </div>
+          <div style="background:var(--color-bg);padding:var(--space-4)">
+            <h5 style="margin:0 0 4px">Root-verified, not attested</h5>
+            <p class="text-muted" style="margin:0;font-size:13.5px;line-height:1.5">The resolver lives on the same chain as the registry, so it proves answers against the commitment instead of signing them. A resolver on another chain could only attest — which is why this one moved.</p>
+          </div>
+          <div style="background:var(--color-bg);padding:var(--space-4)">
+            <h5 style="margin:0 0 4px">Resolver</h5>
+            <p class="text-muted" style="margin:0;font-size:13.5px;line-height:1.5;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-all" id="names-resolver">—</p>
+          </div>
+        </div>
+      </div>
+    </div>
   </section>
 
   <section id="lens" class="section">
@@ -354,6 +397,26 @@ make run        # evmscand against config.demo.yaml — UI at :8080</pre>
     return '<div class="tile"><div class="tile-n" style="font-size:34px"><span>' + esc(s.n) + '</span><span style="font-size:19px">' + esc(s.unit) + '</span></div><div class="text-muted" style="font-size:12.5px">' + esc(s.label) + '</div></div>';
   }).join('');
 
+  // The ENS section names a live deployment, so it reads the deployment rather
+  // than carrying addresses that go stale the next time the resolver moves. A
+  // failure leaves the placeholders, which say the same thing in general terms;
+  // the section is an explanation, not a status page.
+  (function loadNames() {
+    var section = document.getElementById('names');
+    fetch('/v1/names').then(function (r) {
+      if (!r.ok) throw new Error(String(r.status));
+      return r.json();
+    }).then(function (n) {
+      if (!n.parent || !n.resolver) throw new Error('not configured');
+      document.getElementById('names-parent').textContent = n.parent;
+      document.getElementById('names-hex').textContent = '<40 hex chars>.hints.' + n.parent;
+      document.getElementById('names-resolver').textContent = n.resolver;
+    }).catch(function () {
+      // A deployment that serves no names should not advertise them.
+      if (section) section.hidden = true;
+    });
+  })();
+
   document.getElementById('footprint-grid').innerHTML = FOOTPRINT.map(function (f) {
     return '<div class="tile"><div class="tile-n" style="font-size:30px"><span>' + esc(f.n) + '</span><span style="font-size:17px">' + esc(f.unit) + '</span></div><div class="text-muted" style="font-size:12.5px">' + esc(f.label) + '</div></div>';
   }).join('');
@@ -370,351 +433,416 @@ make run        # evmscand against config.demo.yaml — UI at :8080</pre>
     var color = r.method === 'GET' ? 'var(--color-text)' : 'var(--color-accent-700)';
     return '<tr><td style="font-family:var(--font-heading);font-weight:800;font-size:12px;color:' + color + ';vertical-align:top">' + esc(r.method) + '</td><td class="mono" style="font-size:12.5px;vertical-align:top;word-break:break-word">' + esc(r.path) + '</td><td style="font-size:13.5px;vertical-align:top">' + esc(r.purpose) + '</td></tr>';
   }).join('');
+})();
+</script>
 
-  // ---- the Lookup demo --------------------------------------------------
-  //
-  // This is a scripted walkthrough, not a second live reader: index.html's
-  // wallet tab and read.html are the actual read paths, and this repo is
-  // deliberately careful about not having two implementations of that
-  // arithmetic. Every number, host and timing below is illustrative.
+<script type="module">
+import {
+  viem, resolveAddress, lens, balances, fmtUnits,
+  esc, short, host, num, ADDRESS_RE, DEFAULT_NAME_RPC,
+} from './lensread.js';
 
-  var PUBLIC_RPC = 'eth.llamarpc.com';
-  var DAEMON = 'evm-scan-production.up.railway.app';
-  var BLOCK = '23,418,771';
-  var BLOCK_N = 23418771;
-  var COMMITTED = { epoch: 13, block: 23410580, contracts: 4, status: 'finalized' };
-  var ADDR_RE = /^0x[0-9a-fA-F]{40}$/;
-  var NAME_RE = /^[a-z0-9-]+\.eth$/i;
+// The lookup card, live. Mainnet only — the daemon indexes chain 1 and the lens
+// reads one chain; the cross-chain sweep is index.html's secondary card.
+//
+// Two modes, and the choice is the point of the page:
+//
+//   index    one GET to this origin. The daemon already holds the contracts this
+//            account touched, with balances, prices and whether each is committed,
+//            so the answer is one request — and this origin sees the address.
+//
+//   browser  no daemon in the read path. A token list stands in for the index and
+//            every entry is read with a deployless AssetLens call against an RPC
+//            the reader names. That is 400-odd contracts in batches of twenty, and
+//            watching it cost twenty-one round trips against the index's one is
+//            the argument for having an index at all. The only request to this
+//            origin is for the lens bytecode, which carries no account.
+//
+// Nothing here is scripted. Every row, block number and timing below came off the
+// wire during the read it describes.
 
-  var NETS = (function () {
-    var base = [
-      { id: 'eth', name: 'Ethereum', chainId: 1, color: 'var(--color-accent)' },
-      { id: 'base', name: 'Base', chainId: 8453, color: 'var(--color-neutral-900)' },
-      { id: 'arb', name: 'Arbitrum One', chainId: 42161, color: 'var(--color-accent-2)' },
-      { id: 'op', name: 'OP Mainnet', chainId: 10, color: 'var(--color-accent-700)' },
-      { id: 'pol', name: 'Polygon', chainId: 137, color: 'var(--color-neutral-600)' },
-    ];
-    var more = [
-      ['Avalanche', 43114], ['BNB Chain', 56], ['Gnosis', 100], ['zkSync Era', 324],
-      ['Linea', 59144], ['Scroll', 534352], ['Blast', 81457], ['Mantle', 5000],
-      ['Mode', 34443], ['Zora', 7777777], ['Celo', 42220], ['Fantom', 250],
-    ];
-    more.forEach(function (n, i) {
-      base.push({ id: 'c' + i, name: n[0], chainId: n[1], color: i % 3 === 0 ? 'var(--color-neutral-500)' : i % 3 === 1 ? 'var(--color-neutral-700)' : 'var(--color-neutral-400)' });
-    });
-    return base;
-  })();
+const API = '';                      // same origin; the daemon serves this page
+const TOKEN_LIST = 'https://tokens.uniswap.org';
+const PUBLIC_RPC = 'https://ethereum-rpc.publicnode.com';
+const NAME_RE = /^[a-z0-9-]+(\.[a-z0-9-]+)+$/i;
+const CHAIN_ID = 1;
 
-  var DATA = [
-    { symbol: 'ETH', name: 'Ether', dec: 4, price: 3402.18, conf: 'high', per: { eth: 790.1247, base: 14.3002, arb: 8.0222, op: 2.115 } },
-    { symbol: 'USDC', name: 'USD Coin', dec: 2, price: 1.0001, conf: 'high', per: { eth: 120000, base: 64220, pol: 5000 } },
-    { symbol: 'WETH', name: 'Wrapped Ether', dec: 4, price: 3401.9, conf: 'medium', per: { eth: 19 } },
-    { symbol: 'UNI', name: 'Uniswap', dec: 2, price: 6.61, conf: 'low', per: { eth: 312.55 } },
-    { symbol: 'ENS', name: '3 names', dec: 0, price: null, conf: 'unpriced', per: { eth: 3 } },
-  ];
+const card = document.getElementById('lookup-card');
 
-  function fmtN(n) { return n.toLocaleString('en-US'); }
-  function fmt(n, d) { return n.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }); }
-  function short(a) { return a.slice(0, 6) + '…' + a.slice(-4); }
-  function hostOf(u) { try { return new URL(u).host; } catch (e) { return u || '127.0.0.1:8545'; } }
+const state = {
+  typed: '', phase: 'idle', mode: 'index',
+  status: '', err: '',
+  trail: [], rows: [], meta: null,
+  ownRpcOpen: false, ownRpc: '', remember: false,
+  explainOpen: true, progress: null,
+};
+let approved = null;                 // this session's answer to "which host may see it"
+try { approved = sessionStorage.getItem('evmscan.rpcChoice'); } catch { /* private window */ }
 
-  var state = {
-    active: ['eth', 'base', 'arb'],
-    typed: '', phase: 'idle', trail: [], chains: [],
-    ownRpcOpen: false, ownRpc: '', remember: false,
-    mode: 'indexed', name: '', address: '', status: '', via: '',
-    netsOpen: false, netQuery: '',
-    explainOpen: true,
-  };
-  var timers = [];
-  var remembered = null;
-  try { remembered = sessionStorage.getItem('evmscan.rpcChoice'); } catch (e) {}
+const risen = { trail: 0, answer: false, confirm: false };
+const still = (seen) => (seen ? ' no-anim' : '');
+const ms = (n) => (n >= 1000 ? (n / 1000).toFixed(1) + ' s' : Math.round(n) + ' ms');
 
-  function clearTimers() { timers.forEach(clearTimeout); timers = []; }
-  function after(ms, fn) { timers.push(setTimeout(function () { fn(); render(); }, ms)); }
-  function push(step) { state.trail = state.trail.concat([Object.assign({ n: state.trail.length + 1 }, step)]); }
-  function setState(patch) { Object.assign(state, patch); render(); }
+function step(s) {
+  state.trail.push({ n: state.trail.length + 1, ...s });
+  render();
+}
+function fail(e) {
+  state.phase = 'error';
+  state.err = e && e.message ? e.message : String(e);
+  state.status = '';
+  render();
+}
 
-  function scenarioFor(typed) {
-    if (/^0x1{40}$/.test(typed)) return 'not-indexed';
-    if (/^0x0{38}[0-9a-f]{2}$/i.test(typed)) return 'empty';
-    return 'indexed';
+// ---------------------------------------------------------------------------
+// The read
+// ---------------------------------------------------------------------------
+
+async function toAddress(typed) {
+  if (ADDRESS_RE.test(typed)) {
+    const v = await viem();
+    return v.getAddress(typed);        // checksums, and throws on a bad one
   }
+  const t0 = performance.now();
+  state.status = 'Resolving the name…';
+  render();
+  const { address, name } = await resolveAddress(typed, PUBLIC_RPC);
+  step({
+    t: `Resolved ${name} → ${short(address)}`,
+    d: 'eth_call · ENS Universal Resolver · resolve(bytes name, bytes data) · the name is normalised in this tab',
+    host: `${host(PUBLIC_RPC)} · saw the name, not who asked`,
+    m: 'eth_call', c: 1, msN: performance.now() - t0, accent: true,
+  });
+  return address;
+}
 
-  function chainsFor(mode) { return mode === 'empty' ? [] : DATA; }
+async function readIndex(address) {
+  state.status = 'Asking the index…';
+  render();
+  const t0 = performance.now();
+  const res = await fetch(`${API}/v1/accounts/${address}`);
+  if (!res.ok) throw new Error(`this origin has no index to ask (${res.status})`);
+  const body = await res.json();
+  const assets = body.assets || [];
+  step({
+    t: assets.length ? `The index holds ${num(assets.length)} contract${assets.length === 1 ? '' : 's'} for this account` : 'The index has no rows for this account',
+    d: `GET /v1/accounts/${short(address)} · as_of_block ${num(body.as_of_block)} · balances and prices came back with them`,
+    host: `${location.host} · read the address out of the path`,
+    m: 'GET /v1/accounts', c: 1, msN: performance.now() - t0,
+  });
+  // The daemon's own order is the ranking rule (orderAssets); do not re-sort it.
+  state.rows = assets.map(a => ({
+    address: a.address, symbol: a.symbol, name: a.name,
+    balance: a.balance == null ? null : fmtUnits(a.balance, a.decimals),
+    unread: a.balance == null, unreadWhy: a.balance_error,
+    usd: a.value_usd || null, confidence: a.price && a.price.confidence,
+    committed: a.committed, standard: a.standard,
+  }));
+  state.meta = { via: 'index', block: body.as_of_block, host: location.host };
+}
 
-  function assetsView() {
-    var on = state.active;
-    return state.chains.map(function (a) {
-      var chains = NETS.filter(function (n) { return on.indexOf(n.id) !== -1 && a.per[n.id] != null; })
-        .map(function (n) { return Object.assign({}, n, { raw: a.per[n.id] }); });
-      var total = chains.reduce(function (s, c) { return s + c.raw; }, 0);
-      return {
-        symbol: a.symbol, name: a.name, balance: fmt(total, a.dec),
-        value: a.price == null ? 'unpriced' : '$' + fmt(total * a.price, 0) + ' · ' + a.conf,
-        chains: chains.map(function (c) { return { name: c.name, color: c.color, balance: fmt(c.raw, a.dec), pct: Math.round(c.raw / total * 100) + '%' }; }),
-      };
-    }).filter(function (a) { return a.chains.length; })
-      .map(function (r, i) { return Object.assign({}, r, { rule: i === 0 ? 'transparent' : 'var(--color-divider)' }); });
-  }
-
-  function readVia(via) {
-    var mode = state.mode;
-    var own = via === 'own';
-    var host = via === 'daemon' ? (DAEMON + ' → Helios light client on loopback')
-      : own ? (hostOf(state.ownRpc) + ' · your node')
-      : (PUBLIC_RPC + ' · public RPC · saw the address');
-    var color = via === 'public' ? 'var(--color-accent-2-700)' : 'var(--color-accent-700)';
-    state.phase = 'busy'; state.via = via;
-    state.status = via === 'daemon' ? 'Reading your node · one call, one block…' : ('Reading from ' + (own ? hostOf(state.ownRpc) : PUBLIC_RPC) + '…');
-    var t = 0;
-    if (via !== 'daemon') {
-      t += 300;
-      after(t, function () { push({ t: 'Chose what to ask about', d: 'no index rows, so the Uniswap token list stands in · 312 contracts batched 13 × 24 under the 24,576-byte reply ceiling', host: 'this browser', ms: '90 ms', color: 'var(--color-neutral-700)' }); });
-    }
-    t += mode === 'empty' ? 700 : 1300;
-    after(t, function () {
-      push({ t: 'Read every mainnet balance in one call', d: 'eth_call { to: null, data: AssetLens creation code ‖ request } at latest → block ' + BLOCK + ' · native + ERC-20 + ERC-165 + NFT ids · every inner read a capped staticcall', host: host, m: 'eth_call', c: 1, ms: via === 'daemon' ? '1.9 s' : own ? '340 ms' : '1.1 s', msN: via === 'daemon' ? 1900 : own ? 340 : 1100, color: color });
-      push({ t: 'Read the nonce separately', d: "eth_getTransactionCount → 1,482 · the EVM has no opcode for another account's nonce", host: host, m: 'eth_getTransactionCount', c: 1, ms: '60 ms', msN: 60, color: color });
-    });
-    if (mode !== 'empty') {
-      t += 600;
-      after(t, function () { push({ t: 'Priced on-chain', d: 'Chainlink ETH/USD 41 s old · USDC/USD feed · WETH 30 m TWAP · UNI v2 spot · ENS unpriced: a floor is a market question', host: host, m: 'eth_call', c: 4, ms: '640 ms', msN: 640, color: color }); });
-      t += 520;
-      after(t, function () { push({ t: 'Asked base and arbitrum the same way', d: 'identical lens call, one endpoint each · a chain that will not answer is listed, never guessed', host: 'this browser · mainnet.base.org · arb1.arbitrum.io · both saw the address', m: 'eth_call', c: 2, ms: '780 ms', msN: 780, color: 'var(--color-accent-2-700)' }); });
-    }
-    t += 200;
-    after(t, function () { state.phase = 'answer'; state.chains = chainsFor(mode); state.status = 'Block ' + BLOCK; });
-  }
-
-  function start(typed) {
-    clearTimers();
-    var isName = NAME_RE.test(typed);
-    var mode = scenarioFor(typed);
-    var address = isName ? '0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045' : typed;
-    state.phase = 'busy'; state.trail = []; state.chains = []; state.mode = mode;
-    state.name = isName ? typed.toLowerCase() : ''; state.address = address;
-    state.status = isName ? 'Resolving name…' : 'Asking the index…';
-    var t = 0;
-    if (isName) {
-      t += 420;
-      after(t, function () {
-        push({ t: 'Resolved ' + typed.toLowerCase() + ' → ' + short(address), d: 'eth_call · ENS Universal Resolver · resolve(bytes name, bytes data) · name NFC-normalised and lowercased in this tab', host: PUBLIC_RPC + ' · saw the name only', m: 'eth_call', c: 1, ms: '212 ms', msN: 212, color: 'var(--color-accent-2-700)' });
-        state.status = 'Asking the index…';
-      });
-    }
-    t += 380;
-    after(t, function () {
-      var hit = mode === 'indexed';
-      push({ t: hit ? 'Index knows this address' : 'Index has no rows for this address', d: 'GET /v1/accounts/' + short(address) + ' · ' + (hit ? '4 contracts touched · as_of_block ' + BLOCK : '0 contracts · history floor 23,410,580'), host: DAEMON + ' · read the address from the path', m: 'GET /v1/accounts', c: 1, ms: '48 ms', msN: 48, color: hit ? 'var(--color-accent-700)' : 'var(--color-accent-2-700)' });
-      if (hit) { readVia('daemon'); }
-      else if (remembered === 'public' || remembered === 'own') {
-        push({ t: 'Confirmation remembered for this session', d: 'sessionStorage evmscan.rpcChoice = ' + remembered, host: 'this browser', ms: '0 ms', color: 'var(--color-neutral-700)' });
-        readVia(remembered);
-      } else { state.phase = 'confirm'; state.status = 'Needs one confirmation'; }
-    });
-  }
-
-  function set(typed) {
-    state.typed = typed;
-    if (ADDR_RE.test(typed) || NAME_RE.test(typed)) { start(typed); }
-    else if (state.phase !== 'idle') { clearTimers(); state.phase = 'idle'; state.trail = []; state.chains = []; state.status = ''; }
-    render();
-  }
-
-  function callsRollup() {
-    var by = {};
-    state.trail.filter(function (x) { return x.m; }).forEach(function (x) {
-      var e = by[x.m] || { m: x.m, c: 0, ms: 0 };
-      e.c += x.c || 1; e.ms += x.msN || 0;
-      by[x.m] = e;
-    });
-    return Object.keys(by).map(function (k) {
-      var e = by[k];
-      return { m: e.m, c: '× ' + e.c, ms: e.ms >= 1000 ? (e.ms / 1000).toFixed(1) + ' s' : e.ms + ' ms' };
-    });
-  }
-
-  function callTotal() {
-    var rows = state.trail.filter(function (x) { return x.m; });
-    var n = rows.reduce(function (a, x) { return a + (x.c || 1); }, 0);
-    var ms = rows.reduce(function (a, x) { return a + (x.msN || 0); }, 0);
-    return n + ' request' + (n === 1 ? '' : 's') + ' · ' + (ms >= 1000 ? (ms / 1000).toFixed(1) + ' s' : ms + ' ms') + ' total';
-  }
-
-  function ledgerRows() {
-    var live = assetsView().length;
-    var dBlocks = BLOCK_N - COMMITTED.block;
-    var dAssets = live - COMMITTED.contracts;
-    var mut = 'color-mix(in srgb, var(--color-text) 55%, transparent)';
-    return [
-      { label: 'Committed', value: 'epoch ' + COMMITTED.epoch, note: 'block ' + fmtN(COMMITTED.block) + ' · ' + COMMITTED.contracts + ' contracts · ' + COMMITTED.status, color: mut },
-      { label: 'Read just now', value: 'block ' + BLOCK, note: live + ' assets · head state, never a commitment', color: mut },
-      { label: 'Drift', value: '+' + fmtN(dBlocks) + ' block' + (dBlocks === 1 ? '' : 's'), note: (dAssets >= 0 ? '+' : '') + dAssets + ' asset' + (Math.abs(dAssets) === 1 ? '' : 's') + ' since the commitment', color: 'var(--color-accent-700)' },
-    ];
-  }
-
-  var card = document.getElementById('lookup-card');
-  // What has already played its entrance, so a rebuild does not replay it.
-  var risen = { trail: 0, answer: false, confirm: false, dialog: false };
-  function still(seen) { return seen ? ' no-anim' : ''; }
-
-  function render() {
-    var s = state;
-    var ownHost = hostOf(s.ownRpc);
-    var isIdle = s.phase === 'idle', isBusy = s.phase === 'busy', isConfirm = s.phase === 'confirm', hasAnswer = s.phase === 'answer';
-    var assets = assetsView();
-
-    var html = '<div class="pane">';
-    html += '<div class="row-baseline"><h6 style="margin:0">Lookup</h6><span class="text-muted" style="font-size:12px;margin-left:auto;font-variant-numeric:tabular-nums">block ' + BLOCK + '</span><button class="btn btn-secondary" id="lk-explain-toggle" style="font-size:12px;padding:4px 10px">' + (s.explainOpen ? 'Hide explanation' : 'Explain this read') + '</button></div>';
-
-    html += '<div>';
-    html += '<label style="display:block;font-size:12px;color:color-mix(in srgb, var(--color-text) 70%, transparent);margin-bottom:5px">Address or ENS name</label>';
-    html += '<input type="text" id="lk-input" value="' + esc(s.typed) + '" spellcheck="false" autocomplete="off" placeholder="0x… or vitalik.eth" class="lookup-input">';
-    html += '<div style="display:flex;justify-content:space-between;gap:var(--space-3);align-items:baseline;margin-top:8px;font-size:12.5px;min-height:20px">';
-    html += '<span class="text-muted" style="animation:' + (isBusy ? 'blink 1.2s ease-in-out infinite' : 'none') + '">' + esc(s.status) + '</span>';
-    if (isIdle) { html += '<span class="quick-links"><button class="btn btn-ghost" id="lk-try-vitalik" style="font-size:12.5px">vitalik.eth</button><button class="btn btn-ghost" id="lk-try-cold" style="font-size:12.5px">0x1111…</button></span>'; }
-    html += '</div></div>';
-
-    if (isIdle) { html += '<button class="btn btn-primary btn-block" disabled style="justify-content:flex-start;padding:12px var(--space-4);font-size:15px">Paste an address to begin</button>'; }
-    if (isBusy) { html += '<button class="btn btn-primary btn-block" disabled style="justify-content:flex-start;padding:12px var(--space-4);font-size:15px;opacity:.7">Reading…</button>'; }
-
-    if (isConfirm) {
-      var rpcHost = s.ownRpcOpen ? ownHost : PUBLIC_RPC;
-      html += '<div class="confirm-box' + still(risen.confirm) + '"><h4 style="margin:0">Not in the index</h4>';
-      html += '<p style="margin:0;font-size:13.5px;line-height:1.5;opacity:.85">Its activity is older than this node\'s history, or touches contracts nobody indexed. Reading it anyway sends one call to <strong>' + esc(rpcHost) + '</strong>, which will see the address.</p>';
-      if (s.ownRpcOpen) { html += '<input class="input" type="text" id="lk-own-rpc" value="' + esc(s.ownRpc) + '" placeholder="http://127.0.0.1:8545" spellcheck="false">'; }
-      html += '<label class="radio" style="gap:8px;font-size:13.5px"><input type="checkbox" id="lk-remember" ' + (s.remember ? 'checked' : '') + '><span class="dot"></span>Don\'t ask again this session</label>';
-      html += '<div style="display:flex;gap:var(--space-4);font-size:13.5px"><button class="btn btn-ghost" id="lk-swap-rpc">' + (s.ownRpcOpen ? 'Use the public RPC instead' : 'Use my own RPC') + '</button><button class="btn btn-ghost" id="lk-cancel" style="margin-left:auto;color:var(--color-text)">Cancel</button></div>';
-      html += '</div><button class="btn btn-primary btn-block" id="lk-confirm" style="justify-content:flex-start;padding:12px var(--space-4);font-size:15px">' + (s.ownRpcOpen ? 'Read from ' + esc(ownHost) : 'Read from ' + esc(PUBLIC_RPC)) + '</button>';
-    }
-
-    if (hasAnswer) {
-      var activeNets = NETS.filter(function (n) { return s.active.indexOf(n.id) !== -1; }).slice(0, 8);
-      html += '<div style="display:flex;align-items:center;gap:var(--space-2);border-top:2px solid var(--color-divider);padding-top:var(--space-3)"><h6 style="margin:0">Networks</h6><span style="display:flex;gap:3px">' + activeNets.map(function (n) { return '<span title="' + esc(n.name) + '" style="width:10px;height:10px;background:' + n.color + '"></span>'; }).join('') + '</span><span class="text-muted" style="font-size:12px;font-variant-numeric:tabular-nums">' + s.active.length + ' of ' + NETS.length + ' · block ' + BLOCK + '</span><button class="btn btn-ghost" id="lk-open-nets" style="margin-left:auto;font-size:13px">Change</button></div>';
-
-      html += '<div class="ledger-grid' + still(risen.answer) + '">' + ledgerRows().map(function (l) {
-        return '<div class="tile"><div class="text-muted" style="font-size:10px;letter-spacing:0.08em;text-transform:uppercase">' + esc(l.label) + '</div><div style="font-family:var(--font-heading);font-weight:800;font-size:18px;font-variant-numeric:tabular-nums;margin-top:3px">' + esc(l.value) + '</div><div style="font-size:11.5px;font-variant-numeric:tabular-nums;color:' + l.color + '">' + esc(l.note) + '</div></div>';
-      }).join('') + '</div>';
-
-      html += '<div class="rise' + still(risen.answer) + '">';
-      if (assets.length === 0) { html += '<div class="text-muted" style="font-size:14px;padding:var(--space-3) 0">Nothing held on any chain we reached.</div>'; }
-      html += assets.map(function (a) {
-        var row = '<div class="asset-row" style="border-top-color:' + a.rule + '">';
-        row += '<div style="display:flex;align-items:baseline;gap:var(--space-2)"><span style="font-family:var(--font-heading);font-weight:800;font-size:16px">' + esc(a.symbol) + '</span><span class="text-muted" style="font-size:12.5px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(a.name) + '</span><span style="margin-left:auto;text-align:right;white-space:nowrap"><span style="font-size:16px;font-variant-numeric:tabular-nums">' + esc(a.balance) + '</span><span class="text-muted" style="display:block;font-size:11.5px;font-variant-numeric:tabular-nums">' + esc(a.value) + '</span></span></div>';
-        row += '<div style="display:flex;flex-direction:column;gap:3px;margin-top:6px">' + a.chains.map(function (c) {
-          return '<div class="chain-row text-muted"><span style="width:7px;height:7px;background:' + c.color + ';flex:none"></span><span>' + esc(c.name) + '</span><span style="font-variant-numeric:tabular-nums;color:var(--color-text)">' + esc(c.pct) + '</span><span style="margin-left:auto;font-variant-numeric:tabular-nums">' + esc(c.balance) + '</span></div>';
-        }).join('') + '</div></div>';
-        return row;
-      }).join('');
-      var footLine = s.via === 'daemon' ? 'Read from this node. Only the address left your browser.' : s.via === 'own' ? ('Read from ' + ownHost + '.') : ('Read from ' + PUBLIC_RPC + ' with your permission.');
-      html += '<div class="text-muted" style="font-size:12px;border-top:2px solid var(--color-divider);padding-top:var(--space-2);margin-top:var(--space-2)">' + esc(footLine) + '</div>';
-      html += '</div>';
-
-      html += '<div class="spent-box' + still(risen.answer) + '"><div class="row-baseline"><h6 style="margin:0">Spent on this read</h6><span class="text-muted" style="font-size:11.5px;margin-left:auto;font-variant-numeric:tabular-nums">' + esc(callTotal()) + '</span></div>';
-      html += '<div style="display:flex;flex-direction:column;margin-top:var(--space-2)">' + callsRollup().map(function (k) {
-        return '<div style="display:flex;align-items:baseline;gap:var(--space-3);border-top:1px solid var(--color-divider);padding:6px 0;font-size:12.5px"><span class="mono" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(k.m) + '</span><span class="text-muted" style="font-variant-numeric:tabular-nums;margin-left:auto">' + esc(k.c) + '</span><span style="font-variant-numeric:tabular-nums;min-width:56px;text-align:right">' + esc(k.ms) + '</span></div>';
-      }).join('') + '</div></div>';
-    }
-
-    html += '</div>';
-
-    if (s.explainOpen) {
-      html += '<div class="pane explain"><div class="row-baseline"><h6 style="margin:0">What happened</h6><span class="text-muted" style="font-size:12px;margin-left:auto">every call, host and block</span></div>';
-      if (s.trail.length === 0) { html += '<p class="text-muted" style="font-size:13.5px;margin:0;max-width:42ch">Each read prints its own trail here: which host was asked, what it was asked for, at which block, and how long it took. Nothing is summarised away.</p>'; }
-      html += '<ol style="list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:var(--space-4)">' + s.trail.map(function (step) {
-        return '<li class="trail-item' + still(step.n <= risen.trail) + '"><span style="font-family:var(--font-heading);font-weight:800;font-size:13px;color:' + step.color + ';font-variant-numeric:tabular-nums">' + step.n + '</span><div style="min-width:0"><div style="font-size:14px;font-weight:600">' + esc(step.t) + '</div><div class="text-muted" style="font-size:12px;line-height:1.5;word-break:break-word;margin-top:3px">' + esc(step.d) + '</div><div style="font-size:11.5px;color:' + step.color + ';margin-top:3px">' + esc(step.host) + '</div></div><span class="text-muted" style="font-size:11.5px;font-variant-numeric:tabular-nums;white-space:nowrap">' + esc(step.ms) + '</span></li>';
-      }).join('') + '</ol></div>';
-    }
-
-    if (s.netsOpen) {
-      var q = (s.netQuery || '').trim().toLowerCase();
-      var shown = NETS.filter(function (n) { return !q || n.name.toLowerCase().indexOf(q) !== -1 || String(n.chainId).indexOf(q) !== -1; })
-        .sort(function (a, b) { return (s.active.indexOf(b.id) !== -1) - (s.active.indexOf(a.id) !== -1); });
-      html += '<div class="dialog-backdrop" id="lk-nets-backdrop"><div id="nets-dialog" class="' + (risen.dialog ? 'no-anim' : '') + '" role="dialog" aria-modal="true" style="width:min(440px,100%);max-height:min(680px,86vh);background:var(--color-bg);border:2px solid var(--color-text);display:flex;flex-direction:column;overflow:hidden;animation:rise .2s ease-out">';
-      html += '<div style="padding:var(--space-4);display:flex;align-items:baseline;gap:var(--space-2);border-bottom:2px solid var(--color-divider)"><h4 style="margin:0">Networks</h4><span class="text-muted" style="font-size:12px;font-variant-numeric:tabular-nums">' + s.active.length + ' of ' + NETS.length + ' · block ' + BLOCK + '</span><button class="btn btn-secondary" id="lk-nets-done" style="margin-left:auto">Done</button></div>';
-      html += '<div style="padding:var(--space-4) var(--space-4) var(--space-3)"><input class="input" type="text" id="lk-net-query" value="' + esc(s.netQuery || '') + '" placeholder="Search chains" spellcheck="false"><div style="display:flex;gap:var(--space-4);font-size:12.5px;margin-top:8px"><button class="btn btn-ghost" id="lk-select-all">Select shown</button><button class="btn btn-ghost" id="lk-select-none">Clear all</button></div></div>';
-      html += '<div style="overflow-y:auto;padding:0 var(--space-2) var(--space-3);display:flex;flex-direction:column">';
-      if (shown.length === 0) { html += '<div class="text-muted" style="padding:var(--space-4);font-size:14px">No chain matches.</div>'; }
-      html += shown.map(function (n) {
-        var on = s.active.indexOf(n.id) !== -1;
-        return '<button class="row" data-net="' + n.id + '" style="opacity:' + (on ? 1 : .6) + '"><span style="width:18px;height:18px;background:' + n.color + ';flex:none"></span><span style="min-width:0;flex:1"><span style="display:block">' + esc(n.name) + '</span><span class="text-muted" style="display:block;font-size:11.5px;font-variant-numeric:tabular-nums">chain ' + n.chainId + '</span></span><span style="width:18px;height:18px;flex:none;border:1.5px solid ' + (on ? 'var(--color-accent)' : 'var(--color-divider)') + ';background:' + (on ? 'var(--color-accent)' : 'transparent') + ';display:grid;place-items:center;color:var(--color-bg);font-size:12px;line-height:1">' + (on ? '✓' : '') + '</span></button>';
-      }).join('');
-      html += '</div></div></div>';
-    }
-
-    // A full rebuild throws away the focused element, so put the caret back
-    // where the reader left it — otherwise typing loses a keystroke a tick.
-    var focused = document.activeElement;
-    var focusId = focused && card.contains(focused) ? focused.id : '';
-    var caret = focusId && focused.setSelectionRange ? focused.selectionStart : null;
-
-    card.innerHTML = html;
-    risen.trail = s.trail.length;
-    risen.answer = hasAnswer;
-    risen.confirm = isConfirm;
-    risen.dialog = s.netsOpen;
-    wire();
-
-    var again = focusId ? document.getElementById(focusId) : null;
-    if (again) {
-      again.focus();
-      if (caret != null && again.setSelectionRange) { again.setSelectionRange(caret, caret); }
-    }
-  }
-
-  function wire() {
-    var input = document.getElementById('lk-input');
-    if (input) { input.addEventListener('input', function (e) { set(e.target.value.trim()); }); }
-    var byId = document.getElementById.bind(document);
-    var on = function (id, fn) { var el = byId(id); if (el) el.addEventListener('click', fn); };
-    on('lk-explain-toggle', function () { setState({ explainOpen: !state.explainOpen }); });
-    on('lk-try-vitalik', function () { set('vitalik.eth'); });
-    on('lk-try-cold', function () { set('0x1111111111111111111111111111111111111111'); });
-    on('lk-swap-rpc', function () { setState({ ownRpcOpen: !state.ownRpcOpen }); });
-    on('lk-cancel', function () { clearTimers(); setState({ phase: 'idle', typed: '', trail: [], chains: [], status: '' }); });
-    var ownRpc = byId('lk-own-rpc');
-    if (ownRpc) { ownRpc.addEventListener('input', function (e) { state.ownRpc = e.target.value; render(); }); }
-    var remember = byId('lk-remember');
-    if (remember) { remember.addEventListener('change', function () { state.remember = !state.remember; }); }
-    on('lk-confirm', function () {
-      var v = state.ownRpcOpen ? 'own' : 'public';
-      if (state.remember) { remembered = v; try { sessionStorage.setItem('evmscan.rpcChoice', v); } catch (e) {} }
-      push({ t: 'You confirmed the read', d: (v === 'own' ? hostOf(state.ownRpc) : PUBLIC_RPC) + ' will see ' + short(state.address), host: 'this browser', ms: '—', color: v === 'own' ? 'var(--color-accent-700)' : 'var(--color-accent-2-700)' });
-      readVia(v);
-      render(); // paint now, so the confirm button is gone before a second click lands
-    });
-    on('lk-open-nets', function () { setState({ netsOpen: true, netQuery: '' }); });
-    on('lk-nets-done', function () { setState({ netsOpen: false }); });
-    var backdrop = byId('lk-nets-backdrop');
-    if (backdrop) {
-      backdrop.addEventListener('click', function (e) { if (e.target === backdrop) setState({ netsOpen: false }); });
-    }
-    var netQuery = byId('lk-net-query');
-    if (netQuery) { netQuery.addEventListener('input', function (e) { state.netQuery = e.target.value; render(); }); }
-    on('lk-select-all', function () {
-      var q = (state.netQuery || '').trim().toLowerCase();
-      var shown = NETS.filter(function (n) { return !q || n.name.toLowerCase().indexOf(q) !== -1 || String(n.chainId).indexOf(q) !== -1; });
-      var set = {}; state.active.forEach(function (id) { set[id] = true; }); shown.forEach(function (n) { set[n.id] = true; });
-      state.active = Object.keys(set); render();
-    });
-    on('lk-select-none', function () { state.active = []; render(); });
-    document.querySelectorAll('#nets-dialog [data-net]').forEach(function (btn) {
-      btn.addEventListener('click', function () {
-        var id = btn.getAttribute('data-net');
-        var i = state.active.indexOf(id);
-        if (i === -1) { state.active.push(id); } else { state.active.splice(i, 1); }
-        render();
-      });
-    });
-  }
-
-  document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape' && state.netsOpen) { setState({ netsOpen: false }); }
+async function readBrowser(address, rpcUrl) {
+  state.status = 'Fetching the lens…';
+  render();
+  let t0 = performance.now();
+  await lens(API);
+  step({
+    t: 'Fetched the lens bytecode',
+    d: 'GET /v1/lens on this origin · the same bytes for everyone · no account in the request',
+    host: `${location.host} · was not told who this is about`,
+    m: 'GET /v1/lens', c: 1, msN: performance.now() - t0,
   });
 
+  state.status = 'Fetching the token list…';
   render();
-})();
+  t0 = performance.now();
+  const list = await fetch(TOKEN_LIST).then(r => r.json());
+  const tokens = list.tokens.filter(t => t.chainId === CHAIN_ID).map(t => t.address);
+  step({
+    t: `Took ${num(tokens.length)} mainnet contracts off a token list`,
+    d: 'with no index there is nothing to say which contracts matter, so a curated list stands in — it is incomplete by construction, and a token missing from it is missed here',
+    host: `${host(TOKEN_LIST)} · was asked for a list, not about an account`,
+    m: 'GET token list', c: 1, msN: performance.now() - t0,
+  });
+
+  t0 = performance.now();
+  state.status = `Reading ${num(tokens.length)} balances…`;
+  render();
+  const out = await balances(rpcUrl, address, tokens, API, (p) => {
+    state.progress = p;
+    state.status = `Read ${num(p.done)} of ${num(p.total)} · ${p.calls} call${p.calls === 1 ? '' : 's'}…`;
+    render();
+  });
+  state.progress = null;
+  step({
+    t: `Read every balance in ${out.calls} call${out.calls === 1 ? '' : 's'}`,
+    d: `eth_call { to: null, data: AssetLens creation code ‖ request } at latest → block ${num(out.info.chain.blockNumber)} · batched under EIP-170's 24,576-byte reply ceiling · every inner read a capped staticcall, so a token that will not answer reads as unknown and never as zero`,
+    host: `${host(rpcUrl)} · saw the address`,
+    m: 'eth_call', c: out.calls, msN: performance.now() - t0, accent: true,
+  });
+
+  state.rows = out.rows
+    .filter(t => !t.hasBalance || t.balance > 0n)
+    .map(t => ({
+      address: t.token, symbol: t.symbol, name: t.name,
+      balance: !t.hasBalance ? null
+        : t.standard === 55 ? null
+        : fmtUnits(t.balance, t.hasDecimals ? Number(t.decimals) : (t.standard === 21 ? 0 : undefined)),
+      unread: !t.hasBalance,
+      unreadWhy: t.standard === 55 ? 'ERC-1155 is per id' : 'the call did not answer',
+      usd: null, confidence: null, committed: undefined,
+      standard: { 20: 'erc20', 21: 'erc721', 55: 'erc1155' }[t.standard] || '',
+    }));
+  state.meta = {
+    via: 'browser', block: out.info.chain.blockNumber, host: host(rpcUrl),
+    native: fmtUnits(out.info.account.balance, 18), scanned: tokens.length,
+  };
+}
+
+function rpcChoice() {
+  return state.ownRpcOpen && state.ownRpc.trim() ? state.ownRpc.trim() : PUBLIC_RPC;
+}
+
+async function go(address) {
+  try {
+    if (state.mode === 'index') {
+      await readIndex(address);
+    } else {
+      await readBrowser(address, rpcChoice());
+    }
+    state.phase = 'answer';
+    state.status = '';
+  } catch (e) {
+    fail(e);
+    return;
+  }
+  render();
+}
+
+async function start(typed) {
+  state.phase = 'busy';
+  state.trail = []; state.rows = []; state.meta = null; state.err = '';
+  risen.trail = 0; risen.answer = false;
+  render();
+  let address;
+  try {
+    address = await toAddress(typed);
+  } catch (e) { fail(e); return; }
+  state.address = address;
+
+  // The gate is for a host that does not already know. This origin read the
+  // address out of its own URL, so the index mode has nothing left to disclose;
+  // browser mode is about to hand it to an RPC, which is a new disclosure unless
+  // it is the reader's own node or they already said yes this session.
+  const url = rpcChoice();
+  const ownNode = /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:|\/|$)/.test(url);
+  if (state.mode === 'browser' && !ownNode && approved !== 'yes') {
+    state.phase = 'confirm';
+    state.status = 'Needs one confirmation';
+    render();
+    return;
+  }
+  await go(address);
+}
+
+// ---------------------------------------------------------------------------
+// Render
+// ---------------------------------------------------------------------------
+
+function metaTiles() {
+  const m = state.meta;
+  if (!m) return [];
+  const reqs = state.trail.filter(x => x.m);
+  const n = reqs.reduce((a, x) => a + (x.c || 1), 0);
+  const total = reqs.reduce((a, x) => a + (x.msN || 0), 0);
+  const mut = 'color-mix(in srgb, var(--color-text) 55%, transparent)';
+  return [
+    {
+      label: 'Answered by', value: m.via === 'index' ? 'the index' : 'your RPC',
+      note: m.via === 'index' ? `${m.host} · knows the address` : `${m.host} · no indexer in the path`,
+      color: mut,
+    },
+    { label: 'At block', value: num(m.block), note: 'head state, never a commitment', color: mut },
+    {
+      label: 'Cost', value: `${num(n)} request${n === 1 ? '' : 's'}`,
+      note: `${ms(total)} · ${m.via === 'index' ? 'the index already knew where to look' : num(m.scanned) + ' contracts guessed at from a list'}`,
+      color: 'var(--color-accent-700)',
+    },
+  ];
+}
+
+function render() {
+  const s = state;
+  const busy = s.phase === 'busy';
+  const isConfirm = s.phase === 'confirm';
+  const answer = s.phase === 'answer';
+  const url = rpcChoice();
+
+  let html = '<div class="pane">';
+  html += `<div class="row-baseline"><h6 style="margin:0">Lookup</h6>
+    <span class="text-muted" style="font-size:12px;margin-left:auto">mainnet</span>
+    <button class="btn btn-secondary" id="lk-explain-toggle" style="font-size:12px;padding:4px 10px">${s.explainOpen ? 'Hide explanation' : 'Explain this read'}</button></div>`;
+
+  html += '<div>';
+  html += '<label style="display:block;font-size:12px;color:color-mix(in srgb, var(--color-text) 70%, transparent);margin-bottom:5px" for="lk-input">Address or ENS name</label>';
+  html += `<input type="text" id="lk-input" value="${esc(s.typed)}" spellcheck="false" autocomplete="off" placeholder="0x… or vitalik.eth" class="lookup-input">`;
+  html += `<div style="display:flex;justify-content:space-between;gap:var(--space-3);align-items:baseline;margin-top:8px;font-size:12.5px;min-height:20px">
+      <span class="text-muted" style="animation:${busy ? 'blink 1.2s ease-in-out infinite' : 'none'}">${esc(s.status)}</span>
+      ${s.phase === 'idle' ? '<span class="quick-links"><button class="btn btn-ghost" id="lk-try" style="font-size:12.5px">vitalik.eth</button></span>' : ''}
+    </div>`;
+  html += '</div>';
+
+  // Mode. Both are live; the difference is who gets told.
+  html += `<div class="modes">
+    <button class="mode${s.mode === 'index' ? ' on' : ''}" data-mode="index">
+      <span class="mt">Through the index</span>
+      <span class="md">One request to this origin. It answers with the contracts this account has touched, their balances and prices — and it sees the address.</span>
+    </button>
+    <button class="mode${s.mode === 'browser' ? ' on' : ''}" data-mode="browser">
+      <span class="mt">Browser only</span>
+      <span class="md">No indexer in the read path. A token list, then one deployless <code>eth_call</code> per batch against an RPC you name. Slower, and nothing here learns who you are.</span>
+    </button>
+  </div>`;
+
+  if (s.mode === 'browser') {
+    html += `<div style="display:flex;gap:var(--space-3);align-items:baseline;flex-wrap:wrap;font-size:12.5px">
+      <span class="text-muted">Reads from <strong>${esc(host(url))}</strong></span>
+      <button class="btn btn-ghost" id="lk-swap-rpc" style="margin-left:auto">${s.ownRpcOpen ? 'Use the public RPC' : 'Use my own node'}</button></div>`;
+    if (s.ownRpcOpen) {
+      html += `<input class="input" type="text" id="lk-own-rpc" value="${esc(s.ownRpc)}" placeholder="http://127.0.0.1:8545" spellcheck="false">`;
+    }
+  }
+
+  if (s.phase === 'idle') { html += '<button class="btn btn-primary btn-block" disabled style="justify-content:flex-start;padding:12px var(--space-4);font-size:15px">Enter an address to begin</button>'; }
+  if (busy) { html += '<button class="btn btn-primary btn-block" disabled style="justify-content:flex-start;padding:12px var(--space-4);font-size:15px;opacity:.7">Reading…</button>'; }
+
+  if (isConfirm) {
+    html += `<div class="confirm-box${still(risen.confirm)}"><h4 style="margin:0">One host is about to see this address</h4>
+      <p style="margin:0;font-size:13.5px;line-height:1.5;opacity:.85">Reading without the index means asking an RPC directly, and <strong>${esc(host(url))}</strong> will see the address it is asked about. Your own node on loopback is never gated.</p>
+      <label class="radio" style="gap:8px;font-size:13.5px"><input type="checkbox" id="lk-remember" ${s.remember ? 'checked' : ''}><span class="dot"></span>Don't ask again this session</label>
+      <div style="display:flex;gap:var(--space-4);font-size:13.5px"><button class="btn btn-ghost" id="lk-swap-rpc2">${s.ownRpcOpen ? 'Use the public RPC' : 'Use my own node'}</button><button class="btn btn-ghost" id="lk-cancel" style="margin-left:auto;color:var(--color-text)">Cancel</button></div></div>
+      <button class="btn btn-primary btn-block" id="lk-confirm" style="justify-content:flex-start;padding:12px var(--space-4);font-size:15px">Read from ${esc(host(url))}</button>`;
+  }
+
+  if (s.phase === 'error') {
+    html += `<div class="confirm-box" style="border-color:var(--color-accent-2-700)"><h4 style="margin:0">That read did not finish</h4>
+      <p style="margin:0;font-size:13.5px;line-height:1.5;opacity:.85">${esc(s.err)}</p></div>`;
+  }
+
+  if (answer && s.meta) {
+    html += `<div class="ledger-grid${still(risen.answer)}">` + metaTiles().map(l => `
+      <div class="tile"><div class="text-muted" style="font-size:10px;letter-spacing:0.08em;text-transform:uppercase">${esc(l.label)}</div>
+      <div style="font-family:var(--font-heading);font-weight:800;font-size:18px;font-variant-numeric:tabular-nums;margin-top:3px">${esc(l.value)}</div>
+      <div style="font-size:11.5px;color:${l.color}">${esc(l.note)}</div></div>`).join('') + '</div>';
+
+    html += `<div class="rise${still(risen.answer)}">`;
+    if (s.rows.length === 0) {
+      html += `<div class="text-muted" style="font-size:14px;padding:var(--space-3) 0">${s.meta.via === 'index'
+        ? 'Nothing indexed for this account yet. Browser-only mode reads it from a list instead.'
+        : 'No balance on any contract from the list.'}</div>`;
+    }
+    html += s.rows.map(r => `
+      <div class="asset-row">
+        <div style="display:flex;align-items:baseline;gap:var(--space-2)">
+          <span style="font-family:var(--font-heading);font-weight:800;font-size:16px">${esc(r.symbol || short(r.address))}</span>
+          <span class="text-muted" style="font-size:12.5px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.name || '')}</span>
+          ${r.committed ? '<span class="pill">committed</span>' : ''}
+          <span style="margin-left:auto;text-align:right;white-space:nowrap">
+            <span style="font-size:16px;font-variant-numeric:tabular-nums">${r.unread ? `<span class="text-muted" style="font-size:13px">${esc(r.unreadWhy || 'unknown')}</span>` : esc(r.balance)}</span>
+            ${r.usd ? `<span class="text-muted" style="display:block;font-size:11.5px;font-variant-numeric:tabular-nums">$${esc(r.usd)}${r.confidence ? ' · ' + esc(r.confidence) : ''}</span>` : ''}
+          </span>
+        </div>
+        <div class="chain-row text-muted" style="margin-top:4px"><span class="mono" style="font-size:11.5px">${esc(short(r.address, 6))}</span><span style="font-size:11.5px">${esc(r.standard || '')}</span></div>
+      </div>`).join('');
+
+    html += `<div class="text-muted" style="font-size:12px;border-top:2px solid var(--color-divider);padding-top:var(--space-2);margin-top:var(--space-2)">${s.meta.via === 'index'
+      ? 'This covers the contracts the index keeps, not the chain: a contract nobody asked for is absent whether or not this account holds it. Browser-only mode reads without it.'
+      : `Native balance ${esc(s.meta.native)} ETH. This covers the ${num(s.meta.scanned)} contracts on the list and nothing else — a token the list omits was never asked about.`}</div>`;
+    html += '</div>';
+  }
+
+  html += '</div>';
+
+  if (s.explainOpen) {
+    html += `<div class="pane explain"><div class="row-baseline"><h6 style="margin:0">What happened</h6><span class="text-muted" style="font-size:12px;margin-left:auto">every call, host and block</span></div>`;
+    if (!s.trail.length) {
+      html += '<p class="text-muted" style="font-size:13.5px;margin:0;max-width:42ch">Each read prints its own trail here: which host was asked, what it was asked for, at which block, and how long it took. These are the real requests this page made.</p>';
+    }
+    html += '<ol style="list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:var(--space-4)">' + s.trail.map(x => {
+      const color = x.accent ? 'var(--color-accent-2-700)' : 'var(--color-accent-700)';
+      return `<li class="trail-item${still(x.n <= risen.trail)}">
+        <span style="font-family:var(--font-heading);font-weight:800;font-size:13px;color:${color};font-variant-numeric:tabular-nums">${x.n}</span>
+        <div style="min-width:0"><div style="font-size:14px;font-weight:600">${esc(x.t)}</div>
+          <div class="text-muted" style="font-size:12px;line-height:1.5;word-break:break-word;margin-top:3px">${esc(x.d)}</div>
+          <div style="font-size:11.5px;color:${color};margin-top:3px">${esc(x.host)}</div></div>
+        <span class="text-muted" style="font-size:11.5px;font-variant-numeric:tabular-nums;white-space:nowrap">${esc(ms(x.msN))}</span></li>`;
+    }).join('') + '</ol></div>';
+  }
+
+  const active = document.activeElement;
+  const focusId = active && card.contains(active) ? active.id : '';
+  const caret = focusId && active.setSelectionRange ? active.selectionStart : null;
+
+  card.innerHTML = html;
+  risen.trail = s.trail.length;
+  risen.answer = answer;
+  risen.confirm = isConfirm;
+  wire();
+
+  const again = focusId ? document.getElementById(focusId) : null;
+  if (again) {
+    again.focus();
+    if (caret != null && again.setSelectionRange) again.setSelectionRange(caret, caret);
+  }
+}
+
+function wire() {
+  const on = (id, fn) => { const el = document.getElementById(id); if (el) el.addEventListener('click', fn); };
+  const input = document.getElementById('lk-input');
+  if (input) {
+    input.addEventListener('input', (e) => {
+      state.typed = e.target.value.trim();
+      if (state.phase !== 'idle' && state.phase !== 'busy') { state.phase = 'idle'; state.status = ''; state.trail = []; state.rows = []; state.meta = null; }
+      render();
+    });
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+  }
+  on('lk-try', () => { state.typed = 'vitalik.eth'; submit(); });
+  on('lk-explain-toggle', () => { state.explainOpen = !state.explainOpen; render(); });
+  on('lk-swap-rpc', () => { state.ownRpcOpen = !state.ownRpcOpen; render(); });
+  on('lk-swap-rpc2', () => { state.ownRpcOpen = !state.ownRpcOpen; render(); });
+  on('lk-cancel', () => { state.phase = 'idle'; state.status = ''; state.trail = []; render(); });
+  on('lk-confirm', () => {
+    if (state.remember) { approved = 'yes'; try { sessionStorage.setItem('evmscan.rpcChoice', 'yes'); } catch { /* private window */ } }
+    step({ t: 'You allowed the read', d: `${host(rpcChoice())} is about to be told which address this is about`, host: 'this browser', msN: 0 });
+    state.phase = 'busy';
+    render();
+    go(state.address);
+  });
+  const ownRpc = document.getElementById('lk-own-rpc');
+  if (ownRpc) ownRpc.addEventListener('input', (e) => { state.ownRpc = e.target.value; render(); });
+  const remember = document.getElementById('lk-remember');
+  if (remember) remember.addEventListener('change', () => { state.remember = !state.remember; });
+  card.querySelectorAll('[data-mode]').forEach(b => b.addEventListener('click', () => {
+    state.mode = b.getAttribute('data-mode');
+    if (state.phase === 'answer' || state.phase === 'error') { state.phase = 'idle'; state.trail = []; state.rows = []; state.meta = null; }
+    render();
+  }));
+}
+
+function submit() {
+  const typed = state.typed.trim();
+  if (!typed) return;
+  if (!ADDRESS_RE.test(typed) && !NAME_RE.test(typed)) {
+    state.phase = 'error';
+    state.err = 'That is neither a 20-byte hex address nor a name with a dot in it.';
+    render();
+    return;
+  }
+  start(typed);
+}
+
+render();
 </script>
 </body>
 </html>

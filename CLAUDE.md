@@ -304,13 +304,28 @@ shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module 
   RPC; the only request to this origin is `GET /v1/lens`, which never carries an
   account. Token metadata is attacker-controlled text from the chain, so everything
   interpolated into markup goes through `esc()`. `landing.html` is the project's
-  front door at `/landing.html` — a self-contained explainer page (hero, the read
-  walkthrough, AssetLens, architecture, the API table, running costs) in a separate
-  visual language from the app, linked from nowhere in the nav. Its lookup card is a
-  **scripted walkthrough**, not a third reader: it reaches no endpoint, and the
-  addresses, balances, hosts and timings in it are illustrative. Anything it states
-  as fact about this repo — route names, registry signatures, config numbers — is
-  checked against the source, so re-check it when those change.
+  front door at `/landing.html` — a self-contained explainer page (hero, the live
+  lookup, AssetLens, architecture, the API table, running costs) in a separate
+  visual language from the app, linked from nowhere in the nav. Its lookup card is
+  **live and mainnet-only**, and the reader picks who answers: *through the index*
+  is one `GET /v1/accounts/{addr}` to this origin, which returns the contracts,
+  balances, prices and `committed` in one response and sees the address; *browser
+  only* puts no indexer in the read path — a token list stands in for the index and
+  every entry is read with `balances()` against an RPC the reader names, which on
+  mainnet is 405 contracts in 21 batched calls. Showing that 1-against-21 is the
+  argument for having an index, so do not quietly narrow the browser path to make
+  it look cheaper. The gate fires only for a host that does not already know: this
+  origin read the address out of its own URL, and loopback is never gated. Nothing
+  on the page is scripted — every row, block and timing came off the wire — so any
+  figure it states about this repo is checked against the source and must be
+  re-checked when that changes.
+- `web/lensread.js` is the client-side read both pages share: `rpc`,
+  `resolveAddress` through the Universal Resolver, the `/v1/lens` artifact,
+  `lensCall`, and `balances` with its EIP-170 batch halving. `read.js` and
+  `landing.html` both import it and neither carries its own copy; it takes the RPC
+  url as a parameter and touches no DOM, so the choice of host stays with the page
+  that asked the reader. index.html keeps a separate lens call for the cross-chain
+  sweep, which batches across chains and has its own shape.
 - `mirror/` is a separate TypeScript package (`make test-mirror`, own `node_modules`, not
   in the Go build): the commitment encoding ported for clients, plus a local-first mirror
   that keeps the committed rows in the client's SQLite via Evolu and rebuilds the keccak
