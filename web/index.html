@@ -6,7 +6,7 @@
 <title>The Asset Index</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700&display=swap">
 <style>
   /* One page, five beats, read top to bottom: the question, the answer, where it came
      from, the machine that produced it, and how to check it. Warm paper, ink, one
@@ -575,6 +575,44 @@
     .tablerow { grid-template-columns: minmax(0, 1fr) !important; row-gap: 6px; }
     .tablerow .num, .verdict-cell { text-align: left; justify-content: flex-start; }
   }
+  /* ── Lookup v2: focused, one-question surface ───────────────────────── */
+  body { background: #f5f4f0; }
+  .top { position: static; background: transparent; border: 0; backdrop-filter: none; }
+  .top .bar { max-width: none; padding: 0; min-height: 64px; }
+  .top .wrap { padding-inline: 26px; }
+  .brand { font: 600 20px/1 'Syne', var(--sans); letter-spacing: -.035em; }
+  .top .pill, .top .toplinks a:not(.v2-link), .beats { display: none; }
+  .toplinks { display: flex; margin-left: auto; gap: 8px; font-size: 14px; font-weight: 500; color: var(--ink); }
+  .toplinks .v2-link { display: inline-flex; align-items: center; min-height: 35px; padding: 0 15px; border: 1px solid var(--line-2); border-radius: 999px; color: inherit; }
+  .toplinks .v2-link:first-child { border-color: transparent; }
+  .toplinks .v2-link:hover { background: rgba(20,22,26,.045); color: var(--ink); }
+  #beat1 { min-height: calc(100vh - 64px); display: grid; place-items: center; }
+  #beat1 .wrap { width: 100%; max-width: 820px; padding: 44px 24px 68px; }
+  #beat1 .narrow { max-width: none; display: flex; flex-direction: column; align-items: center; }
+  #beat1 .kicker { order: 0; margin: 0 0 24px; padding: 5px 13px; border: 1px solid var(--ink); border-radius: 999px; color: var(--ink); font: 400 13px/1 var(--sans); letter-spacing: 0; text-transform: none; }
+  #beat1 h1 { order: 1; max-width: 680px; margin-bottom: 17px; text-align: center; font: 600 clamp(42px, 7vw, 64px)/1.02 'Syne', var(--sans); letter-spacing: -.045em; }
+  #beat1 .lede { order: 2; max-width: 540px; margin: 0 0 17px; text-align: center; font-size: 18px; line-height: 1.45; color: var(--ink-65); }
+  #beat1 .lookup { order: 3; width: min(480px, 100%); display: block; margin: 0; padding: 12px; border-radius: 28px; background: #fff; box-shadow: 0 12px 32px rgba(20,22,26,.16); }
+  #beat1 .lookup::before { content: "Address"; display: block; margin: 9px 18px 6px; color: var(--ink-62); font-size: 13px; }
+  #beat1 .lookup .input.big { width: 100%; height: 42px; padding: 0 18px; border: 0; border-radius: 0; background: transparent; font: 400 22px/1.25 var(--sans); }
+  #beat1 .lookup .input.big:focus { outline: 0; }
+  #beat1 .lookup .btn { width: 100%; height: 52px; margin-top: 8px; border-radius: 999px; font-size: 17px; }
+  #beat1 .try { order: 4; width: min(456px, 100%); min-height: 0; margin: 10px 0 0; padding: 0 18px; font-size: 13px; }
+  #beat1 .try > span:first-child { display: none; }
+  #beat1 .try .ex { border: 0; background: transparent; padding: 0; font-family: var(--sans); font-size: 13px; }
+  #beat1 .hint, #beat1 .err, #beat1 #name-rpc-row, #beat1 #chain-rpc-row { order: 5; width: min(480px, 100%); }
+  #beat1 .howto, #beat1 .pipe { order: 6; width: min(680px, 100%); display: none; }
+  body.v2-explain #beat1 .howto, body.v2-explain #beat1 .pipe { display: block; }
+  body.v2-explain #beat1 .howto:not(.enscard), body.v2-explain #beat1 .pipe { margin-top: 14px; }
+  @media (max-width: 560px) {
+    .top .wrap { padding-inline: 16px; }
+    .brand { font-size: 18px; }
+    .toplinks { gap: 0; font-size: 13px; }
+    .toplinks .v2-link { padding-inline: 10px; }
+    #beat1 .wrap { padding-inline: 16px; }
+    #beat1 h1 { font-size: 42px; }
+    #beat1 .lede { font-size: 16px; }
+  }
 </style>
 </head>
 <body>
@@ -586,6 +624,8 @@
     <span class="pill" id="pill-node" hidden></span>
     <span class="pill amber" id="pill-epoch" hidden></span>
     <nav class="toplinks">
+      <a class="v2-link" id="v2-explain" href="#pipeline">Explain</a>
+      <a class="v2-link" href="read.html">Read via ENS</a>
       <a href="#beat5">Verify</a>
       <a href="#beat4">Operator</a>
       <a href="https://github.com/Skanislav/evm-scan" target="_blank" rel="noopener">GitHub</a>
@@ -606,11 +646,9 @@
 <section id="beat1" class="beat-sec">
   <div class="wrap">
     <div class="narrow">
-      <div class="kicker sec">01 · The question</div>
+      <div class="kicker sec" id="live-status">Live on your node</div>
       <h1>What does this address hold?</h1>
-      <p class="lede">Every wallet needs that answer fast, and almost every wallet buys it from one of a
-        handful of indexing providers. This one is answered from logs read off <em>your own node</em> —
-        and the machine that answered it is further down this page, not behind a login.</p>
+      <p class="lede">Answered from your own node, in one call, at one block. No provider in between.</p>
       <div class="lookup">
         <input class="input big" type="text" id="account" style="flex:1 1 380px; min-width:0" spellcheck="false"
                autocomplete="off" placeholder="0x… or an ENS name">
@@ -1466,6 +1504,7 @@ async function loadStatus() {
 
     $('pill-chain').innerHTML =
       `<span class="dot"></span>${esc(c.name || 'chain ' + c.chain_id)} · block ${num(c.head_block)}`;
+    $('live-status').textContent = `Live on your node · block ${num(c.head_block)}`;
     const nodePill = $('pill-node');
     nodePill.hidden = false;
     nodePill.textContent = c.node_local
@@ -4802,6 +4841,12 @@ async function buildEpoch() {
 // --------------------------------------------------------------------------
 
 $('lookup').addEventListener('click', lookup);
+$('v2-explain').addEventListener('click', event => {
+  event.preventDefault();
+  document.body.classList.toggle('v2-explain');
+  event.currentTarget.textContent = document.body.classList.contains('v2-explain') ? 'Hide explanation' : 'Explain';
+  if (document.body.classList.contains('v2-explain')) $('pipeline').scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
 $('account').addEventListener('keydown', e => { if (e.key === 'Enter') lookup(); });
 $('verdict-connect').addEventListener('click', connectForVerdict);
 $('verdict-sign').addEventListener('click', signVerdict);
