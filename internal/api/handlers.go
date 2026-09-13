@@ -62,7 +62,22 @@ type assetJSON struct {
 	// are not the same size. Absent when nobody has complained.
 	Reports      int    `json:"reports,omitempty"`
 	ReportReason string `json:"report_reason,omitempty"`
+	// Demand is how many readers signed for this contract and how many against.
+	// Net demand orders a list and clears min_voters; it decides nothing else.
+	Demand demandCounts `json:"demand"`
+	// Committed says the contract is in the latest finalized epoch's leaf for the
+	// account a response is about. Meaningless — and absent — on a list of assets
+	// with no account.
+	Committed bool `json:"committed,omitempty"`
 }
+
+// demandCounts is one contract's signed demand, each way.
+type demandCounts struct {
+	For     uint64 `json:"for"`
+	Against uint64 `json:"against"`
+}
+
+func (d demandCounts) net() int64 { return int64(d.For) - int64(d.Against) }
 
 // assetView renders one asset. live says whether the registry may be asked for its
 // funding on this request: a route about one asset can afford the verified
@@ -132,34 +147,95 @@ func (s *Server) listAssets(w http.ResponseWriter, r *http.Request) {
 	for _, a := range assets {
 		out = append(out, s.assetView(r.Context(), a, false))
 	}
+	s.attachDemand(r.Context(), chainID, out)
 	orderAssets(out)
 	writeJSON(w, http.StatusOK, map[string]any{"chain_id": chainID, "assets": out})
 }
 
-// orderAssets is the scan order: what a reader should ask about first.
+// assetWithDemand is assetView for a route about one asset, with its demand read.
+func (s *Server) assetWithDemand(ctx context.Context, a store.Asset, live bool) assetJSON {
+	one := []assetJSON{s.assetView(ctx, a, live)}
+	s.attachDemand(ctx, a.ChainID, one)
+	return one[0]
+}
+
+// attachDemand fills each asset's signed demand in one query.
+func (s *Server) attachDemand(ctx context.Context, chainID uint64, out []assetJSON) {
+	if s.d.Store == nil || len(out) == 0 {
+		return
+	}
+	addrs := make([]common.Address, len(out))
+	for i := range out {
+		addrs[i] = common.HexToAddress(out[i].Address)
+	}
+	totals, err := s.d.Store.DemandFor(ctx, chainID, addrs)
+	if err != nil {
+		s.d.Log.Warn("demand read failed", "chain_id", chainID, "err", err)
+		return
+	}
+	for i := range out {
+		t := totals[addrs[i]]
+		out[i].Demand = demandCounts{For: t.For, Against: t.Against}
+	}
+}
+
+// orderAssets is the scan order: what a reader should ask about first
+// (docs/SHIP.md §4).
 //
-// Two signals, and one of them is not a tiebreak. A report sends a contract to the
-// bottom regardless of what was paid for it, because the alternative is that buying
-// the most funding buys the top of somebody's wallet — and the whole point of an open
-// registry is that anyone can pay into it, including whoever minted the scam. Paying
-// for a scam is still welcome, in the sense that the gas subsidises the honest
-// assets; it simply does not come with a position.
+// Four signals, and the first is not a tiebreak. An operator's report, or more
+// readers signing against a contract than for it, sends it to the bottom regardless
+// of what was paid for it, because the alternative is that buying the most funding
+// buys the top of somebody's wallet — and the whole point of an open registry is
+// that anyone can pay into it, including whoever minted the scam. Paying for a scam
+// is still welcome, in the sense that the gas subsidises the honest assets; it
+// simply does not come with a position.
 //
-// Under that, more wei vouched ranks higher. Not because money is a proof of quality,
-// but because it is the only signal here that costs the person producing it — and
-// ordering, unlike indexing, has to be decided for contracts nobody has judged yet.
+// Under that, a contract already committed for the account comes first: it is what
+// the registry stands behind. Then net signed demand, for minus against, because a
+// reader's signature over their own wallet is the signal this page exists to
+// collect. Then more wei vouched ranks higher — not because money is a proof of
+// quality, but because it is the only signal here that costs the person producing
+// it, and ordering, unlike indexing, has to be decided for contracts nobody has
+// judged yet.
 //
-// The sort is stable, so the store's chain and address ordering survives as the last
-// tiebreak and a list with no funding and no reports stays in a fixed order rather
-// than shuffling per request.
+// The sort is stable, so the store's ordering survives as the last tiebreak and a
+// list with none of these signals stays in a fixed order rather than shuffling per
+// request.
 func orderAssets(v []assetJSON) {
 	sort.SliceStable(v, func(i, j int) bool {
-		if (v[i].Reports > 0) != (v[j].Reports > 0) {
-			return v[j].Reports > 0
-		}
-		a, b := weiOrZero(v[i].VouchedWei), weiOrZero(v[j].VouchedWei)
-		return a.Cmp(b) > 0
+		return rankLess(assetRank(v[i]), assetRank(v[j]))
 	})
+}
+
+// rank is what the ordering rule reads off a row, whichever shape the row has.
+type rank struct {
+	sunk      bool // reported, or more against than for
+	committed bool
+	net       int64
+	vouched   *big.Int
+}
+
+func assetRank(a assetJSON) rank {
+	return rank{
+		sunk:      a.Reports > 0 || a.Demand.Against > a.Demand.For,
+		committed: a.Committed,
+		net:       a.Demand.net(),
+		vouched:   weiOrZero(a.VouchedWei),
+	}
+}
+
+// rankLess says whether a should be asked about before b.
+func rankLess(a, b rank) bool {
+	if a.sunk != b.sunk {
+		return b.sunk
+	}
+	if a.committed != b.committed {
+		return a.committed
+	}
+	if a.net != b.net {
+		return a.net > b.net
+	}
+	return a.vouched.Cmp(b.vouched) > 0
 }
 
 // weiOrZero parses a decimal wei string, treating anything unparseable as nothing
@@ -197,7 +273,7 @@ func (s *Server) getAsset(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "query failed", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, s.assetView(r.Context(), a, true))
+	writeJSON(w, http.StatusOK, s.assetWithDemand(r.Context(), a, true))
 }
 
 type registerRequest struct {
@@ -292,7 +368,7 @@ func (s *Server) registerAsset(w http.ResponseWriter, r *http.Request) {
 	if created {
 		code2 = http.StatusCreated
 	}
-	writeJSON(w, code2, map[string]any{"created": created, "asset": s.assetView(ctx, a, true)})
+	writeJSON(w, code2, map[string]any{"created": created, "asset": s.assetWithDemand(ctx, a, true)})
 }
 
 func (s *Server) assetAccounts(w http.ResponseWriter, r *http.Request) {
@@ -373,6 +449,111 @@ type accountAssetJSON struct {
 	// deployment has pricing configured and a source was found. Never zero.
 	Price    *quoteJSON `json:"price,omitempty"`
 	ValueUSD string     `json:"value_usd,omitempty"`
+	// Committed says the contract is in the latest finalized epoch's leaf for this
+	// account; Demand is how many readers signed for it and against it. Together
+	// with reports and vouched they are the ordering rule (orderAssets).
+	Committed  bool         `json:"committed"`
+	Demand     demandCounts `json:"demand"`
+	Reports    int          `json:"reports,omitempty"`
+	VouchedWei string       `json:"vouched_wei,omitempty"`
+}
+
+// committedSet is the latest finalized epoch's leaf for an account, as a set. One
+// query per response, from the local table rather than the registry: the epoch
+// status here is set when the publisher sees its own finalization, so it can lag
+// the chain by a tick, and an account page must not cost a verified eth_call.
+// No finalized epoch, or no leaf for the account, is an empty set — never an error.
+// A leaf from before migration 0005 stores no list; for those, anything first seen
+// at or before the epoch's block is taken as committed, as accountProof does.
+func (s *Server) committedSet(ctx context.Context, chainID uint64, account common.Address, rows []store.AccountAsset) map[common.Address]bool {
+	out := map[common.Address]bool{}
+	if s.d.Store == nil {
+		return out
+	}
+	e, err := s.d.Store.LatestFinalizedEpoch(ctx, chainID)
+	if err != nil {
+		if !errors.Is(err, store.ErrNotFound) {
+			s.d.Log.Warn("finalized epoch read failed", "chain_id", chainID, "err", err)
+		}
+		return out
+	}
+	leaf, err := s.d.Store.EpochLeafFor(ctx, e.ID, account)
+	if err != nil {
+		if !errors.Is(err, store.ErrNotFound) {
+			s.d.Log.Warn("epoch leaf read failed", "epoch", e.ID, "err", err)
+		}
+		return out
+	}
+	if leaf.Assets == nil {
+		for _, a := range rows {
+			if a.FirstBlock <= e.ToBlock {
+				out[a.Asset] = true
+			}
+		}
+		return out
+	}
+	for _, a := range leaf.Assets {
+		out[a] = true
+	}
+	return out
+}
+
+// accountDemand is the signed demand for each of an account's contracts, in one query.
+func (s *Server) accountDemand(ctx context.Context, chainID uint64, rows []store.AccountAsset) map[common.Address]store.DemandTotals {
+	if s.d.Store == nil || len(rows) == 0 {
+		return nil
+	}
+	addrs := make([]common.Address, len(rows))
+	for i, a := range rows {
+		addrs[i] = a.Asset
+	}
+	totals, err := s.d.Store.DemandFor(ctx, chainID, addrs)
+	if err != nil {
+		s.d.Log.Warn("demand read failed", "chain_id", chainID, "err", err)
+		return nil
+	}
+	return totals
+}
+
+// vouchedFor reads what the funding cache already knows for an asset; never live,
+// because an account view is a list.
+func (s *Server) vouchedFor(chainID uint64, addr common.Address) string {
+	if s.d.Registry == nil {
+		return ""
+	}
+	f, ok := s.funding.get(s.d.Registry, hintreg.AssetKey(chainID, addr))
+	if !ok || f.Vouched == nil {
+		return ""
+	}
+	return f.Vouched.String()
+}
+
+// orderAccountRows applies the ordering rule to an account's rows and the store
+// rows beside them, keeping the two aligned.
+func orderAccountRows(rows []store.AccountAsset, out []accountAssetJSON) {
+	idx := make([]int, len(out))
+	for i := range idx {
+		idx[i] = i
+	}
+	sort.SliceStable(idx, func(i, j int) bool {
+		return rankLess(accountRank(out[idx[i]]), accountRank(out[idx[j]]))
+	})
+	rows2 := make([]store.AccountAsset, len(rows))
+	out2 := make([]accountAssetJSON, len(out))
+	for k, i := range idx {
+		rows2[k], out2[k] = rows[i], out[i]
+	}
+	copy(rows, rows2)
+	copy(out, out2)
+}
+
+func accountRank(a accountAssetJSON) rank {
+	return rank{
+		sunk:      a.Reports > 0 || a.Demand.Against > a.Demand.For,
+		committed: a.Committed,
+		net:       a.Demand.net(),
+		vouched:   weiOrZero(a.VouchedWei),
+	}
 }
 
 // accountAssets is the rich view: discovery hints plus live balances read from our
@@ -396,8 +577,11 @@ func (s *Server) accountAssets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	committed := s.committedSet(ctx, chainID, account, rows)
+	demand := s.accountDemand(ctx, chainID, rows)
 	out := make([]accountAssetJSON, len(rows))
 	for i, a := range rows {
+		d := demand[a.Asset]
 		out[i] = accountAssetJSON{
 			Address:     a.Asset.Hex(),
 			Standard:    standardName(a.Standard),
@@ -409,8 +593,13 @@ func (s *Server) accountAssets(w http.ResponseWriter, r *http.Request) {
 			EventCount:  a.EventCount,
 			Roles:       indexer.RoleNames(a.Roles),
 			IndexStatus: a.Status,
+			Committed:   committed[a.Asset],
+			Demand:      demandCounts{For: d.For, Against: d.Against},
+			Reports:     a.Reports,
+			VouchedWei:  s.vouchedFor(chainID, a.Asset),
 		}
 	}
+	orderAccountRows(rows, out)
 
 	// The lens reports the block it ran at, so when balances came back there is no
 	// need to ask for the head separately — and no window in which the two disagree.
@@ -504,20 +693,37 @@ func (s *Server) accountContracts(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type hint struct {
-		Address    string `json:"address"`
-		Standard   string `json:"standard"`
-		FirstBlock uint64 `json:"first_block"`
-		LastBlock  uint64 `json:"last_block"`
+		Address    string       `json:"address"`
+		Standard   string       `json:"standard"`
+		FirstBlock uint64       `json:"first_block"`
+		LastBlock  uint64       `json:"last_block"`
+		Committed  bool         `json:"committed"`
+		Demand     demandCounts `json:"demand"`
+		Reports    int          `json:"reports,omitempty"`
 	}
+	committed := s.committedSet(ctx, chainID, account, rows)
+	demand := s.accountDemand(ctx, chainID, rows)
 	hints := make([]hint, len(rows))
 	for i, a := range rows {
+		d := demand[a.Asset]
 		hints[i] = hint{
 			Address:    a.Asset.Hex(),
 			Standard:   standardName(a.Standard),
 			FirstBlock: a.FirstBlock,
 			LastBlock:  a.LastBlock,
+			Committed:  committed[a.Asset],
+			Demand:     demandCounts{For: d.For, Against: d.Against},
+			Reports:    a.Reports,
 		}
 	}
+	// Only hints is permuted, so the rank has to read from the hint itself and
+	// never from the store row that used to sit beside it.
+	sort.SliceStable(hints, func(i, j int) bool {
+		a, b := hints[i], hints[j]
+		return rankLess(
+			rank{sunk: a.Reports > 0 || a.Demand.Against > a.Demand.For, committed: a.Committed, net: a.Demand.net(), vouched: new(big.Int)},
+			rank{sunk: b.Reports > 0 || b.Demand.Against > b.Demand.For, committed: b.Committed, net: b.Demand.net(), vouched: new(big.Int)})
+	})
 
 	head, _ := src.HeadBlock(ctx)
 	resp := map[string]any{
@@ -826,6 +1032,7 @@ type candidateJSON struct {
 	// Voters is how many distinct accounts asked for this contract, through the
 	// API and on the registry together.
 	Voters          uint64  `json:"voters"`
+	Against         uint64  `json:"against"`
 	Promotable      bool    `json:"promotable"`
 	Promoted        bool    `json:"promoted"`
 	PromotedAt      *string `json:"promoted_at,omitempty"`
@@ -934,7 +1141,7 @@ func (s *Server) promoteCandidate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"promoted": true,
 		"reason":   reason,
-		"asset":    s.assetView(ctx, a, true),
+		"asset":    s.assetWithDemand(ctx, a, true),
 	})
 }
 
@@ -942,7 +1149,8 @@ func (s *Server) promoteCandidate(w http.ResponseWriter, r *http.Request) {
 // stored flag: it is the thresholds the worker is running with right now, and a
 // contract someone has already judged is never offered again.
 func candidateView(c store.Candidate, minEvents, minBlocks, minVoters uint64) candidateJSON {
-	clears := (c.EventCount >= minEvents && c.BlocksSeen >= minBlocks) || (minVoters > 0 && c.Voters >= minVoters)
+	net := int64(c.Voters) - int64(c.Against)
+	clears := (c.EventCount >= minEvents && c.BlocksSeen >= minBlocks) || (minVoters > 0 && net >= int64(minVoters))
 	out := candidateJSON{
 		Address:         c.Address.Hex(),
 		Standard:        standardName(c.Standard),
@@ -951,6 +1159,7 @@ func candidateView(c store.Candidate, minEvents, minBlocks, minVoters uint64) ca
 		EventCount:      c.EventCount,
 		BlocksSeen:      c.BlocksSeen,
 		Voters:          c.Voters,
+		Against:         c.Against,
 		Promotable:      c.SpamAt == nil && c.PromotedAt == nil && clears,
 		Promoted:        c.PromotedAt != nil,
 		PromotionReason: c.PromotionReason,

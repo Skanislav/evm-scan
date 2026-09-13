@@ -49,12 +49,14 @@ registry:
   # Base gas is cheap enough that the timer, not the cost, is what bounds how often
   # a commitment is posted. Identical roots are skipped either way.
   auto_publish_interval: 1h
-  # ENS. Every account gets <hex>.hints.<ens_parent>: on mainnet that name is
-  # served by a HintSignedResolver (contracts/src/HintSignedResolver.sol) whose
+  # ENS. Every account gets <hex>.hints.<ens_parent>: on mainnet that name would
+  # be served by a HintSignedResolver (contracts/src/HintSignedResolver.sol) whose
   # answers this daemon signs at /ens with the publisher key — attested, not
-  # verified against the root, which lives on Base. Set ens_resolver from
-  # EVMSCAN_ENS_RESOLVER once it is deployed (docs/MAINNET.md §8); until then
-  # the gateway signs for any sender. The resolver's gateway template is
+  # verified against the root, which lives on Base. The resolver is built, not
+  # deployed, and not part of the current ship (docs/SHIP.md D2); ens_parent only
+  # lets account responses carry hint_name. If it is ever deployed, set
+  # ens_resolver from EVMSCAN_ENS_RESOLVER (docs/MAINNET.md §6d); until then the
+  # gateway signs for any sender. The resolver's gateway template would be
   #   https://evm-scan-production.up.railway.app/ens/{sender}/{data}.json
   ens_parent: "evm-scan.eth"
   ens_resolver: ""
@@ -154,11 +156,14 @@ chains:
       min_events: 2000
       min_blocks: 500
       max_promotions_per_tick: 1
-      # Demand can promote on its own: a contract this many distinct accounts voted
-      # for (through POST /v1/demand or HintRegistry.vote) is indexed whether or not
-      # it is busy, one per tick. Above one, so a single fresh address cannot buy a
-      # backfill on the verified quota for free.
-      min_voters: 3
+      # Demand can promote on its own: a contract whose net signers
+      # (for − against, from signed verdicts through POST /v1/verdict, the +1
+      # legacy POST /v1/demand, or HintRegistry.vote) reach this number is indexed
+      # whether or not it is busy, one per tick. 1 is the demo-day value
+      # (docs/SHIP.md D4): a single recognized-but-unindexed token gets indexed
+      # within a tick. 3 is the metered-node value, so a single fresh address
+      # cannot buy a backfill on the verified quota for free; restore it after.
+      min_voters: 1
 
     # Two lists, merged into one membership filter and published at /v1/hints. This
     # is the only third-party HTTP this process does, it happens once at startup, and

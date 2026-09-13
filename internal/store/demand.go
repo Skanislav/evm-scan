@@ -3,7 +3,9 @@ package store
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
+	"math/big"
 	"sync"
 	"time"
 
@@ -32,8 +34,11 @@ import (
 type DemandRow struct {
 	ChainID uint64
 	Address common.Address
-	// Voters is the total: distinct API voters plus the on-chain count.
+	// Voters is the total for: distinct API voters who signed +1 (or voted through
+	// /v1/demand) plus the on-chain count. Against is the API voters who signed -1;
+	// the registry counts nothing against.
 	Voters        uint64
+	Against       uint64
 	OnchainVoters uint64
 	LastAt        time.Time
 	// Indexed is true once an asset row exists; Candidate when discovery has seen
@@ -155,7 +160,7 @@ func (s *Store) ReplaceOnchainDemand(ctx context.Context, rows []DemandRow) erro
 }
 
 const demandSelect = `
-	SELECT t.chain_id, t.address, t.voters, COALESCE(o.voters, 0),
+	SELECT t.chain_id, t.address, t.voters, t.against, COALESCE(o.voters, 0),
 	       COALESCE(d.last_at, o.synced_at, now()),
 	       (a.address IS NOT NULL), (c.address IS NOT NULL), (c.spam_at IS NOT NULL),
 	       COALESCE(c.event_count, 0)
@@ -165,11 +170,12 @@ const demandSelect = `
 	LEFT JOIN assets a ON a.chain_id = t.chain_id AND a.address = t.address
 	LEFT JOIN candidates c ON c.chain_id = t.chain_id AND c.address = t.address`
 
-// ListDemand returns the most wanted contracts on a chain, most voters first.
+// ListDemand returns the most wanted contracts on a chain, largest net (for minus
+// against) first.
 func (s *Store) ListDemand(ctx context.Context, chainID uint64, limit int) ([]DemandRow, error) {
 	rows, err := s.pool.Query(ctx, demandSelect+`
 		WHERE t.chain_id = $1
-		ORDER BY t.voters DESC, d.last_at DESC NULLS LAST
+		ORDER BY (t.voters - t.against) DESC, t.voters DESC, d.last_at DESC NULLS LAST
 		LIMIT $2`, int64(chainID), limit)
 	if err != nil {
 		return nil, err
@@ -179,13 +185,14 @@ func (s *Store) ListDemand(ctx context.Context, chainID uint64, limit int) ([]De
 }
 
 // DemandedUnseen returns voted contracts that discovery has never counted and the
-// index does not keep, at or above minVoters. Discovery only counts what emitted an
-// event inside its window, so a contract a wallet holds quietly can be wanted and
-// still have no candidate row; this is how it reaches promotion.
+// index does not keep, whose net demand (for minus against) is at or above
+// minVoters. Discovery only counts what emitted an event inside its window, so a
+// contract a wallet holds quietly can be wanted and still have no candidate row;
+// this is how it reaches promotion.
 func (s *Store) DemandedUnseen(ctx context.Context, chainID, minVoters uint64, limit int) ([]DemandRow, error) {
 	rows, err := s.pool.Query(ctx, demandSelect+`
-		WHERE t.chain_id = $1 AND t.voters >= $2 AND a.address IS NULL AND c.address IS NULL
-		ORDER BY t.voters DESC
+		WHERE t.chain_id = $1 AND (t.voters - t.against) >= $2 AND a.address IS NULL AND c.address IS NULL
+		ORDER BY (t.voters - t.against) DESC
 		LIMIT $3`, int64(chainID), int64(minVoters), limit)
 	if err != nil {
 		return nil, err
@@ -194,9 +201,18 @@ func (s *Store) DemandedUnseen(ctx context.Context, chainID, minVoters uint64, l
 	return scanDemand(rows)
 }
 
-// DemandFor reports the total voters for each of addrs; absent means zero.
-func (s *Store) DemandFor(ctx context.Context, chainID uint64, addrs []common.Address) (map[common.Address]uint64, error) {
-	out := map[common.Address]uint64{}
+// DemandTotals is one contract's count each way.
+type DemandTotals struct {
+	For     uint64
+	Against uint64
+}
+
+// Net is for minus against, which is what promotion and ordering read.
+func (d DemandTotals) Net() int64 { return int64(d.For) - int64(d.Against) }
+
+// DemandFor reports the totals for each of addrs; absent means zero both ways.
+func (s *Store) DemandFor(ctx context.Context, chainID uint64, addrs []common.Address) (map[common.Address]DemandTotals, error) {
+	out := map[common.Address]DemandTotals{}
 	if len(addrs) == 0 {
 		return out, nil
 	}
@@ -205,7 +221,7 @@ func (s *Store) DemandFor(ctx context.Context, chainID uint64, addrs []common.Ad
 		raw[i] = a.Bytes()
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT address, voters FROM asset_demand_totals
+		SELECT address, voters, against FROM asset_demand_totals
 		WHERE chain_id = $1 AND address = ANY($2)`, int64(chainID), raw)
 	if err != nil {
 		return nil, err
@@ -213,11 +229,11 @@ func (s *Store) DemandFor(ctx context.Context, chainID uint64, addrs []common.Ad
 	defer rows.Close()
 	for rows.Next() {
 		var addr []byte
-		var n int64
-		if err := rows.Scan(&addr, &n); err != nil {
+		var n, ag int64
+		if err := rows.Scan(&addr, &n, &ag); err != nil {
 			return nil, err
 		}
-		out[common.BytesToAddress(addr)] = uint64(n)
+		out[common.BytesToAddress(addr)] = DemandTotals{For: uint64(n), Against: uint64(ag)}
 	}
 	return out, rows.Err()
 }
@@ -226,20 +242,119 @@ func scanDemand(rows pgx.Rows) ([]DemandRow, error) {
 	var out []DemandRow
 	for rows.Next() {
 		var (
-			r                DemandRow
-			cid, voters, onc int64
-			addr             []byte
-			ev               int64
+			r                         DemandRow
+			cid, voters, against, onc int64
+			addr                      []byte
+			ev                        int64
 		)
-		if err := rows.Scan(&cid, &addr, &voters, &onc, &r.LastAt, &r.Indexed, &r.Candidate, &r.Spam, &ev); err != nil {
+		if err := rows.Scan(&cid, &addr, &voters, &against, &onc, &r.LastAt, &r.Indexed, &r.Candidate, &r.Spam, &ev); err != nil {
 			return nil, err
 		}
 		r.ChainID = uint64(cid)
 		r.Address = common.BytesToAddress(addr)
 		r.Voters = uint64(voters)
+		r.Against = uint64(against)
 		r.OnchainVoters = uint64(onc)
 		r.EventCount = uint64(ev)
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// --------------------------------------------------------------------------
+// Verdicts: one signed split, replacing whatever the voter said before.
+// --------------------------------------------------------------------------
+
+// Verdict is one contract's direction in a reader's signed split: +1 recognized,
+// -1 not. A contract the reader left out has no row, which is what 0 means.
+type Verdict struct {
+	Address common.Address
+	Weight  int8
+}
+
+// ErrStaleVerdict: the stored deadline for this (chain, voter) is at or past the
+// one offered, so the offered signature is an older one and does not replace it.
+var ErrStaleVerdict = errors.New("store: a verdict with a later deadline is already stored")
+
+// ReplaceVerdicts makes the voter's rows on a chain exactly the pairs given: rows
+// for contracts not named are deleted, the rest are upserted with their weight, and
+// the deadline is stored as the new floor for the next signature. All in one
+// transaction, so a reader never sees half a split. Returns how many rows were
+// written and how many were cleared. An empty list is a valid "retract everything".
+func (s *Store) ReplaceVerdicts(ctx context.Context, chainID uint64, account common.Address, deadline *big.Int, pairs []Verdict) (recorded, cleared int, err error) {
+	if len(pairs) > MaxDemandPerVote {
+		return 0, 0, fmt.Errorf("store: a verdict names at most %d contracts", MaxDemandPerVote)
+	}
+	if deadline == nil || deadline.Sign() < 0 {
+		return 0, 0, fmt.Errorf("store: deadline must be a non-negative integer")
+	}
+	for _, p := range pairs {
+		if p.Weight != 1 && p.Weight != -1 {
+			return 0, 0, fmt.Errorf("store: weight must be -1 or 1, got %d", p.Weight)
+		}
+	}
+	salt, err := s.demandSalt(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	voter := voterKey(salt, chainID, account)
+
+	err = s.inTx(ctx, func(tx pgx.Tx) error {
+		// The replay guard first: the row is only written when the deadline rises,
+		// and a signature that does not raise it is refused before anything moves.
+		// The deadline is a uint256 on the wire, so it travels as text into NUMERIC.
+		ct, err := tx.Exec(ctx, `
+			INSERT INTO account_verdicts (chain_id, voter, deadline, signed_at)
+			VALUES ($1, $2, $3::numeric, now())
+			ON CONFLICT (chain_id, voter) DO UPDATE
+			SET deadline = EXCLUDED.deadline, signed_at = now()
+			WHERE account_verdicts.deadline < EXCLUDED.deadline`,
+			int64(chainID), voter, deadline.String())
+		if err != nil {
+			return err
+		}
+		if ct.RowsAffected() == 0 {
+			return ErrStaleVerdict
+		}
+
+		keep := make([][]byte, 0, len(pairs))
+		seen := map[common.Address]bool{}
+		for _, p := range pairs {
+			if seen[p.Address] {
+				continue
+			}
+			seen[p.Address] = true
+			keep = append(keep, p.Address.Bytes())
+		}
+		ct, err = tx.Exec(ctx, `
+			DELETE FROM asset_demand
+			WHERE chain_id = $1 AND voter = $2 AND NOT (address = ANY($3))`,
+			int64(chainID), voter, keep)
+		if err != nil {
+			return err
+		}
+		cleared = int(ct.RowsAffected())
+
+		seen = map[common.Address]bool{}
+		for _, p := range pairs {
+			if seen[p.Address] {
+				continue
+			}
+			seen[p.Address] = true
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO asset_demand (chain_id, address, voter, weight)
+				VALUES ($1, $2, $3, $4)
+				ON CONFLICT (chain_id, address, voter) DO UPDATE
+				SET weight = EXCLUDED.weight, votes = asset_demand.votes + 1, last_at = now()`,
+				int64(chainID), p.Address.Bytes(), voter, int16(p.Weight)); err != nil {
+				return err
+			}
+			recorded++
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, 0, err
+	}
+	return recorded, cleared, nil
 }

@@ -1,5 +1,18 @@
 # ENS: hints out, names in the client
 
+> **Status (2026-09-13, docs/SHIP.md D2).** Three uses of ENS exist in the code and
+> only the first is live:
+>
+> | use | state |
+> | --- | --- |
+> | **Names in**: a typed `vitalik.eth` resolved in the browser through the Universal Resolver on the reader's RPC | **live**; the daemon only ever sees an address |
+> | **Index out on mainnet**: `hints.evm-scan.eth` served by `HintSignedResolver`, publisher-signed at `/ens` | **built, not deployed**; `hints.evm-scan.eth` does not resolve today (runbook: docs/MAINNET.md §6d) |
+> | **Index out on ENSv2**: `HintResolver` + `evmscan-ens attach`, root-verified through CCIP-Read | **designed for the Sepolia beta**, sim-tested only, no addresses; a future exploration of custom resolvers |
+>
+> The reader page no longer carries an ENS card or a link to `read.html`; both
+> resolvers, the `/ens` gateway and `read.html` stay in the tree behind no UI. The
+> daemon's own `on.eth` chain-name read for `POST /v1/chains` is unrelated and stays.
+
 evm-scan meets ENS twice, on two sides of the trust boundary. Hints go **out** of the
 daemon: `HintResolver.sol` publishes the committed `account → contracts` index as ENS
 text records, so any ENS client reads the index by name and the chain verifies what it
@@ -83,10 +96,15 @@ the first label; the `node` inside `data` is ignored, as ENSIP-10 allows.
 | `text(node, "evmscan.epoch")` | id of the latest finalized epoch for the chain | read from the registry |
 | `text(node, "evmscan.range")` | `<fromBlock>-<toBlock>` that epoch covers | read from the registry |
 | `text(node, "evmscan.root")` | the epoch's index root | read from the registry |
+| `text(node, "evmscan.uri")` | the epoch's commitment URI (the manifest the publisher posted) | read from the registry |
 | `text(node, "evmscan.registry")` | the HintRegistry address | immutable |
 | `text(node, "evmscan.chain")` | the chain id the account was indexed on | from the name or the default |
 | any other text key | `""` | — |
 | any other profile | reverts `UnsupportedResolverProfile` | — |
+
+`evmscan.signer` and `evmscan.hint` are not in this table on purpose: they exist only
+on `HintSignedResolver` and its `/ens` gateway (below), where there is a signer to
+name.
 
 Nothing is configured by hand: gateways, epochs and roots are read from the registry
 at call time.
@@ -217,10 +235,17 @@ signs what the root commits and anyone can check a signed answer against the reg
 on Base. What a signature cannot do is stop a stolen publisher key from forging a
 record; a proof would. `read.html` and `evmscan-ens check` say which resolver answered.
 
-`evmscan.hint` is the reader's own cross-chain bloom (docs/PRIVACY.md), or one the
-index built when the reader never signed for one.
+`evmscan.hint` is a `KindInterop` bloom over the account's `(chain, token)` pairs:
+the one the reader signed for through `POST /v1/accounts/{addr}/hint`, or, absent
+that, one the daemon builds from the account's committed contracts. The signed-hint
+card is off the reader page (docs/SHIP.md §3), so in practice only the daemon-built
+one is served; the route stays.
 
-## The reader page
+None of this section is deployed. The resolver, the gateway and the codec are
+built and pinned by `ens_signed_sim_test.go`; the deployment is docs/MAINNET.md §6d
+and is not part of the current ship.
+
+## The reader page (in code, off the nav)
 
 `read.html` is the other end of the index: an account or a name in, the registry's
 `<hex>.hints.<parent>` name built from it, and the `evmscan.contracts` record read
@@ -236,5 +261,8 @@ bytes for everyone and carries no account.
 A wallet's own list was briefly publishable to its owner's name under the same two
 keys and readable here as a second mode. It cost about 31,000 gas per contract and
 stored per wallet what the registry's vote counter (`HintRegistry.vote`) stores once
-for everyone, so it was cut; the lookup page offers a vote instead, and a vote's
-result is an indexed account, which is what this page reads.
+for everyone, so it was cut. The lookup page now asks for one signed verdict instead
+(`POST /v1/verdict`, docs/SHIP.md §4): a `for` on a held contract the index does not
+keep is what gets it indexed, and an indexed account is what this page would read.
+Since nothing serves the name today, `read.html` is off the navigation and stays in
+the tree as the reference reader for the day a resolver is deployed.

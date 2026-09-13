@@ -60,9 +60,13 @@ function fmtUnits(raw, decimals) {
 // The panel
 // ---------------------------------------------------------------------------
 
+// The panel is off the page (docs/SHIP.md §3): the element is absent, and render
+// below must then draw nothing rather than throw at import — the sweep still
+// imports this module for the cross-chain hint.
 const body = $('private-body');
 
 function fail(e) {
+  if (!body) return;
   body.innerHTML = `<p class="err">${H.esc(e.message || String(e))}</p>`;
 }
 
@@ -71,6 +75,7 @@ function fail(e) {
 // from anything hardcoded here, because a deployment that indexes a different chain
 // or promotes a different number of assets should say its own numbers.
 async function render() {
+  if (!body) return;
   const chainId = H.chainId();
   const name = `index-${chainId}`;
   let m = null;
@@ -1299,18 +1304,21 @@ export async function afterSweep(account, rows, { aside } = {}) {
     seen.add(k);
     pairs.push({ chainId: r.chainId, address: r.address });
   }
-  const el = $('xchain-hint');
-  if (!el) return;
-  if (!pairs.length) { el.innerHTML = ''; return; }
+  if (!pairs.length) return;
 
+  // Kept in this browser first; the card below, which offered to keep it on the
+  // daemon, is off the page (docs/SHIP.md §3) and its element is gone, so the memory
+  // is the whole effect now.
   let hint;
   try {
     hint = await buildHint(pairs);
     storeHint(account, hint.bytes);
   } catch (e) {
-    el.innerHTML = `<p class="hint">could not build the hint: ${H.esc(e.message || String(e))}</p>`;
+    console.warn('could not build the cross-chain hint:', e);
     return;
   }
+  const el = $('xchain-hint');
+  if (!el) return;
   const chains = new Set(pairs.map(p => p.chainId)).size;
   const wallet = (H.wallet && H.wallet()) || '';
   const mine = wallet && wallet.toLowerCase() === account.toLowerCase();

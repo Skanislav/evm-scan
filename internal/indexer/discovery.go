@@ -229,8 +229,8 @@ func (s *Service) autoPromote(ctx context.Context) error {
 	}
 	for _, c := range cands {
 		reason := fmt.Sprintf("auto: %d events across %d blocks", c.EventCount, c.BlocksSeen)
-		if d.MinVoters > 0 && c.Voters >= d.MinVoters {
-			reason = fmt.Sprintf("demand: %d voters (%d events across %d blocks)", c.Voters, c.EventCount, c.BlocksSeen)
+		if d.MinVoters > 0 && int64(c.Voters)-int64(c.Against) >= int64(d.MinVoters) {
+			reason = fmt.Sprintf("demand: %d for, %d against (%d events across %d blocks)", c.Voters, c.Against, c.EventCount, c.BlocksSeen)
 		}
 		if err := s.Promote(ctx, c.Address, reason); err != nil {
 			s.log.Error("promotion failed", "asset", c.Address.Hex(), "err", err)
@@ -249,7 +249,7 @@ func (s *Service) autoPromote(ctx context.Context) error {
 		return err
 	}
 	for _, u := range unseen {
-		reason := fmt.Sprintf("demand: %d voters, never seen by discovery", u.Voters)
+		reason := fmt.Sprintf("demand: %d for, %d against, never seen by discovery", u.Voters, u.Against)
 		if err := s.promoteAs(ctx, u.Address, reason, store.SourceDemand); err != nil {
 			s.log.Error("promotion failed", "asset", u.Address.Hex(), "err", err)
 		}

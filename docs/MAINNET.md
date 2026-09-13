@@ -183,7 +183,7 @@ what you want; deploy again.
 Then set `EVMSCAN_REGISTRY_ADDRESS` on Railway to the printed address and redeploy the
 service.
 
-### 6b. Redeploying the live Base registry for votes
+### 6a. Redeploying the live Base registry for votes
 
 The registry that has been live since 2026-09-10 (`0xE51eFF3d13Cc857a2aA1F6335592Fb2B80fA1375`
 on Base, local-arbiter mode) predates `vote`/`listDemand`. Nothing on a registry has
@@ -206,43 +206,16 @@ The tool will print `local-arbiter (FALLBACK)`, and §6's "deploy again" does no
 apply: that is the mode the live Base registry already runs in, chosen on purpose
 (docs/TOKENOMICS.md §6.2), and the arbiter above is the live one.
 
-### 6b′. Signed votes
+### 6b. Signed votes
 
 Since `voteFor` the registry accepts a vote signed by its voter and carried by
 anyone. The daemon carries them with the publisher key (`POST /v1/demand/relay`),
 so a reader needs no gas on Base. A registry deployed before `voteFor` makes the
-relay report `available: false` and the page sends `vote` from the wallet instead.
-Deploying the signed-vote registry is the same command as §6b with the current
-arbiter; the daemon must be redeployed with the matching artifacts afterwards.
-
-### 6d. `hints.evm-scan.eth`: the signed resolver on mainnet
-
-The registry is on Base and ENS on mainnet, so the mainnet name is served by
-`HintSignedResolver`, whose answers the daemon signs (docs/ENS.md). Five steps, the
-first and second from the name owner's wallet:
-
-1. Deploy the resolver (the deployer becomes its owner; the classifier stops Claude
-   from sending mainnet transactions, so this is yours to run):
-   ```bash
-   ./bin/evmscan-ens deploy-signed-resolver -node https://<mainnet rpc> -key 0x<owner key> \
-     -signer <ens_signer from GET /v1/status> \
-     -gateway 'https://evm-scan-production.up.railway.app/ens/{sender}/{data}.json' \
-     -chain-id 1 -registry 0x6D021dBe3A5804F6AC4faE7A20117dF8d7525Ad7 -registry-chain-id 8453
-   ```
-   Verify it on Etherscan with `scripts/verify-contract.sh -chain 1 -name HintSignedResolver …`.
-2. Create the subnode from the owner of `evm-scan.eth` (unwrapped, so the ENS registry
-   accepts the owner directly): on `0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e`,
-   `setSubnodeRecord(node = namehash("evm-scan.eth"), label = keccak256("hints"),
-   owner = <your address>, resolver = <the address from step 1>, ttl = 0)`.
-3. Service records on `evm-scan.eth` itself, in the ENS app: `evmscan.registry` =
-   `eip155:8453:0x6D021dBe3A5804F6AC4faE7A20117dF8d7525Ad7`, `evmscan.hints` =
-   `https://evm-scan-production.up.railway.app/v1/hints`, `evmscan.api` =
-   `https://evm-scan-production.up.railway.app`.
-4. On Railway set `EVMSCAN_ENS_RESOLVER` to the resolver and redeploy; the profile
-   already carries `ens_parent: "evm-scan.eth"`. From then on `/ens` signs only for it
-   and `/v1/status` shows `ens_resolver` and `ens_signer`.
-5. `./bin/evmscan-ens check -node https://<mainnet rpc> -name <hex>.hints.evm-scan.eth`,
-   and any ENS client: `viem.getEnsText({name, key: 'evmscan.contracts'})`.
+relay report `available: false`. Deploying the signed-vote registry is the same
+command as §6a with the current arbiter; the daemon must be redeployed with the
+matching artifacts afterwards. The relay and the on-chain vote stay in code and
+are off the reader page: the page's act is one signed verdict to the daemon
+(`POST /v1/verdict`, docs/SHIP.md D1), and only the API counter promotes.
 
 ### 6c. Rotating the arbiter key
 
@@ -280,22 +253,55 @@ Then point `EVMSCAN_REGISTRY_ADDRESS` on Railway at the printed address and rede
 Three things follow from a fresh registry and none of them is a fault:
 
 - It has no finalized epoch until the publisher posts one and the challenge window
-  passes, so `contractsOf`, the ENS record and `read.html` answer `NoFinalizedEpoch`
-  for at least an hour. Check the first epoch actually lands: `Build` refuses an
+  passes, so `contractsOf`, the `/ccip` gateway and any ENS record built on it answer
+  `NoFinalizedEpoch` for at least an hour. Check the first epoch actually lands: `Build` refuses an
   unchanged root, so the publisher posts only once the local table differs from what
   the last registry saw.
 - Assets registered on the old registry (GHO, unfunded) keep their local rows with
   `source: onchain`; the new registry does not list them and the mirror does not
   revoke what it cannot see.
 - Until then the mirror logs once that the registry serves no demand and keeps
-  going; API votes work regardless.
+  going; signed verdicts and API votes work regardless.
 
 Approve the bond. The daemon does this itself on its first publish
 (`ensureBondAllowance` approves exactly one bond, never unlimited), but it needs the
 tokens to be there: send the publisher EOA at least one bond's worth of the bond
 currency, plus ETH for gas.
 
-## 6b. Verify the source on the explorer
+### 6d. `hints.evm-scan.eth`: the signed resolver on mainnet
+
+**Not part of the current ship** (docs/SHIP.md D2): the resolver is built and
+sim-tested, never deployed, and `hints.evm-scan.eth` does not resolve today. Kept as
+the runbook for when it is.
+
+The registry is on Base and ENS on mainnet, so the mainnet name would be served by
+`HintSignedResolver`, whose answers the daemon signs (docs/ENS.md). Five steps, the
+first and second from the name owner's wallet:
+
+1. Deploy the resolver (the deployer becomes its owner; the classifier stops Claude
+   from sending mainnet transactions, so this is yours to run):
+   ```bash
+   ./bin/evmscan-ens deploy-signed-resolver -node https://<mainnet rpc> -key 0x<owner key> \
+     -signer <ens_signer from GET /v1/status> \
+     -gateway 'https://evm-scan-production.up.railway.app/ens/{sender}/{data}.json' \
+     -chain-id 1 -registry 0x6D021dBe3A5804F6AC4faE7A20117dF8d7525Ad7 -registry-chain-id 8453
+   ```
+   Verify it on Etherscan with `scripts/verify-contract.sh -chain 1 -name HintSignedResolver …`.
+2. Create the subnode from the owner of `evm-scan.eth` (unwrapped, so the ENS registry
+   accepts the owner directly): on `0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e`,
+   `setSubnodeRecord(node = namehash("evm-scan.eth"), label = keccak256("hints"),
+   owner = <your address>, resolver = <the address from step 1>, ttl = 0)`.
+3. Service records on `evm-scan.eth` itself, in the ENS app: `evmscan.registry` =
+   `eip155:8453:0x6D021dBe3A5804F6AC4faE7A20117dF8d7525Ad7`, `evmscan.hints` =
+   `https://evm-scan-production.up.railway.app/v1/hints`, `evmscan.api` =
+   `https://evm-scan-production.up.railway.app`.
+4. On Railway set `EVMSCAN_ENS_RESOLVER` to the resolver and redeploy; the profile
+   already carries `ens_parent: "evm-scan.eth"`. From then on `/ens` signs only for it
+   and `/v1/status` shows `ens_resolver` and `ens_signer`.
+5. `./bin/evmscan-ens check -node https://<mainnet rpc> -name <hex>.hints.evm-scan.eth`,
+   and any ENS client: `viem.getEnsText({name, key: 'evmscan.contracts'})`.
+
+### 6e. Verify the source on the explorer
 
 A registry nobody can read is a registry nobody can check. Verification is a
 recompile, so the explorer needs the same input this repo compiled — `make

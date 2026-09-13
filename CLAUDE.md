@@ -58,7 +58,9 @@ shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module 
 - `internal/indexer` runs three goroutines per chain inside `Service.Run`:
   - **discovery** (`discovery.go`): unfiltered-by-address sweep forward from the head,
     writing only per-contract counters to `candidates`. `Promote` turns a candidate into an
-    indexed asset; `auto_promote` is off by default.
+    indexed asset; `auto_promote` is off by default. Demand promotes on its own:
+    `PromotableCandidates` and `DemandedUnseen` read `(voters − against) >= min_voters`
+    from `asset_demand_totals`, and `spam_at` wins over any number of signers.
   - **follower** (`followTick`): walks forward from each asset's anchor, handles reorgs by
     comparing stored block hashes and rewinding `pending_events`.
   - **backfiller** (`runBackfill`): walks backward from the anchor toward
@@ -178,7 +180,9 @@ shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module 
   file be opened months later. Construction is
   deterministic, so a published filter can be rebuilt and diffed. Built by
   `cmd/evmscan-hint`, served at `GET /v1/hints`, `GET /v1/hints/{name}.xorf` and
-  `.json`. docs/PRIVACY.md is the threat model.
+  `.json`. docs/PRIVACY.md is the threat model. **Status:** the routes, the writer and
+  the fixtures are live; the private lookup and the watchlist builder that read them
+  are in `web/hints.js` behind no UI since the 2026-09-13 ship (docs/SHIP.md §3, §8).
 - `internal/token` probes metadata and balances via `eth_call` **at head only**. Nothing in
   the codebase may request historical state; that is what keeps snap sync sufficient.
 - `internal/lens` runs `contracts/src/AssetLens.sol` as a *deployless* `eth_call` (creation
@@ -198,7 +202,9 @@ shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module 
   `internal/ccip.Resolve` packs the callback by the selector the revert named, so it serves
   both contracts; the gateway does not check `sender`, because ENS's Universal Resolver
   rewrites it and the answer is verified where it is used. `registry.ens_parent` only
-  lets account responses carry `hint_name`.
+  lets account responses carry `hint_name`. **Status:** designed for the ENSv2 Sepolia
+  beta, sim-tested, no deployment and no addresses; off the ship as a future
+  exploration of custom resolvers (docs/SHIP.md D2, docs/ENS.md).
 - `contracts/src/HintSignedResolver.sol` is the same resolver for a chain the registry is
   **not** on: ENS names live on mainnet, the registry on Base, and a mainnet resolver
   cannot verify a Base root. It pins a `signer` (the publisher key, rotatable by its
@@ -211,64 +217,77 @@ shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module 
   `/ccip` proves and signs them with `Deps.Signer` (`hintreg.Signer`, the
   `EOASubmitter`'s key), refusing any sender but `registry.ens_resolver` once that is
   set. **Signer-trust, not root-verified**: a stolen publisher key forges these
-  records where a proof would not, and `read.html` and `evmscan-ens check` say which
-  path answered. `internal/ccip/signed.go` is the codec; `ens_signed_sim_test.go`
-  runs the loop on the simulated backend. `evmscan-ens deploy-signed-resolver`
-  deploys it; the subnode is created from the name owner's wallet (docs/MAINNET.md §8).
-- A reader's cross-chain **hint** is a `KindInterop` bloom over the `(chain, token)`
-  pairs the page's sweep confirmed, built in the browser (`buildHint` in
-  `web/hints.js`, sized 1024–4096 bits), kept in localStorage, and — only with the
-  account's EIP-712 signature (`Hint(account, digest, deadline)` under the domain
-  `{evm-scan hint, 1}`, no chain, no contract; `internal/api/hintsig.go`) — stored
-  in `account_hints` (migration 0011) and served at `GET /v1/accounts/{addr}/hint`
-  and as the `evmscan.hint` record. Without a stored one the daemon builds a bloom
-  from the account's committed contracts. That row is per-account, enumerable and
-  unblinded, which the button says; it exists because the reader signed for it. The
-  hint **orders** a sweep — hinted pairs go in the first lens calls — and **removes
-  nothing**; `sweepChain` reads the whole list either way. The page asks the daemon
-  for a hint only for an address it already looked up by name (`HOSTED_LOOKUP_FOR`),
-  and never reads ENS on the lookup page.
+  records where a proof would not, and `read.html` (off the nav) and `evmscan-ens
+  check` say which path answered. `internal/ccip/signed.go` is the codec;
+  `ens_signed_sim_test.go` runs the loop on the simulated backend. `evmscan-ens
+  deploy-signed-resolver` deploys it; the subnode is created from the name owner's
+  wallet (docs/MAINNET.md §6d). **Status:** built, never deployed; `hints.evm-scan.eth`
+  does not resolve today and the deployment is off the ship (docs/SHIP.md D2).
+- An account's cross-chain **hint** is a `KindInterop` bloom over its `(chain, token)`
+  pairs, stored in `account_hints` (migration 0011) only under the account's EIP-712
+  signature (`Hint(account, digest, deadline)` under the domain `{evm-scan hint, 1}`,
+  no chain, no contract; `internal/api/hintsig.go`), served at
+  `GET /v1/accounts/{addr}/hint` and as the `evmscan.hint` record; without a stored
+  one the daemon builds a bloom from the account's committed contracts. A hint
+  **orders** a sweep and **removes nothing**. **Status:** the routes stay; the
+  browser-built, signed hint card is off the page since the 2026-09-13 ship, so in
+  practice only the daemon-built bloom is served. The reader's signed act is now the
+  verdict (invariants below), whose EIP-712 shape is a copy of `Hint`'s.
 - `internal/api` depends on the indexer through the small `Worker` interface, not the package.
   `gateway.go` is the ERC-3668 gateway for `HintRegistry.contractsOf`; `internal/ccip` holds
   the response codec and an ERC-3668 client shared with `cmd/evmscan-verify -ccip`. The
   callback only accepts the latest finalized epoch, so the gateway reads that id from the
-  registry, not from the local table.
+  registry, not from the local table. Each contract in `GET /v1/accounts/{addr}` and
+  `/contracts` carries `committed: bool` (in the latest finalized epoch's leaf for
+  this account, from `epoch_leaves`) and `demand: {"for": n, "against": n}`.
   Routes use Go 1.22 method-prefixed patterns on `http.ServeMux`. `authorized` guards
   everything that is not a read, minus the allowlisted exceptions (`POST /ccip` and
-  `POST /ens`, which any ERC-3668 resolver has to reach; `/v1/demand*`, a reader's
-  vote; `POST /v1/accounts/{addr}/hint`, written under the reader's own signature) —
+  `POST /ens`, which any ERC-3668 resolver has to reach; `POST /v1/verdict`, a
+  reader's signed verdict; `/v1/demand*`, the unsigned +1 and the relay;
+  `POST /v1/accounts/{addr}/hint`, written under the reader's own signature) —
   an inverted rule, so a new mutating route is guarded before anyone remembers to add
   it, and `auth_test.go` is what holds the exceptions open.
 - Money buys indexing and does not buy position. `HintRegistry.Funding` keeps
   `vouched` beside `balance`: `balance` drains as `claimCoverage` pays the publisher,
   so a well-funded, well-indexed asset reads as zero there — the same as one nobody
   ever wanted — which makes it useless for ranking. `vouched` only ever rises.
-  `orderAssets` in `internal/api` sorts by it, and any report sinks a contract below
-  every unreported one regardless of the amount, because the registry is open and
-  otherwise the cheapest attack is to buy the top of somebody's wallet. Reports live
-  on `assets` (migration 0009), not on `candidates`: a contract someone paid to
-  register never passes through discovery, so no candidate verdict can reach it. One
-  report is enough because ordering is not adjudication — deranking a good contract
-  costs it a place and a reader one extra balance read, while ranking a scam puts it
-  at the top of a wallet, and those are not the same mistake. A report can never
-  revoke, un-index or refund: the funding already bought a backfill and the coverage
-  is already in a root.
-- A candidate carries at most one live verdict. `spam_at` drops it out of
+  `orderAssets` in `internal/api/handlers.go` and the wallet render in
+  `web/index.html` apply one rule (docs/SHIP.md §4): (1) any operator report, or
+  `against > for` among signed verdicts, sinks below every other row regardless of
+  the amount, because the registry is open and otherwise the cheapest attack is to
+  buy the top of somebody's wallet; (2) contracts `committed` in the latest
+  finalized epoch's leaf for this account come first; (3) then `for − against`
+  descending; (4) then `vouched` descending, then activity. Reports live on
+  `assets` (migration 0009), not on `candidates`: a contract someone paid to
+  register never passes through discovery, so no operator decision on a candidate
+  can reach it. One report — or one signer's `against` with nobody `for` — is
+  enough because ordering is not adjudication: deranking a good contract costs it
+  a place and a reader one extra balance read, while ranking a scam puts it at the
+  top of a wallet, and those are not the same mistake. A report can never revoke,
+  un-index or refund: the funding already bought a backfill and the coverage is
+  already in a root.
+- A candidate carries at most one live **operator decision** (not to be confused
+  with a reader's verdict, `POST /v1/verdict`). `spam_at` drops it out of
   `PromotableCandidates` — the only candidate query auto-promote reads, so that one
   clause is the whole rule, and `DemandedUnseen` excludes candidates entirely — and
   promotion clears the mark rather than sitting beside it, which is what
   lets `/v1/decisions` be a single ordered scan over `COALESCE(promoted_at, spam_at)`.
-  Discovery keeps counting a spam contract; a verdict is about what to index, not what to
-  watch.
+  Discovery keeps counting a spam contract; a decision is about what to index, not
+  what to watch.
 - `web/` is the UI, served by `http.FileServer` from `WebDir` — no build step, no bundler.
-  `index.html` is one page of five tabs (wallet, overview, triage, accounts, graph);
+  `index.html` is one page of five tabs (wallet, overview, triage, accounts, graph).
+  The wallet tab is the reader flow of docs/SHIP.md §2 — enter, read, classify (the
+  signal weights live in one object at the top of the page), verify, *Sign my
+  verdict*, remember — and the four operator tabs are untouched (D5); the
+  cross-chain sweep is one secondary card off the main path (D3).
   `graph.js` is the WebGL graph, imported the first time that tab is opened because
   three.js is most of a megabyte and most visits never ask for a picture. `hints.js` is
   imported the same way and for the same reason — the index filter is well over a
   megabyte — and holds the two things that read one: the private lookup, which answers
   "which indexed contracts has this account touched" from the downloaded file so the
-  daemon never learns the address, and the blinded-watchlist builder; plus the
-  browser's memory of an account and the vote (below). It cannot close
+  daemon never learns the address, and the blinded-watchlist builder — both in code
+  behind no UI since the ship (§3) — plus the browser's memory of an account and the
+  legacy unsigned vote (below). It cannot close
   over this file's scope, so the filter primitives are handed to it on
   `window.evmscanHints`; there is deliberately only one implementation of the
   arithmetic on the page, because a second one would be a second thing to keep
@@ -276,7 +295,8 @@ shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module 
   `HintResolver` serves, the `text`/`resolve` ABI by hand, a Universal Resolver read
   that reports `OffchainLookup` rather than following it — imported by `hints.js`
   and by `read.js`, so the format has one implementation. `read.html` + `read.js` is
-  the **separate reader flow**: an account or name in, the registry's
+  the **separate reader flow**, off the nav since no resolver serves the name
+  (docs/SHIP.md D2) and kept as the reference reader: an account or name in, the registry's
   `<hex>.hints.<parent>` name, its `evmscan.contracts` record read through ENS on the
   reader's RPC (the resolver's `OffchainLookup` is followed in the browser by hand so
   the gateway is named on screen, and the callback verifies the answer against the
@@ -317,68 +337,76 @@ shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module 
 - Account names resolve in the client: the page through the Universal Resolver on the
   reader's RPC, the mirror through its injected `EthCall`. The daemon never resolves a
   name, no API parameter takes one, and nobody here follows an ERC-3668 gateway on a
-  reader's behalf — the one exception is `read.html`'s registry mode, which follows the
-  resolver's `OffchainLookup` in the reader's own browser with the gateway named on
-  screen; that is the reader following it, not us.
-- A reader's act on their own wallet is a **vote, not a list**. The held contracts
-  the index does not keep are voted for with `POST /v1/demand` (`vote` in
-  `web/hints.js`), and the same counter lives on chain as `HintRegistry.vote`,
-  mirrored by `Mirror.syncDemand` into `asset_demand_onchain`. The on-chain vote
-  is **signed, not sent**: the wallet signs an EIP-712 `Vote(voter, chainId,
-  tokens, nonce, deadline)` and `POST /v1/demand/relay` carries it to
-  `HintRegistry.voteFor` with the publisher's sender (`Deps.Relay`), because a
-  wallet holding mainnet tokens rarely has gas on the registry's chain. The
-  contract recovers the signer and spends `nonces(voter)`, so the carrier is
-  nobody and a signature lands once; the relay simulates first, allows one
-  transaction per voter per ten minutes and at most twenty tokens, and refuses a
-  vote that would count nothing new. `GET /v1/demand/relay?voter=` hands the page
-  the domain, types and nonce, and reports `available: false` on a registry that
-  predates `voteFor`, where the page falls back to a plain `vote` transaction.
-  The same account voting through the API and on chain counts twice, since the
-  mirror sees only aggregates. A vote names a chain, and it may be one this
-  deployment does not run: the cross-chain sweep offers one vote per chain it
-  found holdings on (`renderSweepVote`), `POST /v1/demand` records it, the
-  mirror keeps every chain the registry lists, and `GET /v1/demand` says
-  `indexed_here` — demand for an unindexed chain is what tells an operator which
-  chain to add, and `DemandedUnseen` promotes it as soon as that chain runs. The
-  relay's window is therefore per voter **and chain**, and it waits for the
-  receipt before answering, because each `voteFor` spends `nonces(voter)` and the
-  next chain's vote cannot be signed against anything but the mined state.
-  Demand is a priority
-  signal and nothing else: `PromotableCandidates` orders by it and, with
-  `min_voters` above zero, promotes on it alone (`DemandedUnseen` reaches a voted
-  contract discovery never counted, promoted with source `demand`); `spam_at` still
-  outranks any number of votes, a vote buys no position, and no vote changes what a
-  balance read says. Promotion stays budgeted by `max_promotions_per_tick`, and
-  `min_voters` must sit above one on a metered node — a single fresh address must
-  not buy a backfill. The API voter is stored as `keccak256(salt ‖ chainId ‖
-  account)` under a salt generated once in migration 0010, so an account counts
-  once and the table cannot be walked back to who holds what. `POST /v1/demand` is
-  the second allowlisted write in `guarded()` after `/ccip`, and `auth_test.go`
-  holds it open. Two earlier shapes were built and cut: a 1,024-bit bloom under an
-  `evmscan.hint` text record (unreadable without walking the daemon's token list),
-  then the enumerable list as `evmscan.contracts` on the reader's own name
-  (measured 418,386 gas for 10 contracts, 1,043,335 for 30, 2,131,297 for 65 on
-  mainnet ENS — per wallet, for what a counter stores once). Cost any ENS write
-  with `eth_estimateGas` against a real resolver, never from SSTORE arithmetic.
+  reader's behalf — the one exception is `read.html`'s registry mode (in code, off
+  the nav), which follows the resolver's `OffchainLookup` in the reader's own browser
+  with the gateway named on screen; that is the reader following it, not us.
+- A reader's act on their own wallet is **one signed verdict: not a list, not a
+  transaction, not a vote button** (docs/SHIP.md D1, §4). The page proposes a split
+  of the holdings into recognized and unrecognized from signals the API already
+  carries — `price.confidence`, `known`, `vouched_wei`, `demand`, `roles`,
+  `reports`, a symbol lookalike — the reader flips what it got wrong and signs once:
+  EIP-712 `Verdict(address account, uint64 chainId, bytes32 digest, uint256 deadline)`
+  under the domain `{name: "evm-scan verdict", version: "1"}`, no chain, no
+  verifying contract (same reasoning as `Hint`); `digest = keccak256(concat over
+  pairs sorted by address of (address ‖ int8 weight))`, weight ∈ {−1, +1}, a 0 is not
+  sent and absence is 0. `POST /v1/verdict` (`internal/api/verdict.go`,
+  `verdictsig.go`) recovers the signer, which must equal `account`, requires
+  `deadline` in the future and strictly greater than the one stored for
+  `(chain, voter)` in `account_verdicts` (migration 0012) — that is the replay guard
+  — and **replaces** the voter's rows for that chain: rows not in the list are
+  deleted, `weight` upserted for the rest, response `{recorded, cleared,
+  indexed_here}`. Go and the page compute the digest independently and
+  `internal/api/testdata/verdict.json` pins both. The voter is stored as
+  `keccak256(salt ‖ chainId ‖ account)` under the salt generated once in migration
+  0010, so an account counts once and the table cannot be walked back to who holds
+  what. `POST /v1/verdict` is allowlisted in `guarded()` beside `/v1/demand` and
+  `/ccip`, and `auth_test.go` holds it open. `POST /v1/demand` stays as the unsigned
+  +1 (`vote` in `web/hints.js`, curl); `GET /v1/demand` reports `voters` and
+  `against` per contract and `indexed_here` per chain, and a verdict may name a
+  chain this deployment does not run — demand for an unindexed chain is what tells
+  an operator which chain to add, and `DemandedUnseen` promotes it as soon as that
+  chain runs. Demand is a priority signal and nothing else: `PromotableCandidates`
+  orders by it and promotes on `(voters − against) >= min_voters` alone
+  (`DemandedUnseen` reaches a contract discovery never counted, promoted with source
+  `demand`); `spam_at` outranks any number of signers, promotion stays budgeted by
+  `max_promotions_per_tick`, a verdict buys no position, and no verdict changes what
+  a balance read says. `min_voters` is 3 on a metered node — a single fresh address
+  must not buy a backfill; the live profile runs 1 for demo day (docs/SHIP.md D4).
+- The on-chain counter is still there and off the page. `HintRegistry.vote` and
+  `voteFor` (EIP-712 `Vote(voter, chainId, tokens, nonce, deadline)`, carried to the
+  frozen contract by `POST /v1/demand/relay` with the publisher's sender,
+  `Deps.Relay`: simulated first, one transaction per voter **and chain** per ten
+  minutes, at most twenty tokens, refusing a vote that counts nothing new,
+  remembering consumed nonces, waiting for the receipt because the next chain's
+  vote cannot be signed against anything but the mined state; `GET
+  /v1/demand/relay?voter=` hands out domain, types and nonce and reports
+  `available: false` on a registry that predates `voteFor`) are mirrored by
+  `Mirror.syncDemand` into `asset_demand_onchain` and counted as `voters` beside the
+  API rows, so the same account through both paths counts twice. No route is
+  removed and the page does not offer the transaction (docs/SHIP.md D1). Two earlier
+  shapes were built and cut: a 1,024-bit bloom under an `evmscan.hint` text record
+  (unreadable without walking the daemon's token list), then the enumerable list as
+  `evmscan.contracts` on the reader's own name (measured 418,386 gas for 10
+  contracts, 1,043,335 for 30, 2,131,297 for 65 on mainnet ENS — per wallet, for
+  what a counter stores once). Cost any ENS write with `eth_estimateGas` against a
+  real resolver, never from SSTORE arithmetic.
 - What a browser remembers about an account is spent on the next lookup, and the
-  shape of the spending is the invariant. It **adds**: every contract the memory
-  names is asked about whether or not the index offers it. It **orders**: named
-  candidates go ahead of the per-lookup cap, though never ahead of an indexed
-  asset. It **removes nothing**. It is read from localStorage only
-  (`evmscan.seen.<account>`, the two `HintResolver` records as JSON; an older
-  base64 filter under that key is no cache, not a broken one). Nothing is read from
-  ENS on the lookup page. Every failure is a note on screen and an empty seed, never
-  a lost lookup.
-- A reader's own triage of their own holdings ("set aside", `evmscan.aside.<account>`
-  in localStorage) decides what the browser remembers and what the vote offers, and
-  nothing else. Set-aside
-  contracts are still asked about, still read from the chain, still shown behind a
-  toggle, and the valuation is untouched — it is the only reader-owned set stored as
-  addresses rather than as a filter, because an undo that cannot be enumerated is not
-  an undo. `afterLookup` and `openWatchlist` must both honour it: a memory rebuilt
-  from everything on screen hands the dust back on the next lookup and the triage
-  lasts until the button is pressed again.
+  shape of the spending is the invariant. The memory is
+  `localStorage["evmscan.verdict.<account>"]`: the signed pairs and their deadline,
+  so the next lookup is pre-split the same way before the daemon answers, and the
+  reader's own stored verdict overrides the page's proposal for that row. It
+  **adds**: every contract the memory names is asked about whether or not the index
+  offers it, and the list read through the lens is index ∪ committed ∪ memory
+  (docs/SHIP.md D3). It **orders**: recognized rows go ahead of the per-lookup cap,
+  though never ahead of a committed asset. It **removes nothing**: a −1 row is still
+  asked about, still read from the chain, still valued, and drawn in the lower
+  group behind the same toggle that moves it back — it is stored as addresses, not
+  as a filter, because an undo that cannot be enumerated is not an undo. Older keys
+  (`evmscan.seen.<account>`, `evmscan.aside.<account>`) are no cache, not a broken
+  one. Nothing is read from ENS on the lookup page. Every failure is a note on
+  screen and an empty seed, never a lost lookup. The verdict is the reader's whole
+  triage: there is no separate set-aside, no report and no hint card, and the
+  valuation is untouched by any of it.
 - Hint filters annotate, never filter. A token list is curated and therefore
   incomplete, so dropping what is not on one hides real holdings of long-tail tokens.
   `known` rides alongside a portfolio row and is absent — not false — when no list is
@@ -386,7 +414,8 @@ shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module 
 - A filter is never trusted. It says where to look; the live lens read says what is
   there. A false positive costs one `balanceOf`; there are no false negatives except
   from staleness, which is why an index filter carries the block it is true as of.
-- The cross-chain sweep in `web/index.html` is client-only: viem's bundled chain
+- The cross-chain sweep in `web/index.html` is client-only and a secondary card, not
+  the main path (docs/SHIP.md D3): viem's bundled chain
   registry (lazily imported — the barrel is ~800 separate requests) intersected with
   a CORS-open token list, then the same deployless `AssetLens` call per chain. The
   lens returns ~920 bytes per token against EIP-170's 24,576-byte ceiling, so 24 per

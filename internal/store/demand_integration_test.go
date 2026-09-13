@@ -46,7 +46,7 @@ func TestDemandCountsVotersAndOrdersPromotion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got[a] != 2 || got[c] != 1 || got[b] != 0 {
+	if got[a].For != 2 || got[c].For != 1 || got[b].For != 0 {
 		t.Fatalf("DemandFor = %v", got)
 	}
 

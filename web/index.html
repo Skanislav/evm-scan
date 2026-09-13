@@ -135,70 +135,32 @@
     padding: 6px 12px; font: 400 11.5px/1 var(--mono); color: var(--blue-deep); cursor: pointer;
   }
   .try .ex:hover { border-color: rgba(20,22,26,.4); }
-  /* How to ask: two modes side by side, the lit one dark. The private mode unfolds
-     what leaves the browser and what stays, in numbered steps — grey for the public
-     files, green for the part that never becomes a request. */
+  /* The pipeline card under the lookup box. */
   .howto { margin-top: 30px; border: 1px solid rgba(20,22,26,.13); border-radius: var(--r-xl); background: var(--surface); overflow: hidden; }
   .howto-head {
     padding: 12px 16px 11px; border-bottom: 1px solid var(--line);
     font: 500 10px/1 var(--mono); letter-spacing: .09em; text-transform: uppercase; color: var(--ink-65);
   }
-  .howto-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
-  .mode {
-    display: block; width: 100%; text-align: left; border: 0; background: var(--surface); color: var(--ink);
-    padding: 15px 16px 16px; cursor: pointer; font-family: var(--sans);
-  }
-  .mode + .mode { border-left: 1px solid var(--line); }
-  .mode:hover { background: var(--card); }
-  .mode.on { background: var(--ink); color: #fff; cursor: default; }
-  .mode-t { display: flex; align-items: center; gap: 8px; font: 500 13px/1.3 var(--sans); margin-bottom: 6px; }
-  .mode-dot { width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid rgba(20,22,26,.3); box-sizing: border-box; flex: none; }
-  .mode.on .mode-dot { border: 0; background: oklch(0.72 0.13 250); }
-  .mode-d { font: 400 11.5px/1.55 var(--mono); color: var(--ink-65); }
-  .mode.on .mode-d { color: rgba(255,255,255,.72); }
-  .howto-body { padding: 16px; border-top: 1px solid var(--line); background: var(--card); }
-  .steps { max-width: 680px; margin-bottom: 16px; display: flex; flex-direction: column; gap: 10px; }
-  .stepcard { border: 1px solid rgba(20,22,26,.13); border-radius: var(--r-lg); background: var(--surface); overflow: hidden; }
-  .stepcard-head {
-    padding: 10px 14px; border-bottom: 1px solid var(--line); background: var(--bg-2);
-    font: 500 10px/1.4 var(--mono); letter-spacing: .07em; text-transform: uppercase; color: var(--ink-65);
-  }
-  .stepcard.green { border-color: oklch(0.80 0.07 155); background: oklch(0.985 0.014 155); }
-  .stepcard.green .stepcard-head { background: transparent; border-color: oklch(0.88 0.05 155); color: oklch(0.36 0.09 155); }
-  .steplist { padding: 13px 14px; display: flex; flex-direction: column; gap: 11px; }
-  .step { display: flex; gap: 11px; align-items: flex-start; }
-  .step > div { min-width: 0; }
-  .stepn {
-    flex: none; width: 19px; height: 19px; border-radius: 50%; background: rgba(20,22,26,.08); color: var(--ink);
-    font: 500 10.5px/19px var(--mono); text-align: center;
-  }
-  .stepn.green { background: oklch(0.55 0.10 155); color: #fff; }
-  .step-t { font: 400 12.5px/1.5 var(--sans); color: var(--ink-80); }
-  .step-d { font: 400 11px/1.5 var(--mono); color: var(--ink-65); }
-  .why { max-width: 680px; margin-bottom: 16px; padding: 14px 15px; border-left: 2px solid var(--ink); background: var(--surface); }
-  .why-t { font: 600 12.5px/1.4 var(--sans); margin-bottom: 7px; }
-  .why p { font: 400 12.5px/1.6 var(--sans); color: rgba(20,22,26,.72); margin: 0 0 8px; text-wrap: pretty; }
-  .why p:last-child { margin-bottom: 0; }
-  .worth {
-    display: flex; flex-direction: column; gap: 7px; margin-bottom: 15px; padding: 13px 14px;
-    border: 1px solid oklch(0.82 0.07 75); border-radius: 8px; background: var(--amber-wash);
-    font: 400 12px/1.55 var(--sans); color: rgba(20,22,26,.72);
-  }
-  .worth-head { font: 500 11px/1 var(--mono); letter-spacing: .07em; text-transform: uppercase; color: oklch(0.38 0.10 66); margin-bottom: 3px; }
 
-  /* The answer as an ENS name: the parent, the account's own name, the four records. */
-  .enscard { margin-top: 22px; }
-  .ens-body { padding: 15px 16px 16px; }
-  .ens-body p { font: 400 12.5px/1.6 var(--sans); color: rgba(20,22,26,.72); margin: 0 0 13px; max-width: 660px; text-wrap: pretty; }
-  .ens-body p.ens-foot { font-size: 12px; color: var(--ink-70); margin: 0; }
-  .ens-name {
-    font: 400 11.5px/1.7 var(--mono); color: rgba(20,22,26,.68); background: var(--card);
-    border: 1px solid rgba(20,22,26,.1); border-radius: 7px; padding: 11px 12px; margin-bottom: 13px; word-break: break-all;
+  /* The answer, split: recognized above, unrecognized below, each row carrying the
+     reasons as chips and one control to move it across. Green chips add to the
+     score, amber ones subtract; the red one is the junk verdict itself. */
+  .vgroup { margin-top: 18px; }
+  .vgroup + .vgroup { margin-top: 26px; }
+  .vhead { display: flex; gap: 12px; flex-wrap: wrap; align-items: baseline; margin-bottom: 10px; }
+  .rchips { display: flex; gap: 5px; flex-wrap: wrap; align-items: center; min-width: 0; }
+  .rchip {
+    display: inline-flex; align-items: center; gap: 4px; font: 500 9.5px/1 var(--mono); letter-spacing: .03em;
+    text-transform: uppercase; padding: 3px 6px; border-radius: var(--r-sm); white-space: nowrap; cursor: default;
+    background: var(--fill); color: var(--ink-70);
   }
-  .ens-name b { font-weight: 500; color: var(--ink); }
-  .ens-keys { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px 16px; margin-bottom: 13px; }
-  .ens-keys .k { font: 500 11.5px/1.4 var(--mono); color: var(--ink); }
-  .ens-keys .d { font: 400 11.5px/1.5 var(--sans); color: rgba(20,22,26,.68); }
+  .rchip.pos { background: oklch(0.955 0.03 155); color: oklch(0.36 0.09 155); }
+  .rchip.neg { background: var(--amber-bg); color: var(--amber-text); }
+  .rchip.junk { background: oklch(0.93 0.06 25); color: oklch(0.42 0.16 25); }
+  .rchip.you { background: var(--ink); color: #fff; }
+  .rchip b { font-weight: 600; }
+  .committed { display: inline-block; margin-left: 6px; font: 500 9px/1 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: #fff; background: var(--blue); border-radius: 3px; padding: 3px 5px; vertical-align: middle; }
+  .verdict-bar { margin-top: 22px; padding: 16px 18px; border: 1px solid var(--line-2); border-radius: var(--r-lg); background: var(--card); }
 
   /* From what you type to a number: the pipeline behind the answer, one step per
      row. The one blue step is the one call that does the reading. */
@@ -624,7 +586,6 @@
     <span class="pill" id="pill-node" hidden></span>
     <span class="pill amber" id="pill-epoch" hidden></span>
     <nav class="toplinks">
-      <a href="read.html">Read a commitment</a>
       <a href="#beat5">Verify</a>
       <a href="#beat4">Operator</a>
       <a href="https://github.com/Skanislav/evm-scan" target="_blank" rel="noopener">GitHub</a>
@@ -666,99 +627,12 @@
         <button class="btn btn-ghost" id="name-rpc-reset">Default</button>
       </div>
 
-      <!-- Every account already has a name under the HintResolver's parent, so the
-           answer can be read as ENS text records by any ENS client. Shown only when
-           this deployment has a resolver attached: a card that promised a name nobody
-           serves would be the one dishonest thing on the page. -->
-      <div class="howto enscard" id="ens-card" hidden>
-        <div class="howto-head">the answer is also an ens name</div>
-        <div class="ens-body">
-          <p>One ENSIP-10 wildcard resolver hangs under <code id="ens-parent">…</code>, so every account already has
-            a name — nobody registers anything. Reading it hits the registry at call time and verifies the answer
-            on-chain before returning it, so a resolver can withhold a record but cannot forge one.</p>
-          <div class="ens-name" id="ens-name"></div>
-          <div class="ens-keys">
-            <div><div class="k">evmscan.contracts</div><div class="d">what this account touched</div></div>
-            <div><div class="k">evmscan.epoch</div><div class="d">which commitment answered</div></div>
-            <div><div class="k">evmscan.range</div><div class="d">the blocks it covers</div></div>
-            <div><div class="k">evmscan.root</div><div class="d">the root to check it against</div></div>
-          </div>
-          <p class="ens-foot">Any ENS client reads them — viem, ens-cli, the ENS app — with no evm-scan code, no SDK and
-            nothing of ours in the path. Names only travel the other way in your browser: the daemon takes addresses
-            and is never handed a name.</p>
-        </div>
-      </div>
-
-      <!-- The same question, two ways of asking it. "Ask by name" puts the address in
-           a URL and gets the complete answer back. "Ask without naming yourself" works
-           the narrower answer out of a file every visitor downloads identically, so no
-           endpoint learns the address — and the card says what leaves the browser and
-           what stays, step by step, because the privacy is in the mechanism and not in
-           a promise. The Look up button follows whichever is lit. -->
-      <div class="howto">
-        <div class="howto-head">how to ask</div>
-        <div class="howto-grid" role="radiogroup" aria-label="how to ask">
-          <button class="mode on" id="mode-hosted" data-mode="hosted" role="radio" aria-checked="true">
-            <div class="mode-t"><span class="mode-dot"></span>Ask by name</div>
-            <div class="mode-d">one request to /v1/accounts/{address} · complete, with balances · the daemon reads your address out of the path</div>
-          </button>
-          <button class="mode" id="mode-private" data-mode="private" role="radio" aria-checked="false">
-            <div class="mode-t"><span class="mode-dot"></span>Ask without naming yourself</div>
-            <div class="mode-d">a published filter, tested in your tab · membership only, as of its block · no endpoint is told who you are</div>
-          </button>
-        </div>
-
-        <div class="howto-body" id="private" hidden>
-          <div class="steps">
-            <div class="stepcard">
-              <div class="stepcard-head">what leaves your browser · three public files, identical for every visitor</div>
-              <div class="steplist">
-                <div class="step"><span class="stepn">1</span><div><div class="step-t">Ask which filters exist.</div><div class="step-d">GET /v1/hints · the same list everybody gets</div></div></div>
-                <div class="step"><span class="stepn">2</span><div><div class="step-t">Download the index filter, and check the bytes are the bytes it promised.</div><div class="step-d">GET /v1/hints/<span id="step-filter-name">index-…</span>.xorf · digest must match the manifest · if the ETag disagrees it was rebuilt mid-download, so ask again</div></div></div>
-                <div class="step"><span class="stepn">3</span><div><div class="step-t">Download the list of contracts this index covers.</div><div class="step-d">GET /v1/assets · already public</div></div></div>
-              </div>
-            </div>
-            <div class="stepcard green">
-              <div class="stepcard-head">what stays in your browser · your address never goes into a request</div>
-              <div class="steplist">
-                <div class="step"><span class="stepn green">4</span><div><div class="step-t">For each covered contract, hash it together with your address into one key, and ask the filter whether it holds that key.</div><div class="step-d"><span id="step-pairs">…</span> pair keys · ~20 ms · no network</div></div></div>
-                <div class="step"><span class="stepn green">5</span><div><div class="step-t">The keys that hit are the contracts with a row for you.</div><div class="step-d">the answer is now on screen, and no server was asked for it</div></div></div>
-              </div>
-            </div>
-          </div>
-
-          <div class="why">
-            <div class="why-t">Why that makes it private</div>
-            <p>Every request above asked for a file that is the same for everyone, so the only thing this host
-              learns is that somebody downloaded the filter — which it learns from every visitor anyway. Your
-              address is used only as an input to a hash, in your tab, and never travels.</p>
-            <p>Compare the usual routes: the address sits in a URL path (<code>/v1/accounts/0x…</code>), in
-              gateway calldata, or in an <code>eth_call</code> to whoever runs the RPC. Any of those is
-              unforgeable — and never unobservable. Turning the question inside out is what removes the
-              observer, not a promise in a privacy policy.</p>
-          </div>
-
-          <div class="worth">
-            <div class="worth-head">what this is and is not worth</div>
-            <div>A miss means <em>nobody here indexes that contract</em> — never "you hold none of it". The index covers promoted assets, not the chain.</div>
-            <div>The filter is true as of its block, not as of head. That is the one way this answer can be a false negative.</div>
-            <div>A hit is wrong about roughly one pair in 256, which is what the live balance read below is for.</div>
-          </div>
-
-          <div class="label" style="margin-bottom:9px">then read balances at head from</div>
-          <div class="row" id="chain-rpc-row" style="margin-bottom:10px">
-            <input class="input" type="text" id="chain-rpc" style="flex:1 1 260px; min-width:0; height:42px" spellcheck="false" autocomplete="off" placeholder="http://127.0.0.1:8545">
-            <button class="btn btn-secondary" id="chain-rpc-save" style="height:42px">Re-run here</button>
-            <button class="btn btn-ghost" id="chain-rpc-clear" style="height:42px">Use the daemon</button>
-          </div>
-          <p class="hint" style="margin:0 0 18px; max-width:640px">One <code>eth_call</code> to whatever node you trust —
-            membership says where to look, the read says what is there. Two honest caveats: that endpoint does see
-            the address, and typing an ENS name rather than an address resolves through it too. Disclosure, but to
-            someone you picked.</p>
-
-          <!-- hints.js draws the filter's own numbers, the button and the answer here. -->
-          <div id="private-body"><span class="empty">loading the filter's numbers…</span></div>
-        </div>
+      <!-- Balances are read through the daemon unless the reader names a node of
+           their own here. Hidden until the "change" button on the note above opens it. -->
+      <div class="row" id="chain-rpc-row" hidden style="margin-top:12px">
+        <input class="input" type="text" id="chain-rpc" style="flex:1 1 260px; min-width:0" spellcheck="false" autocomplete="off" placeholder="http://127.0.0.1:8545 — your own RPC for the balance reads">
+        <button class="btn btn-secondary" id="chain-rpc-save">Re-run here</button>
+        <button class="btn btn-ghost" id="chain-rpc-clear">Use the daemon</button>
       </div>
 
       <!-- What happens between the box above and the table below, in order. Numbered
@@ -771,7 +645,7 @@
             <div>
               <div class="pstep-t">Whatever you typed becomes one address.</div>
               <div class="pstep-d">a hex address is checksum-checked · a name is NFC-normalised and lowercased, and the page echoes the exact form it hashed, so a disagreement with your wallet's rendering is visible instead of silent</div>
-              <div class="pstep-d amber">a name resolves through ENS's Universal Resolver on the RPC endpoint you set under "how to ask" — the one step here that leaves the browser, in either mode</div>
+              <div class="pstep-d amber">a name resolves through ENS's Universal Resolver on a mainnet RPC, in your browser — the daemon is never handed a name</div>
             </div>
           </div>
           <div class="pstep">
@@ -838,86 +712,61 @@
     </div>
     <div class="hint" id="chain-unverified" hidden style="margin-top:10px"></div>
 
-    <!-- Adding a network is a real thing the daemon does: it dials the endpoint, asks
-         the node for its own chain id, and refuses the pair if they disagree. -->
-    <div class="panel" id="add-chain" hidden>
-      <h3>Add a network</h3>
-      <p class="prose" style="margin:0 0 16px; max-width:62ch">
-        Name it and the <code>on.eth</code> registry answers with its chain id — one
-        <code>eth_call</code> on mainnet, no gateway. The registry deliberately publishes no
-        endpoints, because an endpoint URL is where an API key lives, so that part stays yours
-        to supply.
-      </p>
-      <div class="row">
-        <input class="input" type="text" id="chain-name" style="flex:1 1 280px" spellcheck="false"
-               autocomplete="off" placeholder="a chain name — base, optimism, arbitrum">
-        <button class="btn btn-primary" id="chain-resolve">Look it up</button>
-        <button class="btn btn-ghost" id="chain-manual-open">Enter it by hand</button>
-        <button class="btn btn-ghost" id="add-chain-close">Close</button>
-      </div>
-      <div class="hint" id="chain-resolve-hint" style="margin-top:10px"></div>
-      <div class="err" id="chain-err" hidden></div>
-      <div id="chain-card" hidden style="margin-top:16px"></div>
-
-      <div id="chain-manual" hidden style="margin-top:14px">
-        <div class="row">
-          <input class="input" type="text" id="chain-manual-id" style="flex:0 1 200px" spellcheck="false" autocomplete="off" placeholder="chain id — e.g. 421614">
-          <input class="input" type="text" id="chain-manual-name" style="flex:0 1 200px" spellcheck="false" autocomplete="off" placeholder="a short name">
-          <input class="input" type="text" id="chain-manual-symbol" style="flex:0 1 180px" spellcheck="false" autocomplete="off" placeholder="native symbol (ETH)">
-        </div>
-        <div class="hint" style="margin-top:8px">Most chains are not in the registry — it is new, and
-          testnets are not its early population. Typing the id is an ordinary way in, not a failure.</div>
-      </div>
-
-      <div id="chain-commit" hidden style="margin-top:14px">
-        <div class="row">
-          <input class="input" type="text" id="chain-node" style="flex:1 1 320px" spellcheck="false"
-                 autocomplete="off" placeholder="https://… your own RPC for this network">
-          <button class="btn btn-primary" id="chain-add">Start indexing</button>
-          <button class="btn btn-ghost" id="chain-cancel">Cancel</button>
-        </div>
-        <div class="hint" style="margin-top:8px">Stored so a restart brings the chain back, and never
-          returned by the API — the URL usually carries a provider's key. Before anything is written the
-          daemon dials it and asks the node for <em>its own</em> chain id; if that disagrees with the
-          number above, the network is refused. A chain reached over somebody else's RPC starts
-          <strong>unverified</strong>: indexed and served, but never backing an on-chain commitment until
-          you say so deliberately.</div>
-      </div>
-    </div>
-    <div class="hint" id="add-chain-off" hidden style="margin-top:14px">This deployment does not allow adding networks at runtime.</div>
 
     <div id="holdings-wrap" hidden>
       <div class="subrow block">
         <h3 id="holdings-title">Holdings</h3>
         <div class="colnote" id="price-line"></div>
       </div>
-      <div class="scroll">
-        <div class="tablehead cols-hold">
-          <span>asset</span><span class="num">balance</span><span class="num">price</span>
-          <span class="num">value</span><span class="num">confidence</span><span class="num">triage</span>
+
+      <!-- Two groups, drawn by the classifier at the top of the script: what the page
+           recognizes and what it does not. Every row carries the reasons as chips and
+           one control to move it across; a reader's signed verdict overrides the
+           proposal for that row. Junk sits in the lower group with a red chip. -->
+      <div class="vgroup" id="group-recognized">
+        <div class="vhead">
+          <span class="label">recognized · <span id="recognized-count">0</span></span>
+          <span class="colnote">a feed price, a token list, somebody paying to index it, this wallet sending it — enough to trust the name</span>
         </div>
-        <div id="holdings"></div>
+        <div class="scroll">
+          <div class="tablehead cols-verdict">
+            <span>asset</span><span class="num">balance</span><span class="num">value</span><span>why</span><span class="num"></span>
+          </div>
+          <div id="holdings-recognized"></div>
+        </div>
       </div>
+      <div class="vgroup" id="group-unrecognized">
+        <div class="vhead">
+          <span class="label">unrecognized · <span id="unrecognized-count">0</span></span>
+          <span class="colnote">nothing vouches for the name, or something speaks against it — the balance is real either way</span>
+        </div>
+        <div class="scroll">
+          <div class="tablehead cols-verdict">
+            <span>asset</span><span class="num">balance</span><span class="num">value</span><span>why</span><span class="num"></span>
+          </div>
+          <div id="holdings-unrecognized"></div>
+        </div>
+      </div>
+
       <div class="total" id="holdings-total" hidden>
         <div class="note">The total carries the <em>weakest</em> confidence in the sum — a portfolio is only as
           trustworthy as its worst price.</div>
         <div class="sum"><b id="total-val">—</b><span class="badge none" id="total-tier">NONE</span></div>
       </div>
-      <div class="row" style="margin-top:14px">
-        <button class="linkbtn" id="spam-toggle" hidden></button>
-        <span class="hint" id="spam-note"></span>
+
+      <!-- One signature over the split. EIP-712 Verdict(account, chainId, digest,
+           deadline) to this daemon, never on chain; the wallet that signs must be the
+           account on screen. The status span sits here, outside what renderHoldings
+           redraws, so a "recorded" line survives the next candidate poll. -->
+      <div class="verdict-bar" id="verdict-bar">
+        <div class="row" style="gap:10px">
+          <button class="btn btn-secondary btn-sm" id="verdict-connect">Connect wallet</button>
+          <button class="btn btn-primary btn-sm" id="verdict-sign" disabled>Sign my verdict</button>
+          <span class="hint" id="verdict-status"></span>
+        </div>
+        <p class="hint" id="verdict-note" style="margin:10px 0 0; max-width:92ch; text-wrap:pretty"></p>
+        <div class="err" id="verdict-err" hidden></div>
       </div>
-      <!-- The reader's own triage of their own holdings, beside the operator's spam
-           toggle and independent of it: a row can be hidden by either, and each toggle
-           brings back only its own. Nothing here leaves the browser. -->
-      <div class="row" style="margin-top:10px">
-        <button class="linkbtn" id="aside-toggle" hidden></button>
-      </div>
-      <p class="hint" id="aside-note" style="margin:6px 0 0; max-width:92ch; text-wrap:pretty"></p>
-      <!-- What the reader's hint did to this lookup. A hint that quietly changed what got
-           asked about would be worse than no hint, so the page says which hints were used,
-           what each added, and that nothing was hidden by any of it. -->
-      <p class="hint" id="hint-use" hidden style="margin-top:14px; max-width:92ch; text-wrap:pretty"></p>
 
       <!-- Everything above is one chain. The sweep is client-only: viem's chain registry
            and a CORS-open token list, then the same deployless lens call per chain. The
@@ -953,8 +802,6 @@
               <span class="hint mono" id="xchain-status" style="font-family:var(--mono); font-size:11.5px"></span>
             </div>
             <div id="xchain-results"></div>
-            <!-- hints.js draws the reader's hint card here after a sweep. -->
-            <div id="xchain-hint"></div>
             <div class="sweep-skipped" id="xchain-skipped"></div>
             <div class="sweep-foot">The sweep deliberately does <em>not</em> narrow each chain's list with the index
               filter first. That looked obviously right and was badly wrong: a filter miss means "we do not index that
@@ -967,13 +814,6 @@
         </div>
       </div>
 
-      <!-- What discovery found that the index does not keep. A balance read at head is
-           gone the moment the tab closes; an indexed asset is committed to a root and
-           served from the registry. This is where one becomes the other. -->
-      <div id="preserve" hidden class="unkept">
-        <div class="unkept-head">held, but not kept by the index<span id="preserve-count"></span></div>
-        <div class="unkept-body" id="preserve-body"></div>
-      </div>
     </div>
 
     <div class="emptycard" id="account-empty" hidden>
@@ -990,18 +830,6 @@
     <div class="hint" id="account-held" hidden style="margin-top:14px">No indexed interactions for this account — its
       token events are older than the history this node can serve. These are live balances read at head.</div>
 
-    <!-- A blinded filter over the reader's own set: testable by whoever holds the
-         secret, opaque to whoever stores the file.
-         Deliberately outside #holdings-wrap. Building one needs holdings, but *opening*
-         one needs nothing at all — and #holdings-wrap is only unhidden by the lookup
-         that names the address to the daemon. -->
-    <div id="watchlist" class="block">
-      <div class="subrow" style="justify-content:flex-start; gap:14px">
-        <h3>Private watchlist</h3>
-        <button class="linkbtn" id="watch-open">keep a list somewhere that cannot read it</button>
-      </div>
-      <div id="watch-panel" hidden></div>
-    </div>
   </div>
 </section>
 
@@ -1223,10 +1051,7 @@
       <div class="dark cmd">
         <div class="label">recompute the leaf, replay the proof, call <span class="ident">verifyInclusion</span> on-chain</div>
         <div class="code" id="verify-cmd">evmscan-verify -epoch &lt;id&gt; \
-  -account &lt;0x…&gt;
-
-evmscan-verify -ens \
-  &lt;hex&gt;.hints.&lt;parent&gt;</div>
+  -account &lt;0x…&gt;</div>
       </div>
       <div class="stack">
         <div class="card" id="filter-card">
@@ -1383,7 +1208,7 @@ function esc(s) {
 
 // Column templates, named once so a header and its rows cannot drift apart.
 const COLS = {
-  hold: 'minmax(0, 1fr) minmax(90px, 130px) minmax(80px, 110px) minmax(90px, 130px) 96px 160px',
+  verdict: 'minmax(0, 1.3fr) minmax(90px, 130px) minmax(80px, 120px) minmax(190px, 1fr) 100px',
   assets: 'minmax(0, 1fr) 72px minmax(96px, 150px) 110px',
   accounts: 'minmax(0, 1.5fr) 72px 80px 120px',
   epochs: '40px minmax(0, 1fr) 84px 150px minmax(150px, 210px) 110px',
@@ -1391,6 +1216,31 @@ const COLS = {
 for (const [k, v] of Object.entries(COLS)) {
   document.querySelectorAll('.cols-' + k).forEach(el => { el.style.gridTemplateColumns = v; });
 }
+
+// --------------------------------------------------------------------------
+// The classifier's weights (docs/SHIP.md §2 step 3)
+//
+// Every holding gets a proposed verdict from signals the page already has, and the
+// reasons are drawn as chips so the reader can see why. One object, so the tuning
+// is a one-minute edit and the chips and the score cannot disagree about a number.
+// Score >= recognized_at is recognized, <= junk_at is junk, anything between is
+// unsure. The reader's own signed verdict overrides the proposal for that row.
+// --------------------------------------------------------------------------
+const VERDICT_WEIGHTS = {
+  feed_price: 3,       // price.confidence "high": a Chainlink feed
+  dex_price: 1,        // "medium" or "low": a pool
+  listed: 2,           // a curated token list carries the contract
+  vouched: 2,          // somebody paid to index it (vouched_wei > 0)
+  signer: 1,           // per net signer: demand.for − demand.against
+  signer_cap: 3,       // …capped, either way
+  sent: 2,             // this wallet has sent it, not only received it
+  receive_only: -1,    // only ever received
+  lookalike: -5,       // the symbol impersonates a listed one
+  reported: -5,        // an operator reported it, or marked it spam
+  nothing_known: -2,   // no price, on no list, nobody paid
+  recognized_at: 3,
+  junk_at: -2,
+};
 
 // Token standards as the chain reports them, written the way people do.
 const STD_LABEL = { erc20: 'ERC-20', erc721: 'ERC-721', erc1155: 'ERC-1155' };
@@ -1414,9 +1264,12 @@ function setOperatorToken(v) {
 // gas, RPC quota, or a judgement written into the index.
 const SPENDING_METHODS = ['POST', 'PATCH', 'DELETE'];
 
+// opts.reader marks a write made under the reader's own signature: it neither
+// carries the operator token nor asks for one on a 401, because a 401 there means
+// the signature did not match the account, which no token would fix.
 async function api(path, opts) {
   const tok = operatorToken();
-  if (tok && opts && SPENDING_METHODS.includes(opts.method)) {
+  if (tok && opts && !opts.reader && SPENDING_METHODS.includes(opts.method)) {
     opts = { ...opts, headers: { ...(opts.headers || {}), authorization: `Bearer ${tok}` } };
   }
   const res = await fetch(path, opts);
@@ -1424,7 +1277,7 @@ async function api(path, opts) {
   let body;
   try { body = text ? JSON.parse(text) : {}; } catch { body = { error: text }; }
   if (!res.ok) {
-    if (res.status === 401) {
+    if (res.status === 401 && !(opts && opts.reader)) {
       // The token box lives beside the commitments, so asking for it means going there.
       $('op-token-row').hidden = false;
       $('op-token-row').scrollIntoView({ block: 'center', behavior: 'smooth' });
@@ -1491,7 +1344,7 @@ function ago(iso) {
 // State
 // --------------------------------------------------------------------------
 
-let CHAINS = [], PICKED = null, DEFAULT_CHAIN = 0, PENDING = null, CAN_ADD = false;
+let CHAINS = [], PICKED = null, DEFAULT_CHAIN = 0, CAN_ADD = false;
 let INDEXED_CHAIN = 0, HEAD = 0, REG = null, WALLET = null, STATUS = null;
 let THRESHOLDS = { min_events: 0, min_blocks: 0 };
 let CANDIDATES = [], ASSETS = [], EPOCHS = [];
@@ -1502,15 +1355,12 @@ let CARD_ADDR = null, LAST_VERDICT = null;
 // Skips are this session's, not the index's: "not now" is a different statement from
 // "not ever", and only the second one is worth a row in the database.
 const SKIPPED = new Set();
-let WALLET_ADDR = '', WALLET_NAME = '', WALLET_HINT = '', HOLDINGS = [], VALUATION = null, SHOW_SPAM = false;
-// What the reader's own hint did to the last lookup. Kept so it can be shown: a hint
-// that silently changes what gets asked about is exactly the thing this page should
-// not have.
-let HINT_USE = null;
-// The rows the reader set aside, and the indexed half of the last lookup. Both are
-// read again when a verdict changes, which is why they outlive the lookup that
-// produced them.
-let ASIDE = new Set(), INDEXED = [], SHOW_ASIDE = false;
+let WALLET_ADDR = '', WALLET_NAME = '', WALLET_CHAIN = 0, HOLDINGS = [], VALUATION = null;
+// The reader's verdict on the account on screen: what this browser remembers from
+// the last signature (read at lookup time), what the toggles changed since, and
+// the wallet that will sign. A Map rather than the DOM, because renderHoldings is
+// re-entered every five seconds by the candidate poll and must not lose a flip.
+let VERDICT_MEM = null, VERDICT_OVERRIDES = new Map(), VERDICT_WALLET = '';
 let ACCOUNTS = [], ACCT_OFFSET = 0, ACCT_MORE = false, ACCT_SELECTED = null;
 let graphLoaded = false;
 // Reverse-name lookups go to an RPC the page does not own, so the accounts table
@@ -1686,19 +1536,9 @@ function renderStages(c) {
     </div>`).join('');
 }
 
-// The answer as an ENS name. The parent comes from the daemon's status, the account's
-// own name from its lookup; before one, the card shows the shape a name takes. With
-// no resolver attached the card stays hidden rather than promising a name nobody serves.
-function renderEnsCard() {
-  const card = $('ens-card');
-  const parent = REG && REG.ens_parent;
-  card.hidden = !parent;
-  if (!parent) return;
-  $('ens-parent').textContent = `hints.${parent}`;
-  $('ens-name').innerHTML = WALLET_HINT
-    ? `<b>${esc(WALLET_HINT)}</b> · ${esc(WALLET_NAME || short(WALLET_ADDR, 4))}'s index, as ENS text records`
-    : `&lt;address as hex&gt;.hints.${esc(parent)} · look an account up and its name appears here`;
-}
+// ENS is off the ship (docs/SHIP.md D2): the card is gone from the page and this draws
+// nothing. Names still resolve *in*, in the browser; nothing is served *out* as ENS.
+function renderEnsCard() {}
 
 // The three claims behind the answer, restated for whatever is on screen: the account
 // looked up, the epoch it can be checked against, and how much history is missing.
@@ -1729,12 +1569,8 @@ function renderClaims() {
 
   const fromEpoch = fin || EPOCHS[0];
   const acct = WALLET_ADDR || '<0x…>';
-  // Before a lookup the name is a shape; the parent is still real when the daemon has one.
-  const parent = REG && REG.ens_parent;
-  const ens = WALLET_HINT || (parent ? `<hex>.hints.${parent}` : '<hex>.hints.<parent>');
   $('verify-cmd').textContent =
-    `evmscan-verify -epoch ${fromEpoch ? (fromEpoch.onchain_epoch_id ?? fromEpoch.id) : '<id>'} \\\n  -account ${acct}\n\n` +
-    `evmscan-verify -ens \\\n  ${ens}`;
+    `evmscan-verify -epoch ${fromEpoch ? (fromEpoch.onchain_epoch_id ?? fromEpoch.id) : '<id>'} \\\n  -account ${acct}`;
 
   renderEpochWindow();
   renderDispute();
@@ -1932,13 +1768,6 @@ function windowLabel(s) {
   return `${s} s`;
 }
 
-// challengeIndex(uint256) and approve(address,uint256).
-const CHALLENGE_SELECTOR = '0x53e02942';
-const APPROVE_SELECTOR = '0x095ea7b3';
-// A challenge is armed by one click and sent by the next, so a status poll landing
-// between them must not redraw the card under the reader's finger.
-let CHALLENGE_ARMED = null, CHALLENGING = false, CHALLENGE_TX = '';
-
 const RULES_DEFAULT = `On a chain with no oracle deployment the fallback is <strong>local-arbiter mode</strong>:
   bonds in wei and one key settling disputes. That is a trusted deployment wearing a permissionless write
   path — the deploy tool says so in capitals, and this page would say so here.`;
@@ -1946,7 +1775,7 @@ const RULES_DEFAULT = `On a chain with no oracle deployment the fallback is <str
 function renderDispute() {
   renderPhases();
   const card = $('settle-card');
-  if (!card || CHALLENGING || CHALLENGE_ARMED !== null) return;
+  if (!card) return;
   if (!REG || !REG.address) {
     card.innerHTML = `<h3>Who settles it here</h3>
       <p>This deployment names no registry, so nothing here is committed on-chain and there is nothing to
@@ -1978,69 +1807,23 @@ function renderDispute() {
     : `This registry is in <strong>local-arbiter mode</strong>: bonds are in wei and one key,
        <code>${esc(REG.arbiter)}</code>, settles a challenge through <code>resolveChallenge</code>. Anyone can still
        challenge; what the bond buys is that key's ruling, not a vote.`;
-  let status = '';
-  if (CHALLENGE_TX && e && e.onchain_status === 'challenged') status = `submitted <code>${esc(CHALLENGE_TX)}</code>`;
-  else if (e && !open) status = `epoch ${id} is past its window`;
+  // The act itself is a wallet's, not this page's: challengeIndex(id) carrying the
+  // bond, from anyone. The page says whether the window is open and leaves it there.
+  const status = !e ? 'nothing to challenge yet'
+    : open ? `epoch ${id} is inside its window: <code>challengeIndex(${id})</code> from any wallet carrying the bond disputes it`
+    : `epoch ${id} is past its window`;
   card.innerHTML = `
     <h3>Who settles it here<span class="mode-badge ${oracle ? '' : 'local'}">${oracle ? 'oracle mode' : 'local-arbiter mode'}</span></h3>
     <p>${who}</p>
     <div class="econ">${econ.map(esc).join('<br>')}</div>
-    <div class="row" style="margin-top:13px; gap:10px">
-      <button class="btn btn-secondary btn-sm" id="challenge" ${open ? '' : 'disabled'}>${e ? `Challenge epoch ${id}` : 'Nothing to challenge yet'}</button>
-      <span class="hint" id="challenge-status">${status}</span>
-    </div>
-    <div class="err" id="challenge-err" hidden></div>`;
+    <div class="hint" style="margin-top:13px">${status}</div>`;
   $('rules-mode').innerHTML = oracle ? RULES_DEFAULT
     : `<strong>This deployment is that fallback.</strong> On a chain with no oracle deployment the registry runs in
        local-arbiter mode: bonds in wei and one key settling disputes — here <code>${esc(REG.arbiter)}</code>. That is
        a trusted deployment wearing a permissionless write path; the deploy tool says so in capitals, and so does
        this page.`;
-  if (e && open) $('challenge').addEventListener('click', () => challengeEpoch(e, $('challenge')));
 }
 
-// The challenge itself, from the reader's own wallet. Two clicks, because the first
-// one only names the bond: it is the reader's money, and a button that spends it on
-// one click is a button that spends it by accident.
-async function challengeEpoch(e, btn) {
-  const id = e.onchain_epoch_id ?? e.id;
-  const status = $('challenge-status');
-  showErr('challenge-err', null);
-  if (CHALLENGE_ARMED !== id) {
-    CHALLENGE_ARMED = id;
-    btn.textContent = `Confirm · bond ${fmtBond()}`;
-    status.textContent = REG.mode === 'oracle'
-      ? `two wallet prompts: approve the registry to pull the bond, then challengeIndex(${id}). The bond goes to UMA's vote against the publisher's, and the loser forfeits.`
-      : `one wallet prompt: challengeIndex(${id}) carrying the bond. The arbiter's ruling decides who forfeits.`;
-    return;
-  }
-  CHALLENGING = true;
-  btn.disabled = true;
-  try {
-    if (!WALLET) await ensureWallet();
-    const bond = BigInt(REG.publisher_bond);
-    if (REG.mode === 'oracle') {
-      status.textContent = 'approve the bond in your wallet…';
-      const data = APPROVE_SELECTOR + REG.address.toLowerCase().replace(/^0x/, '').padStart(64, '0') + word(bond);
-      await window.ethereum.request({ method: 'eth_sendTransaction', params: [{ from: WALLET, to: REG.bond_currency, data }] });
-    }
-    status.textContent = 'confirm the challenge in your wallet…';
-    CHALLENGE_TX = await window.ethereum.request({
-      method: 'eth_sendTransaction',
-      params: [{ from: WALLET, to: REG.address, data: CHALLENGE_SELECTOR + word(id),
-                 value: REG.mode === 'oracle' ? '0x0' : '0x' + bond.toString(16) }],
-    });
-    status.innerHTML = `submitted <code>${esc(CHALLENGE_TX)}</code> · the registry marks epoch ${id} challenged once it lands`;
-    btn.textContent = `Challenged epoch ${id}`;
-    setTimeout(loadEpochs, 4000);
-  } catch (err) {
-    showErr('challenge-err', err);
-    btn.disabled = false;
-    btn.textContent = `Challenge epoch ${id}`;
-  } finally {
-    CHALLENGING = false;
-    CHALLENGE_ARMED = null;
-  }
-}
 // One tick a second is only worth paying for while a window is open; the check
 // itself is a handful of comparisons over a list that is rarely longer than twenty.
 setInterval(() => { if (EPOCHS.some(e => windowState(e).open)) renderEpochWindow(); }, 1000);
@@ -2049,14 +1832,6 @@ setInterval(() => { if (EPOCHS.some(e => windowState(e).open)) renderEpochWindow
 // Networks
 // --------------------------------------------------------------------------
 
-// An avatar comes from the registry, which means from whoever controls that name.
-// Most are ipfs://, which needs a gateway to render — and reaching for one would tell
-// a third party which chain you are looking at, on a page whose whole argument is
-// that it reads from your own node. So https only, and no icon otherwise.
-function iconURL(avatar) {
-  if (!avatar || !/^https:\/\//i.test(avatar)) return '';
-  return avatar;
-}
 
 async function loadChains() {
   let data;
@@ -2068,15 +1843,6 @@ async function loadChains() {
   CHAINS = data.chains || [];
   DEFAULT_CHAIN = data.default_chain_id || 0;
   CAN_ADD = !!data.can_add;
-  $('add-chain-off').hidden = CAN_ADD;
-  $('chain-resolve-hint').innerHTML = data.ens_available
-    ? 'Names resolve through ENS’s <code>on.eth</code> registry on Ethereum mainnet.'
-    : 'This deployment has no Ethereum mainnet endpoint, so it cannot resolve names ' +
-      '(the <code>on.eth</code> registry lives there). Add a network by chain id instead, or set <code>ens.node</code>.';
-  if (!data.ens_available) {
-    $('chain-name').placeholder = 'name resolution unavailable — add by chain id';
-    $('chain-resolve').disabled = true;
-  }
   renderChains();
 }
 
@@ -2093,8 +1859,7 @@ function renderChains() {
           <span class="sub">${c.chain_id}${c.head_block ? ' · head ' + num(c.head_block) : ''}${c.running ? '' : ' · stopped'}</span>
         </button>`;
       }).join('')
-    : '<span class="empty">no networks</span>')
-    + (CAN_ADD ? '<button class="btn btn-ghost" id="add-network-open">+ add network</button>' : '');
+    : '<span class="empty">no networks</span>');
 
   el.querySelectorAll('[data-chain]').forEach(b => {
     b.addEventListener('click', () => {
@@ -2110,15 +1875,8 @@ function renderChains() {
       loadStatus(); loadAssets(); loadCandidates(); loadDecisions(); loadEpochs();
       if (ACCOUNTS_STARTED) loadAccounts();
       if (graphLoaded && window.evmscanGraphReload) window.evmscanGraphReload();
-      if (MODE === 'private') setMode('private');
       if (WALLET_ADDR) lookup();
     });
-  });
-  const open = $('add-network-open');
-  if (open) open.addEventListener('click', () => {
-    const p = $('add-chain');
-    p.hidden = !p.hidden;
-    if (!p.hidden) $('chain-name').focus();
   });
 
   const unverified = CHAINS.filter(c => c.running && c.trust === 'unverified').length;
@@ -2129,122 +1887,6 @@ function renderChains() {
       served, but never committed on-chain. A bond is money staked on logs, and these were served by a
       machine this deployment does not run.`;
   }
-}
-
-async function resolveChainName() {
-  const raw = $('chain-name').value.trim();
-  showErr('chain-err', null);
-  $('chain-card').hidden = true;
-  $('chain-manual').hidden = true;
-  $('chain-commit').hidden = true;
-  if (!raw) return;
-
-  const btn = $('chain-resolve');
-  btn.disabled = true;
-  try {
-    const r = await api(`/v1/chains/resolve?name=${encodeURIComponent(raw)}`);
-    PENDING = { chain_id: r.chain_id, ens_name: r.label, name: (r.suggested && r.suggested.name) || r.label };
-    renderChainCard(r);
-    $('chain-commit').hidden = false;
-    $('chain-node').focus();
-  } catch (e) {
-    if (e.status === 404) {
-      // Not a failure. Most chains are not in the registry, and the next move is to
-      // type the details rather than to give up.
-      showErr('chain-err', new Error(
-        `${raw} is not in the on.eth registry — which is ordinary; most chains are not. Enter its details below.`));
-      openManual(raw);
-    } else {
-      showErr('chain-err', e);
-    }
-  } finally { btn.disabled = false; }
-}
-
-function renderChainCard(r) {
-  const s = r.suggested || {};
-  const ico = iconURL(r.avatar);
-  $('chain-card').hidden = false;
-  $('chain-card').innerHTML = `
-    <div style="display:flex; align-items:center; gap:12px; margin-bottom:14px">
-      ${ico ? `<img src="${esc(ico)}" alt="" style="width:28px; height:28px; border-radius:50%">` : ''}
-      <div>
-        <div class="sym" style="font-size:15px">${esc(s.name || r.label)}</div>
-        <div class="addr">${esc(r.ens_name)} → chain ${r.chain_id}</div>
-      </div>
-    </div>
-    <div class="kvgrid">
-      <div><div class="k">chain id</div><div class="v">${r.chain_id}</div></div>
-      <div><div class="k">native</div><div class="v">${esc((s.native && s.native.symbol) || '?')}</div></div>
-      <div><div class="k">block time</div><div class="v">${esc(s.block_time || '?')}</div></div>
-      <div><div class="k">confirmations</div><div class="v">${s.confirmations ?? '?'}</div></div>
-      <div><div class="k">log window</div><div class="v">${s.backfill_window ?? '?'} / ${s.tail_window ?? '?'}</div></div>
-    </div>
-    <div class="hint" style="margin-top:12px">Resolved by <span class="addr">${esc(r.resolver)}</span> on mainnet.
-      ${r.known_profile
-        ? 'The tuning above is this chain’s own, not Ethereum’s.'
-        : '<strong>No built-in tuning for this chain</strong>, so those numbers are conservative guesses — safe, and slower than they need to be.'}
-      ${r.already_running ? '<br><strong>Already running here.</strong>' : ''}</div>`;
-}
-
-function openManual(prefillName) {
-  PENDING = null;
-  $('chain-card').hidden = true;
-  $('chain-manual').hidden = false;
-  $('chain-commit').hidden = false;
-  if (prefillName) $('chain-manual-name').value = prefillName;
-  $('chain-manual-id').focus();
-}
-
-function resetAddChain() {
-  PENDING = null;
-  showErr('chain-err', null);
-  ['chain-name', 'chain-node', 'chain-manual-id', 'chain-manual-name', 'chain-manual-symbol']
-    .forEach(id => { $(id).value = ''; });
-  $('chain-card').hidden = true;
-  $('chain-manual').hidden = true;
-  $('chain-commit').hidden = true;
-}
-
-async function addChain() {
-  const node = $('chain-node').value.trim();
-  showErr('chain-err', null);
-  if (!node) {
-    showErr('chain-err', new Error('an RPC endpoint is required — the registry names chains, it does not publish endpoints'));
-    return;
-  }
-  const body = { node };
-  if (PENDING) {
-    body.ens_name = PENDING.ens_name;
-  } else {
-    const id = Number($('chain-manual-id').value.trim());
-    if (!Number.isInteger(id) || id <= 0) {
-      showErr('chain-err', new Error('a chain id is required'));
-      return;
-    }
-    body.chain_id = id;
-    body.name = $('chain-manual-name').value.trim() || `chain-${id}`;
-    const sym = $('chain-manual-symbol').value.trim();
-    if (sym) body.native = { symbol: sym, decimals: 18 };
-  }
-
-  const btn = $('chain-add');
-  btn.disabled = true;
-  try {
-    const r = await api('/v1/chains', {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
-    });
-    resetAddChain();
-    $('add-chain').hidden = true;
-    await loadChains();
-    const c = r.chain || {};
-    if (c.chain_id) {
-      PICKED = c.chain_id;
-      INDEXED_CHAIN = c.chain_id;
-      renderChains();
-      loadStatus(); loadAssets(); loadCandidates();
-    }
-  } catch (e) { showErr('chain-err', e); }
-  finally { btn.disabled = false; }
 }
 
 // --------------------------------------------------------------------------
@@ -2333,7 +1975,7 @@ async function loadAssets() {
 }
 
 // The table shows the list a page at a time. ASSETS itself stays whole — the wallet
-// and the private lookup read all of it — and how far the reader has opened the
+// reads all of it — and how far the reader has opened the
 // table survives the five-second poll, so the rows do not fold back up under them.
 const ASSETS_PAGE = 5;
 let ASSETS_SHOWN = ASSETS_PAGE;
@@ -2341,7 +1983,6 @@ let ASSETS_SHOWN = ASSETS_PAGE;
 function renderAssets() {
   const assets = ASSETS;
   $('asset-count').textContent = num(assets.length);
-  $('step-pairs').textContent = num(assets.length);
   const floor = STATUS ? STATUS.history_floor : 0;
   const head = HEAD || (STATUS && STATUS.head_block) || 0;
   const shown = assets.slice(0, ASSETS_SHOWN);
@@ -2580,59 +2221,6 @@ async function requestIndexing(token, kind, from, value) {
   });
 }
 
-// voteOnChain puts the vote on the registry itself, as the voter's own: the wallet
-// signs an EIP-712 Vote and the daemon carries it to HintRegistry.voteFor with its
-// key, paying the gas. The contract recovers the signer, so the carrier is nobody
-// and the vote counts once like any other. A wallet full of mainnet tokens rarely
-// has gas on the registry's chain, which is the whole reason for the detour; when
-// this deployment carries no votes the same call falls back to a plain vote(...)
-// transaction from the wallet.
-const VOTE_SELECTOR = '0x7c6afb33'; // vote(uint64,address[])
-function encodeVote(chainId, tokens) {
-  const addrs = tokens.map(t => {
-    const a = String(t).toLowerCase().replace(/^0x/, '');
-    if (!/^[0-9a-f]{40}$/.test(a)) throw new Error(`not an address: ${t}`);
-    return a.padStart(64, '0');
-  });
-  return VOTE_SELECTOR + word(chainId) + word(64) + word(addrs.length) + addrs.join('');
-}
-async function voteOnChain(chainId, tokens, status) {
-  if (!REG.address) throw new Error('this deployment names no registry');
-  if (!WALLET) await ensureWallet();
-  const say = (t) => { if (status) status.textContent = t; };
-
-  const info = await api(`/v1/demand/relay?voter=${WALLET}`).catch(() => null);
-  if (!info || !info.available) {
-    say('this deployment carries no votes — confirm the transaction in your wallet…');
-    const tx = await window.ethereum.request({
-      method: 'eth_sendTransaction',
-      params: [{ from: WALLET, to: REG.address, data: encodeVote(chainId, tokens) }],
-    });
-    return { tx, relayed: false };
-  }
-  if (tokens.length > info.max_tokens) throw new Error(`the relay carries at most ${info.max_tokens} tokens per vote`);
-
-  const deadline = String(Math.floor(Date.now() / 1000) + 600);
-  const typed = {
-    types: { EIP712Domain: [
-      { name: 'name', type: 'string' }, { name: 'version', type: 'string' },
-      { name: 'chainId', type: 'uint256' }, { name: 'verifyingContract', type: 'address' },
-    ], ...info.types },
-    primaryType: 'Vote',
-    domain: info.domain,
-    message: { voter: WALLET, chainId: String(chainId), tokens, nonce: info.nonce, deadline },
-  };
-  say('sign the vote in your wallet — no gas, nothing is sent from it…');
-  const signature = await window.ethereum.request({
-    method: 'eth_signTypedData_v4', params: [WALLET, JSON.stringify(typed)],
-  });
-  say('carrying it to the registry…');
-  const r = await api('/v1/demand/relay', {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ chain_id: chainId, voter: WALLET, tokens, nonce: info.nonce, deadline, signature }),
-  });
-  return { tx: r.tx, relayed: true, fresh: r.new, mined: r.mined };
-}
 
 // --------------------------------------------------------------------------
 // Candidates, verdicts and the ledger
@@ -3510,7 +3098,7 @@ window.evmscanHints = {
   subkey: xorfSubkey, contains: xorfContains, pairKey, tokenKey,
   interopKey, interopSubkey, interop7930,
   lookalike: lookalikeOf,
-  requestIndexing, voteOnChain, registry: () => REG, head: () => HEAD, indexedChain: () => INDEXED_CHAIN,
+  requestIndexing, registry: () => REG, head: () => HEAD, indexedChain: () => INDEXED_CHAIN,
   wallet: () => WALLET, ensureWallet,
   signTypedData: (typed) => window.ethereum.request({ method: 'eth_signTypedData_v4', params: [WALLET, JSON.stringify(typed)] }),
   weiToEth, ethToWei,
@@ -3791,6 +3379,8 @@ async function sweepableChains() {
       id: chainId, name: c.name, native: c.nativeCurrency?.symbol || '',
       testnet: !!c.testnet,
       tokens, rpc: url, mine, host: hostOf(url),
+      // viem's public default, kept so "use the default" can put it back.
+      defaultRpc: c.rpcUrls?.default?.http?.[0] || '',
     });
   }
   // Mainnets first, busiest first within each. The testnets that are left are live
@@ -3921,10 +3511,7 @@ const XSELECTED = new Set();
 let XLIST = null;         // the token list's own name and version, for the disclosure
 let XSTATE = 'idle';      // idle | running | done
 let XLAST = null;         // the last sweep's totals, for the status line after it
-// The address this page last fetched from the daemon by name. A sweep asks the
-// daemon for a hint only for that address: a private lookup never named it, and
-// ordering a sweep is not worth naming it for.
-let HOSTED_LOOKUP_FOR = '';
+let XRPC_EDIT = null;     // the chain whose endpoint row is open, if any
 
 async function openXChain() {
   $('xchain-open').disabled = true;
@@ -3947,12 +3534,14 @@ async function openXChain() {
 
 // One tile per chain: the check, the name, and the host that will see the address.
 // The tile is a div and not a button, because the "set" link inside it is a button
-// and a button inside a button is not HTML.
+// and a button inside a button is not HTML. "set" opens an input row inside the
+// tile rather than a native prompt, so the disclosure is on screen while typing.
 function renderXChainList() {
   $('xchain-list').innerHTML = XCHAIN.map(c => {
     const on = XSELECTED.has(c.id);
+    const editing = XRPC_EDIT === c.id;
     return `
-    <div class="chaintile ${c.testnet && !on ? 'dim' : ''}" data-tile="${c.id}">
+    <div class="chaintile ${c.testnet && !on ? 'dim' : ''}" data-tile="${c.id}" style="flex-wrap:wrap">
       <button class="pick" data-xchain="${c.id}" role="checkbox" aria-checked="${on}">
         <span class="box ${on ? 'on' : ''}">${on ? '✓' : ''}</span>
         <span style="min-width:0">
@@ -3960,7 +3549,13 @@ function renderXChainList() {
           <span class="ch" title="${esc(c.rpc)}">${c.mine ? 'your endpoint · ' : ''}${esc(c.host)} · ${num(c.tokens.length)} contract${c.tokens.length === 1 ? '' : 's'}</span>
         </span>
       </button>
-      <button class="linkbtn set" data-xrpc="${c.id}" title="use an endpoint of your own for ${esc(c.name)}">set</button>
+      <button class="linkbtn set" data-xrpc="${c.id}" title="use an endpoint of your own for ${esc(c.name)}">${editing ? 'cancel' : 'set'}</button>
+      ${editing ? `<div class="row" style="flex:1 0 100%; gap:6px; margin-top:4px">
+        <input class="input" type="text" data-xrpc-input="${c.id}" style="flex:1 1 180px; min-width:0; min-height:30px; font-size:11px; padding:4px 8px"
+               spellcheck="false" autocomplete="off" placeholder="https://… it will see the address you look up" value="${c.mine ? esc(c.rpc) : ''}">
+        <button class="btn btn-secondary btn-sm" data-xrpc-save="${c.id}">Use it</button>
+        <button class="btn btn-ghost btn-sm" data-xrpc-reset="${c.id}" title="${esc(c.defaultRpc || c.rpc)}">default</button>
+      </div>` : ''}
     </div>`;
   }).join('');
 
@@ -3976,15 +3571,31 @@ function renderXChainList() {
     el.addEventListener('click', (ev) => {
       ev.preventDefault();
       const id = Number(el.dataset.xrpc);
-      const c = XCHAIN.find(x => x.id === id);
-      const v = prompt(`RPC endpoint for ${c.name} (${id}).\n\nIt will see the address you look up. Leave empty to use ${c.host}.`, c.mine ? c.rpc : '');
-      if (v === null) return;
-      setRpcForChain(id, v.trim());
-      c.rpc = v.trim() || (c.rpc);
-      c.mine = !!v.trim();
-      c.host = hostOf(c.rpc);
+      XRPC_EDIT = XRPC_EDIT === id ? null : id;
       renderXChainList();
+      const input = $('xchain-list').querySelector(`[data-xrpc-input="${id}"]`);
+      if (input) input.focus({ preventScroll: true });
     });
+  }
+  const useRpc = (id, v) => {
+    const c = XCHAIN.find(x => x.id === id);
+    v = (v || '').trim();
+    setRpcForChain(id, v);
+    c.rpc = v || c.defaultRpc || c.rpc;
+    c.mine = !!v;
+    c.host = hostOf(c.rpc);
+    XRPC_EDIT = null;
+    XSTATE = 'idle';
+    renderXChainList();
+  };
+  for (const el of $('xchain-list').querySelectorAll('[data-xrpc-save]')) {
+    el.addEventListener('click', () => useRpc(Number(el.dataset.xrpcSave), $('xchain-list').querySelector(`[data-xrpc-input="${el.dataset.xrpcSave}"]`).value));
+  }
+  for (const el of $('xchain-list').querySelectorAll('[data-xrpc-reset]')) {
+    el.addEventListener('click', () => useRpc(Number(el.dataset.xrpcReset), ''));
+  }
+  for (const el of $('xchain-list').querySelectorAll('[data-xrpc-input]')) {
+    el.addEventListener('keydown', e => { if (e.key === 'Enter') useRpc(Number(el.dataset.xrpcInput), el.value); });
   }
 
   const dead = XCHAIN.filter(c => c.testnet);
@@ -4039,14 +3650,14 @@ async function runXChain() {
   XLAST = null;
   updateXChainStatus();
   $('xchain-results').innerHTML = '';
-  const hintEl = $('xchain-hint');
-  if (hintEl) hintEl.innerHTML = '';
   const done = [];
   const total = picked.length;
 
   // What this browser, or the daemon, already knows this account held. Orders the
-  // reads below; the list is still read to the end.
-  const hint = await loadHints().then(m => m.hintFor(addr, HOSTED_LOOKUP_FOR === addr)).catch(() => null);
+  // reads below; the list is still read to the end. The lookup above already named
+  // the address to the daemon — it is the only lookup there is — so asking it for
+  // the hint discloses nothing new.
+  const hint = await loadHints().then(m => m.hintFor(addr, true)).catch(() => null);
 
   // One row per chain as it lands — the host that answered, and what it said — with
   // the holdings under it. A chain that failed keeps its row and says so.
@@ -4082,9 +3693,10 @@ async function runXChain() {
       hintSource: hint ? hint.source : '',
     };
     updateXChainStatus();
-    // What the sweep confirmed becomes the next sweep's hint. Never awaited: the
-    // results are on screen already and the hint must not take them off.
-    loadHints().then(m => m.afterSweep(addr, done.flatMap(r => r.held), { aside: ASIDE })).catch(() => {});
+    // What the sweep confirmed becomes the next sweep's hint, kept in this browser
+    // only. Never awaited: the results are on screen already and the hint must not
+    // take them off.
+    loadHints().then(m => m.afterSweep(addr, done.flatMap(r => r.held))).catch(() => {});
   }
 }
 
@@ -4096,10 +3708,9 @@ function showRpcNote(html, warn) {
   $('chain-rpc-edit').addEventListener('click', openChainRpc);
 }
 
-// The RPC field lives in the private mode's card, because reading balances from a
-// node of your own is the second half of not naming yourself to anyone else.
+// The RPC row sits under the lookup box, hidden until asked for.
 function openChainRpc() {
-  setMode('private');
+  $('chain-rpc-row').hidden = false;
   $('chain-rpc').value = chainRpc();
   $('chain-rpc').focus({ preventScroll: true });
   $('chain-rpc').scrollIntoView({ block: 'center', behavior: 'smooth' });
@@ -4427,32 +4038,28 @@ function showResolved(r) {
 // Wallet
 // --------------------------------------------------------------------------
 
-// The token list the lens is asked about: every indexed asset, plus the candidates
-// nobody has ruled on. Without the second half every row would read "indexed" and the
-// verdict column would be decoration — the point is that the index says which
-// contracts to ask about, including the ones it has not committed to.
-function walletTokens(hinted) {
+// The token list the lens is asked about: every indexed asset, then everything this
+// browser remembers signing a verdict on, then the candidates nobody has ruled on.
+// Without the last part every row would read "indexed" and the split would be
+// decoration — the point is that the index says which contracts to ask about,
+// including the ones it has not committed to.
+//
+// What the memory is allowed to do, exactly. It ADDS: a remembered contract is asked
+// about whether or not the index offers it. It ORDERS: remembered contracts go ahead
+// of the per-lookup cap, and never ahead of an indexed asset — the index committed to
+// those, and a memory is a signature over a guess. It REMOVES nothing: absence means
+// "not signed for last time", which is no statement about what is held now.
+function walletTokens(remembered) {
   const seen = new Set();
   const out = [];
   const push = a => { const k = a.toLowerCase(); if (!seen.has(k)) { seen.add(k); out.push(a); } };
   for (const a of ASSETS) push(a.address);
+  for (const a of (remembered || [])) if (ADDRESS_RE.test(a)) push(a);
 
-  // Spam is asked about too, and hidden at render. Leaving it out here would make the
-  // "show N marked spam" count zero on a fresh lookup — a wallet holding three spam
-  // tokens would be told it holds none, which is the opposite of what the toggle is for.
+  // Spam is asked about too, and lands in the lower group at render. Leaving it out
+  // here would tell a wallet holding three spam tokens that it holds none, which is
+  // the opposite of what the lower group is for.
   const cands = CANDIDATES.filter(c => !c.promoted).map(c => c.address);
-
-  // Hinted candidates first, when this reader's hint says which of them this account
-  // has actually held. The cap below is the reason this matters: it was always going
-  // to drop candidates, and until now it dropped them in discovery order, which is an
-  // ordering about the chain rather than about the account being looked up. Sorting is
-  // stable, so everything unhinted keeps the order it had. Indexed assets are pushed
-  // above and never reordered — an asset the index committed to must not lose its slot
-  // to a hint, which is a guess.
-  if (hinted && hinted.size) {
-    cands.sort((a, b) => (hinted.has(b.toLowerCase()) ? 1 : 0) - (hinted.has(a.toLowerCase()) ? 1 : 0));
-  }
-
   for (const a of cands) {
     // The lens batches by twenty and tokens= caps at 512; this cap is what keeps both
     // the URL and the number of eth_calls bounded no matter how busy discovery is.
@@ -4482,64 +4089,39 @@ async function lookup() {
     const addr = resolved.address;
     WALLET_ADDR = addr;
     WALLET_NAME = resolved.name || '';
-    WALLET_HINT = '';
     showResolved(resolved.name ? resolved : null);
 
-    // What this browser remembered about the account last visit, read beside the
-    // account fetch rather than after it. Local only; nothing is read from ENS.
-    const seedP = loadHints()
-      .then(m => m.seedFor(addr))
-      .catch(() => null);
+    // What this browser remembers signing for this account, read before the rows
+    // exist so the first render is already split the way the signature put it,
+    // rather than flashing the proposal and then rearranging it.
+    // A verdict is about one chain; a memory of another chain's split says nothing here.
+    const mem = loadVerdict(addr);
+    VERDICT_MEM = mem && (!mem.chain_id || mem.chain_id === activeChainID()) ? mem : null;
+    VERDICT_OVERRIDES = new Map();
+    $('verdict-status').textContent = '';
+    showErr('verdict-err', null);
 
     const r = await api(onChain(`/v1/accounts/${addr}?prices=true`));
-
-    HOSTED_LOOKUP_FOR = addr;
-    // The daemon formats the hint name from registry.ens_parent; it resolves nothing.
-    if (r.hint_name) { resolved.hintName = r.hint_name; WALLET_HINT = r.hint_name; showResolved(resolved); }
-    renderEnsCard();
+    WALLET_CHAIN = Number(r.chain_id) || activeChainID();
     const indexed = r.assets || [];
-    INDEXED = indexed;
     VALUATION = indexed.length ? r.valuation : null;
-
-    // The reader's own verdicts, per account, from this browser. Read before the rows
-    // exist so the first render is already triaged rather than flashing the untriaged
-    // set and then collapsing it.
-    ASIDE = loadAside(addr);
 
     // The index knows what it has seen; the lens knows what is held now. An account
     // whose last token event fell out of the node's window has no rows above and may
     // still hold plenty, and a candidate nobody has promoted has none by construction —
-    // so both are asked about either way.
+    // so both are asked about either way, and so is everything the memory names.
     const known = new Set(indexed.map(a => a.address.toLowerCase()));
-    HINT_USE = await spendHint(await seedP, r.chain_id, known);
-    // What the index offered first, what the hint guessed after. Nothing downstream
-    // truncates this today — both balance paths batch — but the ordering is the same
-    // rule as everywhere else here: if anything ever does cut the list, it has to cut
-    // guesses before it cuts the index's own answer.
-    const ask = walletTokens(HINT_USE.hinted).concat(HINT_USE.vouched)
-      .filter(a => !known.has(a.toLowerCase()));
+    const remembered = VERDICT_MEM ? Object.keys(VERDICT_MEM.pairs) : [];
+    const ask = walletTokens(remembered).filter(a => !known.has(a.toLowerCase()));
     const extra = ask.length ? await heldBalances(addr, ask) : [];
-    HINT_USE.asked = ask.length;
-
     HOLDINGS = indexed.concat(extra);
 
-    // Tag the rows the hint knew about by testing the rows themselves, not by
-    // remembering which ones it put on the list. Those are different sets: the hint is
-    // only consulted about candidates and about the token list, so an indexed asset it
-    // knows perfectly well would go untagged and the count under the table would be
-    // short by however many of them there are. Twenty-nine more keccaks, and the
-    // sentence becomes true.
-    await tagHinted(await seedP, r.chain_id);
-    applyAside();
-
     // Mark contracts no token list vouches for. The test runs here, against a
-    // filter this browser already holds, so flagging junk costs no request and
-    // tells the daemon nothing about what is being looked at.
-    //
-    // It marks and never hides: token lists are curated and therefore incomplete,
-    // so dropping what is not on one would hide real holdings of long-tail tokens
-    // — a false negative in front of a reader, which is the one failure this whole
-    // path exists to avoid.
+    // filter this browser already holds, so it costs no request and tells the
+    // daemon nothing about what is being looked at. It marks and never hides:
+    // token lists are curated and therefore incomplete, so dropping what is not on
+    // one would hide real holdings of long-tail tokens — a false negative in front
+    // of a reader, which is the one failure this whole path exists to avoid.
     await markUnlisted(HOLDINGS, r.chain_id);
 
     $('wallet-head').hidden = false;
@@ -4550,15 +4132,7 @@ async function lookup() {
       `${num(HOLDINGS.length)} hold${HOLDINGS.length === 1 ? 's' : ''} a balance now`;
     renderWalletTotals(r);
     renderHoldings();
-    renderHintUse();
     renderClaims();
-
-    // Everything above is read at head and gone when the tab closes. The module below
-    // is what makes it outlast the visit: it remembers this set locally so the next
-    // visit is a short read rather than the long one, and offers the on-chain action
-    // for the holdings the index does not keep. Imported lazily and never awaited —
-    // a failure there must not take the holdings off the screen.
-    loadHints().then(m => m.afterLookup(addr, HOLDINGS, indexed)).catch(() => {});
   } catch (e) {
     $('holdings-wrap').hidden = true;
     $('wallet-head').hidden = true;
@@ -4641,169 +4215,85 @@ function renderWalletTotals(r) {
 }
 
 // --------------------------------------------------------------------------
-// Triaging your own holdings
+// The classifier
 //
-// The triage card is the operator's: approve or spam, a row in the deployment's
-// ledger, everyone who reads this index lives with the verdict. This is the reader's,
-// and it is a different axis with a different blast radius — nothing here leaves the
-// browser and nothing here is a claim about the contract. A lookup of a busy address
-// returns airdrop spray beside real positions, and the reader is the only one who can
-// say which is which for them.
+// Every holding gets a proposed verdict from what the page already knows, and every
+// reason is a chip on the row, so the split is inspectable rather than delivered.
+// The weights are VERDICT_WEIGHTS at the top of the script. The inputs, and where
+// each comes from:
 //
-// What setting a row aside does, exactly:
+//   price.confidence   the portfolio row (a feed beats a pool)
+//   known / unlisted   the row's token-list flag: `known` from the daemon, `unlisted`
+//                      from the filter test in the browser; absent means unknown,
+//                      never false — a list-less deployment vouches for nobody
+//   vouched_wei        the asset, from /v1/assets
+//   reports            the asset; an operator's spam verdict counts the same way
+//   demand.for/against the account's contract row (new; tolerated when absent)
+//   committed          the account's contract row (new; tolerated when absent)
+//   roles              the account's contract row: sent, or only ever received
+//   lookalikeOf        the symbol check the triage card runs
 //
-//   - It keeps the contract out of the hint. That is the point. The hint is what the
-//     next visit spends, and a hint stuffed with dust spends the reader's lookups
-//     rediscovering dust.
-//   - It collapses the row, the way a spam verdict does, reversibly and from the same
-//     place.
-//
-// What it deliberately does not do:
-//
-//   - It does not stop the contract being asked about. Balances are read from the
-//     chain at head in a batch that is already paid for, and a reader who set
-//     something aside in March should still see it if it moves in June. A list the
-//     reader wrote is still a list, and no list on this page decides what exists.
-//   - It does not change the valuation. That number comes from the daemon over the
-//     assets it has indexed, and quietly editing it here would leave two different
-//     answers to one question on the same screen.
-//
-// Stored as addresses rather than as a filter, because this is the one set here that
-// has to be enumerable: a bloom can say "this was set aside" and cannot list what to
-// put back, and an undo you cannot see is not an undo.
+// A proposal is what the page thinks. The reader's signed verdict for the row, from
+// this browser's memory or from a toggle since, overrides it.
 // --------------------------------------------------------------------------
-const asideKey = (account) => `evmscan.aside.${account.toLowerCase()}`;
 
-function loadAside(account) {
-  try {
-    const raw = localStorage.getItem(asideKey(account));
-    return new Set(raw ? JSON.parse(raw).map(a => String(a).toLowerCase()) : []);
-  } catch { return new Set(); }
+function assetMeta(address) {
+  const a = (address || '').toLowerCase();
+  return ASSETS.find(x => x.address.toLowerCase() === a) || null;
 }
 
-function saveAside(account, set) {
-  try {
-    localStorage.setItem(asideKey(account), JSON.stringify([...set]));
-  } catch { /* private window, or full; a preference that cannot be written is not an error */ }
+function proposeVerdict(h) {
+  const W = VERDICT_WEIGHTS;
+  const reasons = [];
+  let score = 0;
+  const add = (w, label, title) => { score += w; reasons.push({ w, label, title }); };
+
+  const conf = h.price && h.price.confidence;
+  const priced = !!(h.price && h.price.usd && conf && conf !== 'none');
+  if (priced && conf === 'high') add(W.feed_price, 'feed price', `priced by a Chainlink feed: ${priceNote(h.price)}`);
+  else if (priced) add(W.dex_price, 'dex price', `priced from a pool, ${conf} confidence: ${priceNote(h.price)}`);
+
+  const listed = h.known === true || h.unlisted === false;
+  if (listed) add(W.listed, 'listed', 'a curated token list this deployment loaded carries this contract');
+
+  const asset = assetMeta(h.address);
+  let vouched = false;
+  try { vouched = !!(asset && asset.vouched_wei && BigInt(asset.vouched_wei) > 0n); } catch { vouched = false; }
+  if (vouched) add(W.vouched, 'paid for', `${weiToEth(asset.vouched_wei)} ETH was committed to indexing this contract through the registry`);
+
+  const d = h.demand || {};
+  const net = Number(d.for || 0) - Number(d.against || 0);
+  if (net > 0) add(Math.min(W.signer_cap, net * W.signer), `${num(net)} signer${net === 1 ? '' : 's'}`, `${num(d.for)} account${d.for === 1 ? '' : 's'} signed for this contract, ${num(d.against || 0)} against`);
+  else if (net < 0) add(Math.max(-W.signer_cap, net * W.signer), `${num(-net)} against`, `${num(d.against)} account${d.against === 1 ? '' : 's'} signed against this contract, ${num(d.for || 0)} for`);
+
+  const roles = Array.isArray(h.roles) ? h.roles : null;
+  if (roles && roles.includes('sender')) add(W.sent, 'sent', 'this wallet has sent this token, not only received it — an airdrop is received, a position is spent');
+  else if (roles && roles.length && !roles.includes('sender')) add(W.receive_only, 'receive-only', 'this wallet has only ever received this token, which is what airdrops look like');
+
+  const fake = holdingFake(h);
+  if (fake) add(W.lookalike, `not ${fake.target}`, holdingFakeTitle(fake));
+
+  const spam = verdictOf(h.address) === 'spam';
+  if (asset && asset.reports > 0) add(W.reported, 'reported', `an operator reported this asset${asset.report_reason ? ': ' + asset.report_reason : ''}`);
+  else if (spam) add(W.reported, 'marked spam', 'an operator of this deployment marked this contract spam');
+
+  if (!priced && !listed && !vouched) add(W.nothing_known, 'nothing known', 'no price on chain, on no token list, nobody paid to index it');
+
+  const verdict = score >= W.recognized_at ? 'recognized' : score <= W.junk_at ? 'junk' : 'unsure';
+  return { verdict, score, reasons };
 }
 
-// Applied to the rows rather than consulted at each use, so the render, the hint
-// builder and the watchlist builder all read one flag and none of them has to agree
-// with the others about what the storage key is.
-function applyAside() {
-  for (const h of HOLDINGS) h.aside = !!(h.address && ASIDE.has(h.address.toLowerCase()));
-}
-
-function setAside(address, on) {
-  const k = address.toLowerCase();
-  on ? ASIDE.add(k) : ASIDE.delete(k);
-  saveAside(WALLET_ADDR, ASIDE);
-  applyAside();
-  renderHoldings();
-  // Rebuild the hint from what is left, now. Without this the reader's triage would
-  // last exactly until the next lookup rewrote the hint from the unfiltered set, which
-  // is the same shape of bug as a hint nothing ever read.
-  loadHints().then(m => m.afterLookup(WALLET_ADDR, HOLDINGS, INDEXED)).catch(() => {});
-}
-
-function wireAsideButtons(root) {
-  for (const b of root.querySelectorAll('[data-aside]')) {
-    b.addEventListener('click', () => setAside(b.dataset.aside, b.dataset.on === '1'));
-  }
-}
-
-// --------------------------------------------------------------------------
-// Spending the reader's own commitment
-//
-// A commitment is the one artifact on this page that belongs to the reader rather
-// than to the deployment: the contracts they held, as a list, in this browser and
-// on their ENS name. This is where it gets spent, and the shape of the spending is
-// the whole argument:
-//
-//   - It ADDS. Every contract the list names gets asked about, whether or not the
-//     index has ever heard of it. The list is this browser's memory of last visit
-//     and needs nothing from this deployment.
-//   - It ORDERS. Discovery produces far more candidates than one lookup can ask
-//     about, and the cap that follows was always going to drop some. It now drops the
-//     ones this account has not held instead of the ones discovery happened to see
-//     last.
-//   - It REMOVES nothing. There is no branch below that skips a contract because the
-//     list lacks it. Absence means "not held when this was written", which is not a
-//     claim about now, and e23aa30 is what happens when a filter is allowed to make
-//     that claim: 65 real holdings became 1.
-//
-// The daemon is not told which account any of it was run for: the copy is read
-// here.
-// --------------------------------------------------------------------------
-async function spendHint(seed, chainId, known) {
-  const use = { sources: [], notes: [], hinted: new Set(), vouched: [], asked: 0, held: 0 };
-  // seed is null only when the module itself failed to load, which already cost the
-  // reader nothing visible and should not start now.
-  if (!seed) return use;
-  use.sources = seed.sources;
-  use.notes = seed.notes;
-  if (seed.empty) return use;
-
-  const m = await loadHints();
-  // Which of the candidates the index is offering has this account held before?
-  use.hinted = await m.mark(seed, chainId, CANDIDATES.filter(c => !c.promoted).map(c => c.address));
-
-  // And what does the commitment name that the index never offered at all? This is
-  // the half that makes the stored promise true: the contracts this account has
-  // actually held, asked about immediately.
-  const v = await m.vouchedBy(seed, chainId);
-  const dup = new Set([...use.hinted, ...ASSETS.map(a => a.address.toLowerCase())]);
-  use.vouched = v.tokens.filter(a => {
-    const k = a.toLowerCase();
-    return !known.has(k) && !dup.has(k);
-  });
-  return use;
-}
-
-// The rows the hint already knew about, marked on the rows.
-async function tagHinted(seed, chainId) {
-  if (!seed || seed.empty) return;
-  const m = await loadHints();
-  const hit = await m.mark(seed, chainId, HOLDINGS.map(h => h.address).filter(Boolean));
-  for (const h of HOLDINGS) if (h.address && hit.has(h.address.toLowerCase())) h.hinted = true;
-  HINT_USE.held = HOLDINGS.filter(h => h.hinted).length;
-}
-
-// What the hint did, in the reader's own terms. A hint that quietly changed what got
-// asked about would be worse than no hint at all, so this says which hints were used,
-// where each came from, what each added, and — the sentence that matters most — that
-// nothing was hidden by any of it.
-function renderHintUse() {
-  const el = $('hint-use');
-  const u = HINT_USE;
-  if (!u || (!u.sources.length && !u.notes.length)) { el.hidden = true; el.textContent = ''; return; }
-
-  const parts = [];
-  if (u.sources.length) {
-    const from = u.sources
-      .map(s => `${esc(s.where)} <span class="empty">(${num(s.count)} contract${s.count === 1 ? '' : 's'})</span>`)
-      .join(' and ');
-    parts.push(`Asked the chain about ${num(u.asked)} contract${u.asked === 1 ? '' : 's'}, ordered by what this browser remembered — from ${from}.`);
-
-    if (u.vouched.length) {
-      parts.push(`${num(u.vouched.length)} of them the index never offered: this browser remembered them, so they
-        were read at head like everything else. ${num(u.held)} of the rows above are held contracts it already
-        knew about.`);
-    } else {
-      parts.push(`It named nothing the index was not already going to ask about.`);
-    }
-
-    parts.push(`<strong>Nothing was hidden by it.</strong> A memory says where to look and never what is
-      there: a contract it lacks was not held last visit, which is not an answer about now, so
-      everything the index offered was asked about anyway and every balance above was read from the chain.`);
-  }
-
-  // The notes are the reasons the memory was not used, and they are worth more than
-  // the silence they replace.
-  for (const n of u.notes) parts.push(`<span class="empty">${esc(n)}</span>`);
-
-  el.innerHTML = parts.join('<br>');
-  el.hidden = false;
+// The verdict a row is drawn under: the reader's, when they have one for it, else
+// the proposal. `signed` is the weight the reader's word carries (+1 / −1), `source`
+// says whose word it is.
+function effectiveVerdict(h) {
+  const p = proposeVerdict(h);
+  const k = (h.address || '').toLowerCase();
+  let signed = null, source = 'proposed';
+  if (VERDICT_OVERRIDES.has(k)) { signed = VERDICT_OVERRIDES.get(k); source = 'flipped'; }
+  else if (VERDICT_MEM && VERDICT_MEM.pairs[k] !== undefined) { signed = VERDICT_MEM.pairs[k]; source = 'signed'; }
+  const verdict = signed === 1 ? 'recognized' : signed === -1 ? 'junk' : p.verdict;
+  return { ...p, verdict, proposed: p.verdict, source, signed };
 }
 
 // The same check the triage card runs, on the reader's own rows.
@@ -4814,31 +4304,267 @@ function renderHintUse() {
 // contract at 0xDd44…9A5F has tens of thousands of holders, every one of whom sees a
 // row that says USDT in the pixels their font draws.
 //
-// Only the strong tier is shown here. "Carries characters outside ASCII" is a useful
-// prompt for somebody judging a contract on purpose and it is noise in a list of
-// balances, where the reader is not making that decision and cannot act on it.
+// Only the strong tier counts. "Carries characters outside ASCII" is a useful prompt
+// for somebody judging a contract on purpose and it is noise in a list of balances.
 function holdingFake(h) {
   const hit = lookalikeOf(h);
   return hit && hit.tier === 'impersonates' ? hit : null;
 }
 
-function holdingFakeTag(h) {
-  const hit = holdingFake(h);
+function holdingFakeTitle(hit) {
   const chars = hit.odd.map(o => o.folded === ''
     ? `${o.hex}, which draws nothing`
     : o.folded ? `${o.hex} standing in for ${o.folded}` : o.hex).join(', ');
-  return ` <span class="tag tag-flag" title="This contract is not ${esc(hit.target)}. Its symbol renders as ${esc(hit.target)} and is a different string: ${esc(chars)}. A curated token list carries the real ${esc(hit.target)} and does not carry this address. The balance is real; the name is borrowed.">not ${esc(hit.target)}</span>`;
+  return `This contract is not ${hit.target}. Its symbol renders as ${hit.target} and is a different string: ${chars}. A curated token list carries the real ${hit.target} and does not carry this address. The balance is real; the name is borrowed.`;
+}
+
+// --------------------------------------------------------------------------
+// The reader's memory of their own verdict
+//
+// localStorage["evmscan.verdict.<account>"] = { chain_id, deadline, pairs: { "<address>": 1 | -1 } },
+// written after a signature the daemon accepted and read at the next lookup, so
+// the split is remembered before the daemon answers. The older evmscan.aside.* and
+// evmscan.seen.* keys are neither read nor deleted.
+// --------------------------------------------------------------------------
+const verdictKey = (account) => `evmscan.verdict.${account.toLowerCase()}`;
+
+function loadVerdict(account) {
+  try {
+    const raw = localStorage.getItem(verdictKey(account));
+    if (!raw) return null;
+    const m = JSON.parse(raw);
+    const pairs = {};
+    for (const [a, w] of Object.entries((m && m.pairs) || {})) {
+      const k = String(a).toLowerCase();
+      if (ADDRESS_RE.test(k) && (w === 1 || w === -1)) pairs[k] = w;
+    }
+    return { chain_id: Number(m.chain_id) || 0, deadline: String(m.deadline || ''), pairs };
+  } catch { return null; }
+}
+
+function storeVerdict(account, mem) {
+  try { localStorage.setItem(verdictKey(account), JSON.stringify(mem)); }
+  catch { /* private window, or full; a memory that cannot be written is not an error */ }
+}
+
+// --------------------------------------------------------------------------
+// The signature
+//
+// One EIP-712 message over the whole split, to this daemon and never on chain:
+// Verdict(account, chainId, digest, deadline) under the domain {evm-scan verdict, 1}
+// — no chainId, no verifyingContract, because nothing on chain verifies it. The
+// wallet shows three named fields. digest = keccak256 over the (address ‖ weight)
+// pairs sorted by address, weight as one int8 byte (0x01 for +1, 0xff for −1).
+// Recognized signs +1, junk −1, unsure is omitted; absence means 0 to the daemon,
+// and the set replaces whatever this account signed before. The daemon builds the
+// identical typed data to recover the signer (internal/api/verdictsig.go).
+// --------------------------------------------------------------------------
+
+// The pairs the split says, sorted by address ascending — lowercase hex sorts the
+// same way the bytes do.
+function verdictPairs() {
+  const by = new Map();
+  for (const h of HOLDINGS) {
+    if (!h.address || !ADDRESS_RE.test(h.address)) continue;
+    const k = h.address.toLowerCase();
+    const v = effectiveVerdict(h).verdict;
+    if (v === 'recognized') by.set(k, 1);
+    else if (v === 'junk') by.set(k, -1);
+  }
+  return [...by.entries()].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+    .map(([address, weight]) => ({ address, weight }));
+}
+
+function verdictDigestBytes(pairs) {
+  const out = new Uint8Array(21 * pairs.length);
+  pairs.forEach((p, i) => {
+    out.set(hexToBytes(p.address), 21 * i);
+    out[21 * i + 20] = p.weight < 0 ? 0xff : 0x01;
+  });
+  return out;
+}
+
+async function verdictDigest(pairs) {
+  const v = await viem();
+  return v.keccak256(verdictDigestBytes(pairs));
+}
+
+// The typed data, exactly as internal/api/verdictsig.go builds it. chainId and
+// deadline travel as decimal strings, which is what eth_signTypedData_v4 takes for
+// integers wider than a double.
+function verdictTypedData(account, chainId, digest, deadline) {
+  return {
+    types: {
+      EIP712Domain: [{ name: 'name', type: 'string' }, { name: 'version', type: 'string' }],
+      Verdict: [
+        { name: 'account', type: 'address' }, { name: 'chainId', type: 'uint64' },
+        { name: 'digest', type: 'bytes32' }, { name: 'deadline', type: 'uint256' },
+      ],
+    },
+    primaryType: 'Verdict',
+    domain: { name: 'evm-scan verdict', version: '1' },
+    message: { account, chainId: String(chainId), digest, deadline: String(deadline) },
+  };
+}
+
+// The connect flow for the signature: accounts only. ensureWallet switches the
+// wallet to the registry's chain because everything else it serves sends a
+// transaction there; a signature has no chain, and moving somebody's wallet to
+// Base to sign for their mainnet holdings would be a strange thing to do.
+async function connectVerdictWallet() {
+  if (!window.ethereum) throw new Error('no injected wallet found — this needs MetaMask or another EIP-1193 wallet');
+  const [acct] = await window.ethereum.request({ method: 'eth_requestAccounts' });
+  if (!acct) throw new Error('the wallet offered no account');
+  VERDICT_WALLET = acct;
+  return acct;
+}
+
+async function connectForVerdict() {
+  showErr('verdict-err', null);
+  const btn = $('verdict-connect');
+  btn.disabled = true;
+  try { await connectVerdictWallet(); }
+  catch (e) { showErr('verdict-err', e); }
+  finally { btn.disabled = false; updateVerdictBar(); }
+}
+
+async function signVerdict() {
+  const btn = $('verdict-sign');
+  const status = $('verdict-status');
+  const say = (t) => { status.textContent = t; };
+  showErr('verdict-err', null);
+  btn.disabled = true;
+  try {
+    const wallet = VERDICT_WALLET || await connectVerdictWallet();
+    if (!WALLET_ADDR) throw new Error('look an account up first');
+    if (wallet.toLowerCase() !== WALLET_ADDR.toLowerCase()) {
+      throw new Error(`the connected wallet is ${short(wallet)}, and the account on screen is ${short(WALLET_ADDR)} — only the account can sign for itself`);
+    }
+    const pairs = verdictPairs();
+    if (!pairs.length) throw new Error('nothing to sign: every row is unsure, and unsure is not sent');
+    const chainId = WALLET_CHAIN || activeChainID();
+    const digest = await verdictDigest(pairs);
+    const deadline = String(Math.floor(Date.now() / 1000) + 3600);
+    const typed = verdictTypedData(wallet, chainId, digest, deadline);
+    say('sign the verdict in your wallet — no gas, nothing is sent from it…');
+    const signature = await window.ethereum.request({
+      method: 'eth_signTypedData_v4', params: [wallet, JSON.stringify(typed)],
+    });
+    say('recording…');
+    const r = await api('/v1/verdict', {
+      method: 'POST', reader: true, headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ chain_id: chainId, account: wallet, deadline, verdicts: pairs, signature }),
+    });
+    // Remembered only once the daemon took it: a memory of a refused signature would
+    // split the next lookup by a verdict nobody else can see.
+    storeVerdict(wallet, { chain_id: chainId, deadline, pairs: Object.fromEntries(pairs.map(p => [p.address, p.weight])) });
+    VERDICT_MEM = loadVerdict(wallet);
+    VERDICT_OVERRIDES = new Map();
+    status.innerHTML = `recorded <b>${num(r.recorded)}</b> · cleared <b>${num(r.cleared)}</b>` +
+      (r.indexed_here === false ? ' · this chain is not indexed here, so the verdict is kept as demand' : '') +
+      ` · ${num(pairs.filter(p => p.weight > 0).length)} recognized, ${num(pairs.filter(p => p.weight < 0).length)} junk`;
+    renderHoldings();
+  } catch (e) {
+    say('');
+    showErr('verdict-err', e.status ? new Error(`${e.status}: ${e.message}`) : e);
+  } finally {
+    updateVerdictBar();
+  }
+}
+
+// Console-only self-test against internal/api/testdata/verdict.json: the fixture's
+// pairs, in the fixture's (unsorted) order, must digest to Go's digest, and the
+// typed data this page builds must hash to Go's EIP-712 hash. Run
+// window.verdictSelfTest() in the console; the file is not served, so the values
+// are copied here and go stale only if the fixture is regenerated.
+window.verdictSelfTest = async () => {
+  const fixture = {
+    account: '0x2c7536E3605D9C16a7a3D7b1898e529396a65c23', chainId: 1, deadline: '1800000000',
+    verdicts: [
+      { address: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2', weight: 1 },
+      { address: '0xdAC17F958D2ee523a2206206994597C13D831ec7', weight: -1 },
+      { address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', weight: 1 },
+    ],
+    digest: '0xfd2d7afeb876d3d0052ddaa12f946d04b013b0f94ff86da31eef97815c642c26',
+    eip712Hash: '0x8b7178a740c39a2bdddd2c841c8140ee2a53b7a0ebf7fd558d48de3522bfac88',
+  };
+  const sorted = fixture.verdicts.map(p => ({ address: p.address.toLowerCase(), weight: p.weight }))
+    .sort((a, b) => (a.address < b.address ? -1 : a.address > b.address ? 1 : 0));
+  const digest = await verdictDigest(sorted);
+  const typed = verdictTypedData(fixture.account, fixture.chainId, digest, fixture.deadline);
+  const v = await viem();
+  const hash = v.hashTypedData(typed);
+  const ok = digest === fixture.digest && hash === fixture.eip712Hash;
+  console.log(ok ? 'verdictSelfTest ok' : 'verdictSelfTest MISMATCH', { digest, want: fixture.digest, hash, wantHash: fixture.eip712Hash });
+  return ok;
+};
+
+// The bar under the split: which wallet, whether it is the account, what one
+// signature would say. Never touches the status span, which is the record of the
+// last act and belongs to it.
+function updateVerdictBar() {
+  const connect = $('verdict-connect');
+  const sign = $('verdict-sign');
+  const note = $('verdict-note');
+  const pairs = WALLET_ADDR ? verdictPairs() : [];
+  const up = pairs.filter(p => p.weight > 0).length, down = pairs.length - up;
+  const wallet = VERDICT_WALLET;
+  const mine = wallet && WALLET_ADDR && wallet.toLowerCase() === WALLET_ADDR.toLowerCase();
+  connect.textContent = wallet ? short(wallet) : 'Connect wallet';
+  // An empty set is still a verdict when one was signed before: it retracts it.
+  sign.disabled = !(mine && (pairs.length || VERDICT_MEM));
+  const what = `One signature over the whole split — <b>${num(up)}</b> recognized, <b>${num(down)}</b> junk, unsure rows are left out. EIP-712, no gas, nothing sent from the wallet; the daemon recovers the signer and this set replaces whatever the account signed before.`;
+  const who = !window.ethereum
+    ? ' <strong>No wallet found in this browser</strong> — the signature needs an EIP-1193 wallet holding this account.'
+    : !wallet ? ' Connect the wallet that holds this account to sign.'
+    : mine ? ' The connected wallet is this account.'
+    : ` <strong>The connected wallet is ${esc(short(wallet))}, not this account</strong> — only ${esc(short(WALLET_ADDR))} can sign for itself.`;
+  note.innerHTML = what + who + (VERDICT_MEM ? ` This browser remembers a verdict over ${num(Object.keys(VERDICT_MEM.pairs).length)} contracts for this account.` : '');
+}
+
+// --------------------------------------------------------------------------
+// The split
+// --------------------------------------------------------------------------
+
+// One row: what it is, what it holds, why it landed here, and the one control.
+function holdingRow(h) {
+  const v = h.v;
+  const fungible = h.standard === 'erc20';
+  const junk = v.verdict === 'junk';
+  const chips = v.reasons.map(r =>
+    `<span class="rchip ${r.w > 0 ? 'pos' : 'neg'}" title="${esc(r.title)}">${esc(r.label)} <b>${r.w > 0 ? '+' : ''}${r.w}</b></span>`);
+  if (junk) chips.unshift(`<span class="rchip junk" title="score ${v.score}, at or below ${VERDICT_WEIGHTS.junk_at}${v.signed === -1 ? ' — or your own verdict' : ''}">junk</span>`);
+  if (v.signed !== null) chips.push(`<span class="rchip you" title="${v.source === 'flipped' ? 'moved here by you, not signed yet' : 'your signed verdict, remembered by this browser'}">you: ${v.signed > 0 ? 'recognized' : 'junk'}${v.source === 'flipped' ? ' · unsigned' : ''}</span>`);
+  else chips.push(`<span class="rchip" title="the sum of the chips; ${VERDICT_WEIGHTS.recognized_at} and up is recognized, ${VERDICT_WEIGHTS.junk_at} and down is junk">score ${v.score > 0 ? '+' : ''}${v.score}</span>`);
+  const to = v.verdict === 'recognized' ? -1 : 1;
+  const note = fungible
+    ? esc(priceNote(h.price))
+    : 'NFTs are not priced here — a floor is a market question, not an oracle one';
+  return `<div class="tablerow ${junk ? 'dim' : ''}" style="grid-template-columns:${COLS.verdict}">
+    <div style="min-width:0">
+      <div class="sym">${h.symbol ? esc(h.symbol) : '<span class="empty">unknown</span>'}${
+        h.name ? ` <span class="nm">${esc(h.name)}</span>` : ''}<span class="std">${esc(stdLabel(h.standard))}</span>${
+        h.committed ? ' <span class="committed" title="in the latest finalized commitment for this account — provable against the root on chain">committed</span>' : ''}${
+        h.event_count ? '' : ' <span class="tag" title="the index has no rows for this contract and account; the balance was read live at head">live read</span>'}</div>
+      <div class="a-note" title="${esc(h.address)}">${esc(short(h.address, 4))} · ${note}</div>
+    </div>
+    <div class="num mono">${formatUnits(h.balance, h.decimals)}</div>
+    <div class="num mono" style="font-weight:500">${h.value_usd ? usd(h.value_usd) : '<span class="empty">—</span>'}</div>
+    <div class="rchips">${chips.join('')}</div>
+    <div class="verdict-cell"><button class="linkbtn" data-flip="${esc(h.address)}" data-to="${to}"
+      title="${to > 0 ? 'move it up: you recognize this' : 'move it down: you do not'}">${to > 0 ? '↑ recognize' : '↓ not this'}</button></div>
+  </div>`;
 }
 
 function renderHoldings() {
   if (!WALLET_ADDR) return;
-  const rows = HOLDINGS.map(h => ({ ...h, verdict: verdictOf(h.address) }));
-  const spamCount = rows.filter(h => h.verdict === 'spam').length;
-  const asideCount = rows.filter(h => h.aside).length;
-  // Two independent collapses, and they stay independent: the operator's verdict is
-  // about the contract and the reader's is about this wallet, so a row can be hidden
-  // by either and each toggle brings back only its own.
-  const shown = rows.filter(h => (SHOW_SPAM || h.verdict !== 'spam') && (SHOW_ASIDE || !h.aside));
+  const rows = HOLDINGS.filter(h => h.address).map(h => ({ ...h, v: effectiveVerdict(h) }));
+  // Within a group: committed first, then score, then value. The reported and the
+  // signed-against are already at the bottom by their score.
+  const val = h => Number(h.value_usd || 0);
+  const order = (a, b) => ((b.committed ? 1 : 0) - (a.committed ? 1 : 0)) || (b.v.score - a.v.score) || (val(b) - val(a));
+  const up = rows.filter(h => h.v.verdict === 'recognized').sort(order);
+  const down = rows.filter(h => h.v.verdict !== 'recognized').sort(order);
 
   $('holdings-title').textContent = `Holdings on ${chainName()}`;
   // The sweep button is gated on an address being on screen, so it follows the lookup.
@@ -4852,47 +4578,15 @@ function renderHoldings() {
       `0 contracts in the index · read at block ${num((VALUATION && VALUATION.as_of_block) || (STATUS && STATUS.head_block))}`;
   }
 
-  $('holdings').innerHTML = shown.map(h => {
-    const v = h.verdict;
-    const mark = v === 'approved' ? 'indexed' : v === 'spam' ? 'spam' : '';
-    const cls = v === 'approved' ? 'v-approved' : v === 'spam' ? 'v-spam' : 'v-none';
-    const action = v === 'spam'
-      ? `<button class="btn btn-ghost btn-sm" data-unspam="${esc(h.address)}">undo</button>`
-      : v ? ''
-      : `<button class="btn btn-primary btn-sm" data-approve="${esc(h.address)}">Promote</button>
-         <button class="btn btn-spam btn-sm" data-spam="${esc(h.address)}">Spam</button>`;
-    const fungible = h.standard === 'erc20';
-    const note = fungible
-      ? (h.price && h.price.usd ? esc(priceNote(h.price)) : `<span title="${esc(priceNote(h.price))}">${esc(priceNote(h.price))}</span>`)
-      : 'NFTs are not priced here — a floor is a market question, not an oracle one';
-    return `<div class="tablerow ${v === 'spam' || h.aside ? 'dim' : ''}" style="grid-template-columns:${COLS.hold}">
-      <div style="min-width:0">
-        <div class="sym">${h.symbol ? esc(h.symbol) : '<span class="empty">unknown</span>'}${
-          h.name ? ` <span class="nm">${esc(h.name)}</span>` : ''}<span class="std">${esc(stdLabel(h.standard))}</span>${
-          holdingFake(h) ? holdingFakeTag(h) : h.unlisted ? ' <span class="tag tag-flag" title="no token list this deployment loaded vouches for this contract. Checked in your browser, against a filter already downloaded — the daemon was not asked.">unlisted</span>' : ''}${
-          h.event_count ? '' : ' <span class="tag" title="the index has no rows for this contract and account; the balance was read live at head">live read</span>'}${
-          h.hinted && !h.aside ? ' <span class="tag" title="your hint already knew about this contract, so it was asked about first. The balance beside it was still read from the chain just now — the hint says where to look and never what is there.">in your hint</span>' : ''}${
-          h.aside ? ' <span class="tag" title="you set this aside, in this browser. It stays out of your hint and it is still read from the chain on every lookup — setting aside decides what your hint spends itself on, not what exists.">set aside</span>' : ''}</div>
-        <div class="a-note" title="${esc(h.address)}">${note}
-          <button class="linkbtn" data-aside="${esc(h.address)}" data-on="${h.aside ? '0' : '1'}"
-                  style="margin-left:10px; font-size:11.5px">${h.aside ? 'put back' : 'set aside'}</button></div>
-      </div>
-      <div class="num mono">${formatUnits(h.balance, h.decimals)}</div>
-      <div class="num mono">${fungible ? priceOnly(h.price) : '<span class="empty">—</span>'}</div>
-      <div class="num mono" style="font-weight:500">${h.value_usd ? usd(h.value_usd) : '<span class="empty">—</span>'}</div>
-      <div class="num">${fungible ? priceBadge(h.price) : '<span class="badge none" title="NFTs are not priced">none</span>'}</div>
-      <div class="verdict-cell">${mark ? `<span class="verdict ${cls}">${mark}</span>` : ''}${action}</div>
-    </div>`;
-  }).join('');
-  wireVerdictButtons($('holdings'));
-  wireAsideButtons($('holdings'));
-
-  $('aside-toggle').hidden = !asideCount;
-  $('aside-toggle').textContent = SHOW_ASIDE
-    ? `Hide the ${asideCount} you set aside` : `Show ${asideCount} you set aside`;
-  $('aside-note').textContent = asideCount
-    ? 'Set aside in this browser, and kept out of the hint the next lookup spends. They are still read from the chain every time, and the valuation is unchanged: this is a judgement about what is worth remembering, not about what is there.'
-    : '';
+  $('recognized-count').textContent = num(up.length);
+  $('unrecognized-count').textContent = num(down.length);
+  $('holdings-recognized').innerHTML = up.map(holdingRow).join('')
+    || '<div class="empty" style="padding:14px 0">Nothing the page recognizes on its own. Move a row up if you do.</div>';
+  $('holdings-unrecognized').innerHTML = down.map(holdingRow).join('')
+    || '<div class="empty" style="padding:14px 0">Every holding is recognized.</div>';
+  for (const b of document.querySelectorAll('#holdings-recognized [data-flip], #holdings-unrecognized [data-flip]')) {
+    b.addEventListener('click', () => flipVerdict(b.dataset.flip, Number(b.dataset.to)));
+  }
 
   // The total, carrying the weakest confidence in the sum.
   const v = VALUATION || {};
@@ -4904,13 +4598,15 @@ function renderHoldings() {
     $('total-tier').textContent = tier;
     $('total-tier').className = `badge ${tier}`;
   }
+  updateVerdictBar();
+}
 
-  $('spam-toggle').hidden = !spamCount;
-  $('spam-toggle').textContent = SHOW_SPAM
-    ? `Hide the ${spamCount} marked spam` : `Show ${spamCount} marked spam`;
-  $('spam-note').textContent = spamCount
-    ? 'Assets marked spam are left out of the valuation, and discovery stops offering them for promotion.'
-    : '';
+// The one control: up signs +1, down signs −1, for this row, until the signature.
+// A flip is the reader's word and lands in the Map, never in the DOM.
+function flipVerdict(address, to) {
+  VERDICT_OVERRIDES.set(address.toLowerCase(), to > 0 ? 1 : -1);
+  $('verdict-status').textContent = '';
+  renderHoldings();
 }
 
 // --------------------------------------------------------------------------
@@ -5073,7 +4769,7 @@ async function loadExamples() {
     ).join('');
     el.querySelectorAll('[data-example]').forEach(b => b.addEventListener('click', () => {
       $('account').value = b.dataset.example;
-      runLookup();
+      lookup();
     }));
     // The daemon holds no names, so these are addresses until a reverse record
     // resolved in this browser says otherwise — and only a record the forward lookup
@@ -5105,75 +4801,25 @@ async function buildEpoch() {
 // Wiring
 // --------------------------------------------------------------------------
 
-$('lookup').addEventListener('click', runLookup);
-
-// The private lookup lives in its own module for the same reason the graph does: the
-// filter it reads is 1.4 MB and the code that reads it is dead weight on every visit
-// that never opens this panel. Nothing is fetched until somebody asks.
-let hintsLoaded = false;
-let MODE = 'hosted';
-function setMode(mode) {
-  MODE = mode;
-  for (const b of document.querySelectorAll('.mode')) {
-    const on = b.dataset.mode === mode;
-    b.classList.toggle('on', on);
-    b.setAttribute('aria-checked', String(on));
-  }
-  $('private').hidden = mode !== 'private';
-  if (mode !== 'private') return;
-  $('step-filter-name').textContent = `index-${activeChainID()}`;
-  $('step-pairs').textContent = num((ASSETS || []).length);
-  $('chain-rpc').value = chainRpc();
-  // Already drawn: redraw, because the filter it names is the picked chain's.
-  if (hintsLoaded) { if (window.evmscanPrivateRender) window.evmscanPrivateRender(); return; }
-  hintsLoaded = true;
-  loadHints().catch(e => {
-    hintsLoaded = false;
-    $('private-body').innerHTML = `<span class="err">could not load the private lookup: ${esc(e.message)}</span>`;
-  });
-}
-document.querySelectorAll('.mode').forEach(b => b.addEventListener('click', () => setMode(b.dataset.mode)));
-
-// Look up does whatever the lit mode says. Hosted names the address to the daemon and
-// gets the whole answer; private hands the typed address to the filter test hints.js
-// drew, which never sends it anywhere.
-function runLookup() {
-  if (MODE !== 'private') { lookup(); return; }
-  if (!$('account').value.trim()) return;
-  const go = $('private-go');
-  if (go && !go.disabled) { go.click(); return; }
-  // The panel has not drawn yet: wait for the module, then ask.
-  loadHints().then(() => { const b = $('private-go'); if (b) b.click(); }).catch(() => {});
+$('lookup').addEventListener('click', lookup);
+$('account').addEventListener('keydown', e => { if (e.key === 'Enter') lookup(); });
+$('verdict-connect').addEventListener('click', connectForVerdict);
+$('verdict-sign').addEventListener('click', signVerdict);
+// A wallet that switches accounts changes who can sign; the bar says so at once.
+if (window.ethereum && window.ethereum.on) {
+  try {
+    window.ethereum.on('accountsChanged', (accts) => { VERDICT_WALLET = (accts && accts[0]) || ''; updateVerdictBar(); });
+  } catch { /* a wallet without events */ }
 }
 
-// The watchlist builder is in the same module, for the same reason and behind the
-// same import — it needs the filter arithmetic, and a visit that never opens either
-// panel should pay for neither.
+// hints.js holds the cross-chain hint the sweep orders by (and, behind no UI, the
+// private lookup, the watchlist and the vote relay). Imported only when the sweep
+// runs, because the module is dead weight on a visit that never opens it.
 let hintsModule = null;
 function loadHints() {
   if (!hintsModule) hintsModule = import('./hints.js').catch(e => { hintsModule = null; throw e; });
   return hintsModule;
 }
-$('watch-open').addEventListener('click', async () => {
-  const p = $('watch-panel');
-  p.hidden = !p.hidden;
-  $('watch-open').textContent = p.hidden
-    ? 'keep a list somewhere that cannot read it'
-    : 'hide the watchlist';
-  if (p.hidden) return;
-  p.innerHTML = '<span class="empty">loading…</span>';
-  try {
-    (await loadHints()).openWatchlist();
-  } catch (e) {
-    p.innerHTML = `<span class="err">could not load the watchlist builder: ${esc(e.message)}</span>`;
-  }
-});
-// The holdings the builder offers to save. Read at click time rather than captured,
-// because a reader looks up more than one account per visit.
-window.evmscanHoldings = () => HOLDINGS;
-$('account').addEventListener('keydown', e => { if (e.key === 'Enter') runLookup(); });
-$('spam-toggle').addEventListener('click', () => { SHOW_SPAM = !SHOW_SPAM; renderHoldings(); });
-$('aside-toggle').addEventListener('click', () => { SHOW_ASIDE = !SHOW_ASIDE; renderHoldings(); });
 
 // The hint panel holds both registration paths: the daemon's own, and the paid
 // on-chain one. Opened from the assets table and from the empty answer.
@@ -5237,14 +4883,15 @@ $('op-token-save').addEventListener('click', () => {
 $('chain-rpc-save').addEventListener('click', () => {
   setChainRpc($('chain-rpc').value.trim());
   nameCache.clear(); reverseCache.clear();
-  if ($('account').value.trim()) runLookup();
+  if ($('account').value.trim()) lookup();
 });
 $('chain-rpc-clear').addEventListener('click', () => {
   setChainRpc('');
   $('chain-rpc').value = '';
+  $('chain-rpc-row').hidden = true;
   nameCache.clear(); reverseCache.clear();
   $('rpc-note').hidden = true;
-  if ($('account').value.trim()) runLookup();
+  if ($('account').value.trim()) lookup();
 });
 $('chain-rpc').addEventListener('keydown', e => { if (e.key === 'Enter') $('chain-rpc-save').click(); });
 $('name-rpc-save').addEventListener('click', () => {
@@ -5261,13 +4908,6 @@ $('name-rpc-reset').addEventListener('click', () => {
   if (WALLET_ADDR) lookup();
   if (ACCOUNTS_STARTED) { renderAccounts(); resolveVisibleNames(); }
 });
-$('chain-resolve').addEventListener('click', resolveChainName);
-$('chain-name').addEventListener('keydown', e => { if (e.key === 'Enter') resolveChainName(); });
-$('chain-manual-open').addEventListener('click', () => openManual(''));
-$('chain-add').addEventListener('click', addChain);
-$('chain-cancel').addEventListener('click', resetAddChain);
-$('chain-node').addEventListener('keydown', e => { if (e.key === 'Enter') addChain(); });
-$('add-chain-close').addEventListener('click', () => { $('add-chain').hidden = true; });
 
 loadChains();
 loadStatus();

@@ -186,13 +186,16 @@ type AccountAsset struct {
 	EventCount uint64
 	Roles      uint32
 	Status     string
+	// Reports is the operator's complaint count against the asset, carried so the
+	// account view can sink a reported contract without a second query.
+	Reports int
 }
 
 // AccountAssets answers the core question: which contracts has this account touched?
 func (s *Store) AccountAssets(ctx context.Context, chainID uint64, account common.Address) ([]AccountAsset, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT i.asset, a.standard, COALESCE(a.symbol,''), COALESCE(a.name,''), a.decimals,
-		       i.first_block, i.last_block, i.event_count, i.roles, a.status
+		       i.first_block, i.last_block, i.event_count, i.roles, a.status, a.reports
 		FROM interactions i
 		JOIN assets a ON a.chain_id = i.chain_id AND a.address = i.asset
 		WHERE i.chain_id = $1 AND i.account = $2
@@ -214,7 +217,7 @@ func (s *Store) AccountAssets(ctx context.Context, chainID uint64, account commo
 			roles    int32
 		)
 		if err := rows.Scan(&asset, &standard, &r.Symbol, &r.Name, &r.Decimals,
-			&fb, &lb, &ec, &roles, &r.Status); err != nil {
+			&fb, &lb, &ec, &roles, &r.Status, &r.Reports); err != nil {
 			return nil, err
 		}
 		r.Asset = common.BytesToAddress(asset)

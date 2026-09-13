@@ -8,7 +8,10 @@ to a handful of indexing providers. That is a real centralisation point in an ot
 decentralised stack — and the data being outsourced is entirely public.
 
 evm-scan takes the opposite approach: run a node, index only what someone actually asked
-for, and publish the result back on-chain so nobody has to trust the indexer.
+for, and publish the result back on-chain so nobody has to trust the indexer. The person
+asking is the wallet's owner: the page sorts what an address holds into recognized and
+junk, the reader corrects it and signs once, and that signature is what the index
+spends its history on next.
 
 ## The idea
 
@@ -20,9 +23,10 @@ That costs a counter per contract — no per-account rows, no history reads. Not
 to be known up front.
 
 **2. Spend history only on what earns it.** A discovered contract is just a *candidate*.
-Only when one is promoted — because it was registered on-chain, because an operator
-said so, or because it crossed an activity threshold — does it get a per-account index
-and a walk back through its history. Discovery is cheap and wide; indexing is expensive
+Only when one is promoted — because it was registered on-chain, because enough wallets
+signed a verdict recognizing it, because an operator said so, or because it crossed an
+activity threshold — does it get a per-account index and a walk back through its
+history. Discovery is cheap and wide; indexing is expensive
 and narrow. Keeping those separate is what makes the whole thing fit on one machine.
 
 **3. Registration is permissionless and optimistic.** Anyone can register a
@@ -38,6 +42,65 @@ committed on-chain as a merkle root with a challenge window. A wallet uses it to
 *which contracts are worth pulling history for*, then fetches that history from whatever
 source it trusts — including its own node. Nothing here has to be believed, which is why
 publishing it permissionlessly is safe.
+
+## What a reader does
+
+Type a wallet. The page reads its holdings and **sorts them into recognized and
+unrecognized on its own**, from signals it already has: a price and where it came
+from (a Chainlink feed beats a DEX pool), a curated token list, who paid to index it,
+how many others vouched, whether this wallet ever *sent* the token rather than only
+received it, and whether the symbol impersonates a listed one. The reader looks the
+split over, flips anything the page got wrong, and **signs one message**. The next
+lookup, by anyone, is ordered by what was signed. That is the whole act: no vote
+button, no aside toggle, no report, no hint card, no on-chain transaction.
+
+Step by step:
+
+1. **Enter** an address or a name. A name resolves in the browser through ENS's
+   Universal Resolver on the reader's RPC; the daemon only ever sees an address.
+2. **Read.** `GET /v1/accounts/{addr}?prices=true` for the indexed contracts with
+   roles, then balances and prices for the union of indexed ∪ committed ∪ remembered
+   through the deployless lens (`/portfolio`, or the reader's own RPC).
+3. **Classify.** Each row gets a proposed verdict, and the reasons are drawn as chips
+   so the reader can see *why*:
+
+   | Signal | Source (already in the API) | Weight |
+   | --- | --- | --- |
+   | Chainlink price (`confidence: high`) | `price.confidence` on the portfolio row | +3 |
+   | DEX price (`medium` / `low`) | same | +1 |
+   | On a curated token list | `known: true` on the row | +2 |
+   | Someone paid to index it | `vouched_wei > 0` on the asset | +2 |
+   | Others recognized it | `demand.for − demand.against` | +1 per net signer, capped at +3 |
+   | This wallet **sent** it | `roles` contains `sender` | +2 |
+   | Only ever received, never sent | `roles` = receiver only | −1 |
+   | Symbol impersonates a listed one | lookalike check on the page | −5 |
+   | Reported by an operator | `reports > 0` | −5 |
+   | No price, not listed, not vouched | all absent | −2 |
+
+   Score ≥ 3 is **recognized**; ≤ −2 is **junk**; anything between is **unsure**. The
+   reader's own previous signed verdict overrides the proposal for that row. The
+   weights live in one object at the top of the page so they can be tuned in a minute.
+4. **Verify.** Two groups: recognized on top, the rest below, each row with its chips
+   and one toggle to move it across. Junk sits in the lower group with a red chip and
+   is promoted with the same toggle.
+5. **Sign once.** One button, *Sign my verdict*: EIP-712
+   `Verdict(account, chainId, digest, deadline)`, where `digest` is a keccak over the
+   sorted `(address, weight)` pairs. The wallet shows three named fields. The page posts
+   the pairs and the signature to `POST /v1/verdict`; the daemon recovers the signer,
+   checks it is the account, checks the deadline is later than the last one it stored,
+   and replaces that account's previous verdict with this one.
+6. **Remember.** `localStorage["evmscan.verdict.<account>"]` keeps the signed pairs and
+   the deadline, so the next lookup is pre-split the same way before the daemon answers.
+7. **Next query.** Everyone's list is ordered by the same rule: reported contracts and
+   those with more `against` than `for` sink to the bottom; contracts committed in the
+   latest finalized epoch come first; then net signers; then paid funding, then
+   activity. A recognized-but-unindexed token with net signers at or above
+   `min_voters` is promoted by the next discovery tick and shows up indexed within a
+   minute.
+
+A verdict is a priority signal and nothing else. It buys no position — an operator's
+report or a majority against still sinks a contract regardless of how many signed for
+it — and it changes nothing about what a balance read says.
 
 ## Why a snap-synced node is enough
 
@@ -218,10 +281,13 @@ only ever writes counters (`event_count`, `blocks_seen`) to a `candidates` table
 per-account index, and any history read, is reserved for promoted contracts. That
 asymmetry is what lets a single machine watch a whole chain.
 
-**Three ways in.** A contract becomes indexed by being registered in the on-chain
-registry, by an operator promoting it (`POST /v1/candidates/{addr}/promote`), or by
-crossing activity thresholds when `auto_promote` is on. The last is off by default:
-promotion commits a real backfill, and the registry is the authoritative signal.
+**Four ways in.** A contract becomes indexed by being registered in the on-chain
+registry, by enough wallets signing a verdict for it (`POST /v1/verdict`, promoted once
+`for − against` reaches `min_voters`), by an operator promoting it
+(`POST /v1/candidates/{addr}/promote`), or by crossing activity thresholds when
+`auto_promote` is on. The last is off by default: promotion commits a real backfill,
+and the registry and the signed verdicts are the signals that reflect someone wanting
+the data.
 
 **Two workers per promoted asset, splitting at the promotion anchor.** From block *N*,
 the **follower** walks forward and the **backfiller** walks backward toward the node's
@@ -378,23 +444,28 @@ reverts with an ERC-3668 `OffchainLookup`, any gateway returns the leaf and proo
 withhold an answer but cannot forge one, and cannot serve a stale epoch. The daemon is
 one such gateway (`/ccip/…`); `evmscan-verify -ccip` is a client for it.
 
-The same answer is also an ENS record. `HintResolver.sol` is an ENSIP-10 wildcard
-resolver bound to a HintRegistry: under `<hex-address>.hints.<yourname>.eth` it serves
-`evmscan.contracts` (the account's contracts, verified on-chain through the callback
-above), `evmscan.epoch`, `evmscan.range` and `evmscan.root`, read from the registry at
-call time. Any ENS client — viem, ens-cli, the ENS app — reads the index by name with no
-evm-scan code; `cmd/evmscan-ens` deploys the resolver and hangs it under an ENSv2 name,
-and `evmscan-verify -ens` checks the record against `contractsOf`. Names go the other way
-only in the client: the page resolves a typed `vitalik.eth` through ENS's Universal
-Resolver on the reader's own RPC, the mirror does the same through its injected
-`eth_call`, and the daemon takes addresses only. [docs/ENS.md](docs/ENS.md) is the design.
+The same answer can also be an ENS record, though nothing serves one today.
+`HintResolver.sol` is an ENSIP-10 wildcard resolver bound to a HintRegistry: under
+`<hex-address>.hints.<yourname>.eth` it serves `evmscan.contracts` (the account's
+contracts, verified on-chain through the callback above), `evmscan.epoch`,
+`evmscan.range`, `evmscan.root` and `evmscan.uri`, read from the registry at call time,
+so any ENS client — viem, ens-cli, the ENS app — could read the index by name with no
+evm-scan code. It is designed for the ENSv2 Sepolia beta and sim-tested only;
+`cmd/evmscan-ens` deploys it and hangs it under an ENSv2 name, and `evmscan-verify -ens`
+checks the record against `contractsOf`. `HintSignedResolver.sol` is the mainnet
+variant for a registry on Base (publisher-signed rather than root-verified), built and
+not deployed. Both are future work. Names go the other way only in the client, and that
+part is live: the page resolves a typed `vitalik.eth` through ENS's Universal Resolver on
+the reader's own RPC, the mirror does the same through its injected `eth_call`, and the
+daemon takes addresses only. [docs/ENS.md](docs/ENS.md) is the design and its status.
 
 Commitments are optimistic and served as soon as they are posted. `GET /v1/epochs/{id}`
 reports `onchain_status` and `challenge_deadline`, so a consumer can decide for itself
 whether "proposed" is good enough.
 
 A root is only worth something to someone who can recompute it, which until now meant
-running this daemon. [docs/LOCALFIRST.md](docs/LOCALFIRST.md) is the other end: `mirror/`
+running this daemon. [docs/LOCALFIRST.md](docs/LOCALFIRST.md) is the other end, a
+separate package that the page does not use: `mirror/`
 keeps the committed rows in the client's own SQLite, syncs deltas through a blind
 Evolu relay, and rebuilds the keccak root locally to check them against
 `latestFinalizedEpoch`. Same claim as [docs/RECOVERY.md](docs/RECOVERY.md) — a host is
@@ -405,8 +476,11 @@ epoch that made verifying it in practice too expensive to bother with.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/v1/accounts/{addr}/contracts` | **The discovery surface.** Contracts this account has touched. |
+| `GET` | `/v1/accounts/{addr}/contracts` | **The discovery surface.** Contracts this account has touched. Each carries `committed` (in the latest finalized epoch's leaf for this account) and `demand: {for, against}` from signed verdicts, and the list is ordered by the rule above. |
 | `GET` | `/v1/accounts/{addr}` | Same, enriched with token metadata and live balances. |
+| `POST` | `/v1/verdict` | **The reader's act.** `{chain_id, account, deadline, verdicts: [{address, weight ±1}], signature}` signed as EIP-712 `Verdict(account, chainId, digest, deadline)`. Signer must be the account and the deadline must beat the last one stored; the set replaces the account's previous verdict. Answers `{recorded, cleared, indexed_here}`. |
+| `GET` | `/v1/demand` | Per-contract signer counts, `voters` (for) and `against`, and whether each chain is `indexed_here`. |
+| `POST` | `/v1/demand` | Legacy unsigned +1 for a contract (the old page and curl). `POST /v1/verdict` is what the page sends. |
 | `GET` | `/v1/accounts/{addr}/portfolio` | **Live state via the deployless lens**: balances, allowances, NFT ids, nonce, 7702 delegation — one call, one block. With pricing configured, each fungible carries `price` and `value_usd`, and `valuation` sums them with the weakest confidence. |
 | `GET` | `/v1/prices?tokens=` | **Price discovery**: every feed and pool found on-chain for each token, the route chosen, everything that lost, and the sources consulted. |
 | `GET` | `/v1/assets` | Registered hints and their scan progress. |
@@ -414,11 +488,11 @@ epoch that made verifying it in practice too expensive to bother with.
 | `GET` | `/v1/assets/{addr}/accounts` | Accounts known to have touched a contract. |
 | `GET` | `/v1/accounts?q=` | Accounts in the index, busiest first. `q` is a hex address prefix. |
 | `GET` | `/v1/hints` | Published membership filters, with their digests and the key derivation. |
-| `GET` | `/v1/hints/{name}.xorf` · `.json` | One filter's bytes, and the enumerable list behind a token filter. |
+| `GET` | `/v1/hints/{name}.xorf` · `.json` | One filter's bytes, and the enumerable list behind a token filter. The private lookup that tested one in the browser is off the page. |
 | `GET` | `/v1/candidates` | Contracts discovered at the head, ranked by activity. `include_spam=true` shows the ones ruled out. |
 | `POST` | `/v1/candidates/{addr}/promote` | Commit a discovered contract to being indexed. |
 | `POST` | `/v1/candidates/{addr}/spam` · `/unspam` | Rule a contract not worth indexing, and take it back. A spam mark drops it out of the promotable ranking and out of auto-promote. |
-| `GET` | `/v1/decisions` | The verdicts passed on discovered contracts, newest first. |
+| `GET` | `/v1/decisions` | Operator decisions (promote / spam) on discovered contracts, newest first. Not reader verdicts. |
 | `GET` | `/v1/epochs` · `POST /v1/epochs` | List / build + publish commitments (`force` to repost an unchanged root). |
 | `GET` | `/v1/epochs/{id}/proof?account=` | Inclusion proof for `verifyInclusion`. |
 | `GET` | `/v1/epochs/{id}/manifest` | What the epoch's URI points at: roots, and the digest of the membership filter it committed. |
@@ -448,7 +522,7 @@ cmd/evmscan-demo/    devnet bootstrapper
 cmd/evmscan-verify/  independent proof checker
 cmd/evmscan-hint/    builds and inspects .xorf hint filters (from a token list, a database, or a published snapshot)
 cmd/evmscan-deploy/  registry deployer: fixes the adjudication mode, prints it, seeds requests
-cmd/evmscan-ens/     deploys HintResolver and attaches it under an ENSv2 name
+cmd/evmscan-ens/     deploys HintResolver / HintSignedResolver and attaches under an ENSv2 name (nothing deployed yet)
 deploy/              container entrypoint and hosted config (Railway)
 mirror/              TypeScript: the commitment encoding client-side, and the Evolu mirror
 ```
@@ -486,7 +560,20 @@ Being explicit about what this does *not* do:
   after a backfill failure, not on a schedule.
 - **Candidate ranking is crude** — event count and distinct blocks. It separates active
   contracts from idle ones, but not a widely-held token from a large spam airdrop. That
-  is why `auto_promote` defaults to off and the on-chain registry stays authoritative.
+  is why `auto_promote` defaults to off, and why what reaches a wallet is ordered by
+  signed verdicts (`for − against`) and paid funding rather than by activity. The
+  live profile runs `min_voters: 1` for the demo, so one signer promotes; a metered
+  node should run 3, since a single fresh address must not buy a backfill.
+- **Not on the page.** Several things are built, tested and reachable by tools but
+  deliberately carry no UI: the on-chain vote (`HintRegistry.vote` / `voteFor` and the
+  `POST /v1/demand/relay` carrier), the private `.xorf` lookup and blinded watchlists
+  (`/v1/hints`, `cmd/evmscan-hint`, `web/hints.js`), the signed per-account hint
+  (`/v1/accounts/{addr}/hint`), the ENS index records (both resolvers, `read.html`,
+  `cmd/evmscan-ens`), the local-first mirror and the challenge-epoch button. The
+  registry's oracle branch is likewise unused: the live deployment runs local-arbiter.
+  Nothing was removed from Go and no route is gone; [docs/SHIP.md](docs/SHIP.md) says
+  why each is off and [docs/PRIVACY.md](docs/PRIVACY.md) what the private paths would
+  buy.
 - **Only identity-carrying token events are decoded** (`Transfer`, `Approval`,
   `ApprovalForAll`, `TransferSingle`, `TransferBatch`). A contract whose interactions
   never surface an address in an indexed topic will not produce hints.

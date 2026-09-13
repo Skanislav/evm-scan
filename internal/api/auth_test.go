@@ -31,6 +31,9 @@ func TestAuthorizedGuardsOnlySpendingEndpoints(t *testing.T) {
 		// token it would only ever be the operator voting.
 		{http.MethodPost, "/v1/demand"},
 		{http.MethodGet, "/v1/demand"},
+		// A verdict is the same act with a direction, under the reader's own
+		// signature; this assertion is what keeps it reachable without a token.
+		{http.MethodPost, "/v1/verdict"},
 		// The relay carries a vote the signer already authorised; the signature is
 		// the credential, checked by the contract.
 		{http.MethodPost, "/v1/demand/relay"},

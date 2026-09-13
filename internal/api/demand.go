@@ -36,8 +36,12 @@ type demandRequest struct {
 }
 
 type demandJSON struct {
-	Address       string `json:"address"`
+	Address string `json:"address"`
+	// Voters counts for: signed +1, plain votes, and the on-chain counter.
+	// Against counts signed -1; the registry counts nothing against, so
+	// promotion and ordering read voters minus against.
 	Voters        uint64 `json:"voters"`
+	Against       uint64 `json:"against"`
 	OnchainVoters uint64 `json:"onchain_voters"`
 	LastAt        string `json:"last_at"`
 	Indexed       bool   `json:"indexed"`
@@ -103,8 +107,10 @@ func (s *Server) recordDemand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	voters := make(map[string]uint64, len(totals))
+	against := make(map[string]uint64, len(totals))
 	for a, n := range totals {
-		voters[a.Hex()] = n
+		voters[a.Hex()] = n.For
+		against[a.Hex()] = n.Against
 	}
 	var minVoters uint64
 	wk, runs := s.d.Chains.Worker(chainID)
@@ -115,6 +121,7 @@ func (s *Server) recordDemand(w http.ResponseWriter, r *http.Request) {
 		"chain_id":   chainID,
 		"recorded":   added,
 		"voters":     voters,
+		"against":    against,
 		"min_voters": minVoters,
 		// indexed_here says whether this deployment can act on the vote itself. A
 		// false is not a refusal: the count is kept, and the on-chain vote — the one
@@ -159,10 +166,10 @@ func (s *Server) listDemand(w http.ResponseWriter, r *http.Request) {
 	out := make([]demandJSON, len(rows))
 	for i, d := range rows {
 		out[i] = demandJSON{
-			Address: d.Address.Hex(), Voters: d.Voters, OnchainVoters: d.OnchainVoters,
+			Address: d.Address.Hex(), Voters: d.Voters, Against: d.Against, OnchainVoters: d.OnchainVoters,
 			LastAt:  d.LastAt.UTC().Format(time.RFC3339),
 			Indexed: d.Indexed, Candidate: d.Candidate, Spam: d.Spam, EventCount: d.EventCount,
-			Promotable: minVoters > 0 && d.Voters >= minVoters && !d.Indexed && !d.Spam,
+			Promotable: minVoters > 0 && int64(d.Voters)-int64(d.Against) >= int64(minVoters) && !d.Indexed && !d.Spam,
 		}
 	}
 	_, runs := s.d.Chains.Worker(chainID)

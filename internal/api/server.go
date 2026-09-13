@@ -215,6 +215,9 @@ func New(d Deps) *Server {
 	s.mux.HandleFunc("POST /v1/demand", s.recordDemand)
 	s.mux.HandleFunc("GET /v1/demand/relay", s.relayInfo)
 	s.mux.HandleFunc("POST /v1/demand/relay", s.relayVote)
+	// A verdict: a reader's signed split of their own wallet. Open like a vote,
+	// because the signature is the credential; see guarded().
+	s.mux.HandleFunc("POST /v1/verdict", s.postVerdict)
 	s.mux.HandleFunc("GET /v1/candidates", s.listCandidates)
 	s.mux.HandleFunc("POST /v1/candidates/{address}/promote", s.promoteCandidate)
 	s.mux.HandleFunc("POST /v1/candidates/{address}/spam", s.markCandidateSpam)
@@ -298,6 +301,12 @@ func guarded(r *http.Request) bool {
 	}
 	p := r.URL.Path
 	if p == "/ccip" || p == "/ens" || strings.HasPrefix(p, "/v1/demand") {
+		return false
+	}
+	// A verdict is a vote that can point either way, written under the reader's
+	// own signature, which the handler checks; the operator's token would only
+	// stop readers.
+	if p == "/v1/verdict" {
 		return false
 	}
 	// A reader's hint is written with the reader's own signature, which the handler
