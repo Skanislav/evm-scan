@@ -4490,6 +4490,11 @@ async function lookup() {
   const typed = $('account').value.trim();
   if (!typed) return;
   V2_TRAIL = [];
+  // A new account lookup owns the answer panel again. Candidate refreshes may call
+  // renderHoldings while a previous cross-chain answer is visible, so only this
+  // explicit new lookup releases that answer back to the single-chain view.
+  XSTATE = 'idle';
+  XLAST = null;
   renderV2Trail();
   showErr('account-err', null);
   $('lookup').disabled = true;
@@ -5002,7 +5007,10 @@ function renderV2CurrentAnswer(rows) {
 function renderHoldings() {
   if (!WALLET_ADDR) return;
   const rows = HOLDINGS.filter(h => h.address).map(h => ({ ...h, v: effectiveVerdict(h) }));
-  renderV2CurrentAnswer(rows);
+  // loadCandidates and verdict controls rerender the holdings table asynchronously.
+  // They must not replace a completed cross-chain answer with this chain's initial
+  // asset list; only a new lookup above is allowed to do that.
+  if (XSTATE === 'idle') renderV2CurrentAnswer(rows);
   // Within a group: committed first, then score, then value. The reported and the
   // signed-against are already at the bottom by their score.
   const val = h => Number(h.value_usd || 0);
