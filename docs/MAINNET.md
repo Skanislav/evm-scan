@@ -321,6 +321,86 @@ If it reports that the creation code is not a prefix of the deployed input, the
 working tree is not the commit that produced the contract: check that commit out
 and run `make contracts` again.
 
+### 6f. Moving the registry to Sepolia, and the 5can.eth state checkpoint
+
+Done on 2026-09-13. Two changes that turned out to be one change, because both
+land on the same chain.
+
+**Why the registry left Base.** A registry chain supplies three things: a bond
+worth taking, a window in which someone can dispute, and gas. A local-arbiter
+registry with `publisherBond = 0` supplies none of them for real — one key
+settles every dispute, and `challengeIndex` is free — so the ETH on Base was
+buying nothing Sepolia does not also give. It was also the second chain to fund
+and the second RPC to keep alive. A deployment that wants a dispute to cost
+something belongs in oracle mode (§5), not on a cheaper local-arbiter chain.
+
+The window was cut from 3600s to **600s** at the same time, which is the one
+number worth arguing about. Nothing reads as `committed` — not `contractsOf`,
+not the `/ccip` gateway, not the badge in the wallet — until an epoch has been
+published *and* its window has run out, so on a fresh registry the window is
+dead time before anything works at all. Ten minutes is honest on a testnet where
+no watcher is bonded to dispute; an hour only looks more careful.
+
+```bash
+./bin/evmscan-deploy -node https://ethereum-sepolia-rpc.publicnode.com \
+  -key 0x<deployer key> \
+  -arbiter 0x91C117Faa280B6b6f0413b71cAa2b9F7372bA0B9 \
+  -asset-bond 0 -publisher-bond 0 -challenge-window 600 \
+  -min-funding 100000000000000 -reward-per-block 10000000000 \
+  -gateway 'https://evm-scan-production.up.railway.app/ccip/{sender}/{data}.json'
+```
+
+Registry `0x1751707400E7287C4dA4e0c5032cE8803B2B14f1`, deploy tx
+`0x220db28120518289bd7b8ae5b3f06c62cf662ce71cde1394be1763c94d5fa681`. Then on
+Railway: `EVMSCAN_CONFIG=/app/config.mainnet-sepolia.yaml`,
+`EVMSCAN_REGISTRY_ADDRESS` to the address above, `EVMSCAN_NODE_11155111` to a
+Sepolia RPC, and `EVMSCAN_NODE_8453` deleted.
+
+**What was already lost before the move.** Worth recording, because it is the
+failure mode this whole section walks past. The five epochs the daemon shows as
+`finalized` were published to `0xE51eFF3d13Cc857a2aA1F6335592Fb2B80fA1375`, the
+first Base registry. When `EVMSCAN_REGISTRY_ADDRESS` was repointed at
+`0x6D021dBe3A5804F6AC4faE7A20117dF8d7525Ad7` on 2026-09-12 nothing was
+republished, so that registry read `epochCount() == 0` and
+`latestFinalizedEpoch(1).found == false` for a day — the local `epochs` table
+says `finalized` about a contract that has never heard of the epoch. **Repointing
+the registry does not migrate the commitments**: check `epochCount()` on the new
+address after the first publish cycle, not the daemon's own status.
+
+**The state checkpoint.** `5can.eth` is an **ENSv2 Sepolia** name — the
+canonical Universal Resolver `0xeEeEEEeE14D718C2B47D9923Deab1335E144EeEe` finds
+it there, and neither the mainnet nor the Sepolia v1 registry has it. Its
+resolver is the ENSv2 dedicated resolver at
+`0x9Ce32cC42fd5aa0a1a30B2507248A9bcbd2893Cb`, which is what `state.resolver`
+points at. No contract is deployed for this flow (docs/USER_STATE.md); the name's
+existing resolver holds the record.
+
+The sender must be a key of its own — `cmd/evmscand` refuses to start when
+`EVMSCAN_STATE_PUBLISHER_KEY` matches the index publisher — and with the registry
+now on Sepolia that guard is load-bearing rather than tidy: `hintreg.EOASubmitter`
+and `statepub.Publisher` choose nonces independently, so one account signing for
+both on one chain would have them strand each other's transactions.
+
+Grant it `ROLE_SET_TEXT` (`1 << 4`) scoped to the one record, from the name owner:
+
+```bash
+cast send --rpc-url https://ethereum-sepolia-rpc.publicnode.com \
+  --private-key 0x<owner key> 0x9Ce32cC42fd5aa0a1a30B2507248A9bcbd2893Cb \
+  "authorizeTextRoles(bytes,string,address,bool)" \
+  0x043563616e0365746800 "evmscan.states" 0x<state sender> true
+```
+
+The first argument is the **DNS-encoded** name (`\x04 5can \x03 eth \x00`), not a
+namehash. Check the grant with `eth_call` rather than by sending a record: a
+`setText` of `evmscan.states` from the state sender must simulate, and a `setText`
+of any other key from the same sender must revert with role bitmap `0x10`. If both
+hold, the key can write the checkpoint and nothing else on the name.
+
+Done 2026-09-13: sender `0x14FafAc780CB30024B309Fa12e059EFE04A3e9a6`, funded with
+0.1 Sepolia ETH from the publisher, grant tx
+`0xbbb1c34a4e41d5e6a56c29b2b2de7f837e34ee03119cfa01350eb47058f6b618`. Estimated
+`setText` gas is 136,358 against the profile's `max_gas: 300000` cap.
+
 ## 7. Seed it and test the whole loop
 
 Register and fund the assets you actually want indexed. On mainnet, `fromBlock` should

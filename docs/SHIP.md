@@ -80,7 +80,7 @@ watchlist and the relay stays in `hints.js` and Go behind no UI; nothing is
 deleted from Go and no route is removed.
 
 Bugs the map surfaced, fixed in the same pass: the sweep was gated on the
-hosted-lookup flag and `HOSTED_LOOKUP_FOR` never cleared; `config.mainnet-base.yaml`
+hosted-lookup flag and `HOSTED_LOOKUP_FOR` never cleared; `config.mainnet-sepolia.yaml`
 cites a MAINNET.md §8 that does not exist.
 
 ## 4. The verdict API (fixed here so two agents build in parallel)
@@ -191,7 +191,7 @@ Estimates are wall clock; the sum leaves ~1.5 h slack.
 |---|---|---|---|
 | **A backend** | `migrations/0012_verdicts.sql`, `internal/api/verdict.go` (+ `verdictsig.go` copied from `hintsig.go`), `internal/store/demand.go` + `discovery.go`, `handlers.go` (`orderAssets`, `committed`, `demand`), `server.go` route + `guarded()`, `auth_test.go`, tests + digest fixture | §4 exactly | `go test ./...` green; against a scratch Postgres a signed verdict replaces a previous one, `against` sinks a row, a bad signer is 401, a stale deadline is 409 |
 | **B frontend** | `web/index.html`, `web/hints.js` | §2 flow, §3 cuts, classifier with weights in one object, single-signature button, localStorage memory, ordering rule | runs against the live API through a local proxy with A's stub; the split is visible with chips, one signature round-trips |
-| **C docs** | `README.md` (product paragraph, reader flow, API table: `/v1/verdict`, `committed`, `demand`), `CLAUDE.md` (vote → verdict, ENS off the ship, invariants), `docs/ENS.md` (status: future), `docs/MAINNET.md` (§ order, §8 → §6d), `deploy/config.mainnet-base.yaml` (`min_voters: 1` + comment) | docs match §0–§5 | no doc names a control the page no longer has |
+| **C docs** | `README.md` (product paragraph, reader flow, API table: `/v1/verdict`, `committed`, `demand`), `CLAUDE.md` (vote → verdict, ENS off the ship, invariants), `docs/ENS.md` (status: future), `docs/MAINNET.md` (§ order, §8 → §6d), `deploy/config.mainnet-sepolia.yaml` (`min_voters: 1` + comment) | docs match §0–§5 | no doc names a control the page no longer has |
 
 B builds against §4 without waiting for A; a stub is fine until the merge.
 

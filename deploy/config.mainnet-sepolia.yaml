@@ -1,5 +1,5 @@
 # Hosted deployment: index Ethereum mainnet through a Helios light client, and
-# commit the result to a HintRegistry on Base.
+# commit the result to a HintRegistry on Sepolia.
 #
 # Why the split. The registry never asks which chain it is on: publishIndex takes a
 # chainId, assetKey and contractsOf take a chainId, Epoch stores one, and
@@ -9,24 +9,61 @@
 # docs/TOKENOMICS.md section 6.2 is the argument for doing that.
 #
 # What it costs. The container runs one Helios, so mainnet gets the verified node
-# and Base is reached over an ordinary RPC with require_local_node off. That is a
+# and Sepolia is reached over an ordinary RPC with require_local_node off. That is a
 # real concession and worth being precise about: the index is still built entirely
 # from Helios-verified mainnet logs, and the root is derived locally from them. What
 # becomes trust-me is reading registry state and submitting transactions. A lying
-# Base RPC can mislead this daemon about an epoch's status; it cannot forge a root
+# Sepolia RPC can mislead this daemon about an epoch's status; it cannot forge a root
 # or corrupt the index.
 #
+# Why Sepolia and not Base. The bond, the challenge window and the gas are what a
+# registry chain supplies, and a local-arbiter registry with a zero bond supplies
+# none of them for real on either chain: one key settles every dispute, so the money
+# on Base was buying nothing the testnet does not also give. Moving it to Sepolia
+# also puts the registry on the same chain as the ENSv2 name this deployment holds
+# (5can.eth, the state checkpoint below), which is one chain to fund and one RPC to
+# keep alive instead of two. A deployment that wants disputes to cost something
+# belongs in oracle mode on a chain with an optimistic oracle — docs/MAINNET.md §5.
+#
 # Chain order matters. The API answers a request without an explicit chain_id with
-# the first chain listed here, so mainnet is first and Base second. Base carries no
-# indexing of its own.
+# the first chain listed here, so mainnet is first and Sepolia second. Sepolia
+# carries no indexing of its own.
 #
 # Secrets come from the environment (see docs/MAINNET.md):
 #   EVMSCAN_DATABASE_DSN, EVMSCAN_REGISTRY_ADDRESS, EVMSCAN_PUBLISHER_KEY,
-#   EVMSCAN_NODE_8453 (the Base RPC, which has a key in it),
+#   EVMSCAN_NODE_11155111 (the Sepolia RPC),
+#   EVMSCAN_STATE_PUBLISHER_KEY and EVMSCAN_STATE_NODE (the checkpoint sender),
 #   EVMSCAN_API_LISTEN (set by the entrypoint from $PORT).
 database:
   dsn: ""
   auto_migrate: true
+
+# The aggregate state checkpoint (docs/USER_STATE.md). One trie over every account's
+# latest signed revision, its root written as an ENS text record so a reader can find
+# their own snapshot without trusting this deployment's database. ENSv2 only exists on
+# Sepolia, so this is a third chain the daemon touches — for one setText every ten
+# minutes and nothing else. It reads no logs and holds no index.
+#
+# 5can.eth is the operator name; its resolver is the ENSv2 dedicated resolver that
+# name already points at, and the sender below is granted ROLE_SET_TEXT scoped to
+# `evmscan.states` alone (docs/MAINNET.md §6f). EVMSCAN_STATE_PUBLISHER_KEY must be a
+# dedicated key — the daemon refuses to start if it matches the index publisher —
+# and EVMSCAN_STATE_NODE is a Sepolia RPC. Both come from the environment.
+state:
+  enabled: true
+  name: "5can.eth"
+  resolver: "0x9Ce32cC42fd5aa0a1a30B2507248A9bcbd2893Cb"
+  # Sepolia is not the chain Helios verifies, so there is no local node to require.
+  # Nothing in a commitment depends on this endpoint: it carries a root that was
+  # already derived and signed locally, and the browser verifies the record through
+  # ENS rather than through us.
+  node: ""
+  require_local_node: false
+  interval: 10m
+  # A cap, not an estimate. Estimation must succeed or publication defers; these two
+  # bound what a single setText can ever cost at 0.003 ETH.
+  max_gas: 300000
+  max_fee_wei: "10000000000"
 
 api:
   listen: "0.0.0.0:8080"
@@ -41,24 +78,24 @@ api:
   auth_token: ""
 
 registry:
-  # Base. Not the chain being indexed — see the header.
-  chain_id: 8453
+  # Sepolia. Not the chain being indexed — see the header.
+  chain_id: 11155111
   address: ""
   publisher_key: ""
   sync_interval: 60s
-  # Base gas is cheap enough that the timer, not the cost, is what bounds how often
-  # a commitment is posted. Identical roots are skipped either way.
+  # Sepolia gas is free, so the timer, not the cost, is what bounds how often a
+  # commitment is posted. Identical roots are skipped either way.
   auto_publish_interval: 1h
-  # ENS. Every account gets <hex>.hints.<ens_parent>: on mainnet that name would
-  # be served by a HintSignedResolver (contracts/src/HintSignedResolver.sol) whose
-  # answers this daemon signs at /ens with the publisher key — attested, not
-  # verified against the root, which lives on Base. The resolver is built, not
-  # deployed, and not part of the current ship (docs/SHIP.md D2); ens_parent only
-  # lets account responses carry hint_name. If it is ever deployed, set
-  # ens_resolver from EVMSCAN_ENS_RESOLVER (docs/MAINNET.md §6d); until then the
-  # gateway signs for any sender. The resolver's gateway template would be
+  # ENS. Every account gets <hex>.hints.<ens_parent>. 5can.eth is the name this
+  # operator actually holds — on ENSv2 Sepolia, which is also where the state
+  # checkpoint above is written. No resolver serves <hex>.hints.5can.eth yet: the
+  # HintSignedResolver (contracts/src/HintSignedResolver.sol) is built and
+  # sim-tested but undeployed (docs/SHIP.md D2), so ens_parent only lets account
+  # responses carry hint_name. If it is ever deployed, set ens_resolver from
+  # EVMSCAN_ENS_RESOLVER (docs/MAINNET.md §6d); until then the gateway signs for
+  # any sender. The resolver's gateway template would be
   #   https://evm-scan-production.up.railway.app/ens/{sender}/{data}.json
-  ens_parent: "evm-scan.eth"
+  ens_parent: "5can.eth"
   ens_resolver: ""
   # Where the full index table for a commitment is published. A root proves a leaf
   # to whoever already holds it and recovers nothing on its own, so an epoch whose
@@ -82,12 +119,12 @@ registry:
     # receipt on Sepolia in oracle mode before trusting it here; too low burns the
     # gas and reverts, too high only reserves headroom.
     fallback_gas: 1200000
-    # Publish + finalize + claim is roughly 1.5M gas across three transactions. Base
-    # was quoting 0.006 gwei when this was written, which puts that at about
-    # 0.000009 ETH — call it 0.00002 ETH to leave room for a busier fee market. An
-    # L1-sized figure here (0.02 ETH, as config.mainnet.yaml carries) would refuse
-    # every epoch as unprofitable. Confirm against real receipts before trusting it;
-    # docs/MAINNET.md section 2 is that procedure.
+    # Publish + finalize + claim is roughly 1.5M gas across three transactions. On
+    # Sepolia that gas is worth nothing, so this guard is not protecting money — it
+    # is only stopping the daemon posting an epoch no asset has funded. Kept at the
+    # Base figure so the same profile means the same thing if the registry ever
+    # moves back to a chain where gas costs something; docs/MAINNET.md section 2 is
+    # how to confirm it against real receipts there.
     min_expected_reward_wei: "20000000000000"
 
 # What the RPC bill is made of. Providers meter per request, so the only lever on
@@ -180,23 +217,28 @@ chains:
       - https://tokens.uniswap.org
       - https://tokens.coingecko.com/uniswap/all.json
 
-  # Base: present so the daemon can read the registry and send its transactions.
+  # Sepolia: present so the daemon can read the registry and send its transactions.
   # Nothing here is indexed — no discovery, and no assets will ever be registered
-  # against chain 8453 unless someone asks for them explicitly.
-  - chain_id: 8453
-    name: base
+  # against chain 11155111 unless someone asks for them explicitly.
+  #
+  # It is also the chain the state checkpoint writes to, from a different sender.
+  # The two never share a nonce because they never share a key: the daemon refuses
+  # to start if state.publisher_key matches registry.publisher_key.
+  - chain_id: 11155111
+    name: sepolia
     # An ordinary RPC. The one Helios in this container is spent on mainnet, and
-    # Base is not what the commitments are about.
+    # Sepolia is not what the commitments are about.
     node: ""
     require_local_node: false
     confirmations: 12
     backfill_window: 200
     tail_window: 100
-    # Base carries no index of its own, so this leg only exists to read the registry
-    # and send to it. Polling it on the block time buys nothing and, against a public
-    # or metered endpoint, is what actually spends the quota: a rate-limited Base RPC
-    # takes down more than Base, because one indexer's failure cancels the context the
-    # mainnet indexer and the publisher share. Poll on the registry's own cadence.
+    # Sepolia carries no index of its own, so this leg only exists to read the
+    # registry and send to it. Polling it on the block time buys nothing and, against
+    # a public or metered endpoint, is what actually spends the quota: a rate-limited
+    # Sepolia RPC takes down more than Sepolia, because one indexer's failure cancels
+    # the context the mainnet indexer and the publisher share. Poll on the registry's
+    # own cadence.
     poll_interval: 30s
     backfill_interval: 60s
 
