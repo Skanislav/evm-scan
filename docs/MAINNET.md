@@ -454,6 +454,68 @@ the one configured. Its `getLogs` refusals here are for ~89 stale Sepolia asset
 rows left in the database by an older deployment, which this profile does not
 index; marking them `revoked` stops the noise, since `ListCursors` skips revoked.
 
+### 6g. `hints.5can.eth`: the root-verified resolver
+
+Done 2026-09-13, and only possible because of §6f. `HintResolver` proves its answers
+against the registry's own root, so it has to live on the registry's chain; that is
+why `HintSignedResolver` exists at all, for the case where it cannot. With the
+registry on Sepolia and `5can.eth` an ENSv2 **Sepolia** name, the resolver and the
+root are finally on one chain, and the attested path is not needed.
+
+ENSv2 beta addresses, cross-checked on chain against `UniversalResolver.ROOT_REGISTRY()`
+rather than taken from the docs alone:
+
+| | |
+| --- | --- |
+| RootRegistry | `0x8115186E8f2E0B0281e86ab91f0f48Ba90364354` |
+| ETHRegistry | `0xBDC85dD5b15D7ecb354cd7cb6f2c50b4f2c4F0E2` |
+| VerifiableFactory | `0x10dc6333cdfe1fcef624c6e0a8221b91804cd7ef` |
+| UserRegistry impl | `0x624a25d67b59d587752ebec8dded8827dae52050` |
+
+```bash
+./bin/evmscan-ens deploy-resolver -node <sepolia> -key 0x<key> \
+  -registry 0x1751707400E7287C4dA4e0c5032cE8803B2B14f1 -chain-id 1
+./bin/evmscan-ens attach -node <sepolia> -key 0x<key> -name 5can.eth -label hints \
+  -resolver 0x<from above> -eth-registry 0xBDC8… -factory 0x10dc… -impl 0x624a…
+./bin/evmscan-ens check -node <sepolia> -name <hex>.hints.5can.eth
+```
+
+`-chain-id 1` is the chain the index is **about**, not the node's — the same
+distinction `-index-chain` draws in `evmscan-deploy`. Live: resolver
+`0x0C7133E30bC9A70F9154EEd24f6A12E092E480Ad`, `5can.eth`'s subregistry
+`0x47288E5A2214c52237cc967b6145E0D49F3fd486`.
+
+**`attach` is only idempotent once `setSubregistry` has landed.** Its two steps are
+a CREATE2 `deployProxy` and a `setSubregistry` that links the result, and it decides
+whether to deploy by reading `getSubregistry`. If the second transaction fails — ours
+lost a nonce race with the running daemon, which signs from the same key — the proxy
+exists at a salt that cannot be deployed again while the registry still reads zero,
+so the retry reverts in `estimate gas` rather than resuming. Recover by linking the
+proxy the first run printed and then re-running:
+
+```bash
+cast send <ETHRegistry> "setSubregistry(uint256,address)" \
+  $(cast to-uint256 $(cast keccak "<label>")) <proxy from the failed run>
+```
+
+Better: do not run this tool with the publisher's key while the daemon holds it.
+
+**No per-account transaction, ever.** `HintResolver` is an ENSIP-10 wildcard, so
+once `hints.5can.eth` is bound every account already resolves —
+`<hex>.hints.5can.eth`, forty-one labels up — with nothing registered per account
+and no gas spent per account. There is no onboarding step to sponsor because there
+is no onboarding step.
+
+**What cannot be sponsored.** Pointing a name the *reader* owns at this resolver is
+a different matter: `ETHRegistry.setSubregistry` and `setResolver` are gated on the
+owner or an operator approved through `setApprovalForAll`, and the registry carries
+no `permit`, no `DOMAIN_SEPARATOR`, no `eip712Domain` and no ERC-2771 forwarder. A
+signature therefore cannot authorize anyone to act for a name owner on the ENSv2
+beta. The cheapest honest flow is one transaction from the reader —
+`setApprovalForAll(<publisher>, true)` — after which everything else can be
+relayed and paid for by the publisher, the way `POST /v1/demand/relay` already
+carries a signed vote.
+
 ## 7. Seed it and test the whole loop
 
 Register and fund the assets you actually want indexed. On mainnet, `fromBlock` should
