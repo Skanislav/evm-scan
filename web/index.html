@@ -3968,6 +3968,21 @@ function discoveredChainIDs() {
   for (const entry of ((PORTABLE && PORTABLE.entries) || [])) add(entry.chain_id);
   return [...ids];
 }
+// What this deployment actually indexes, from the /v1/chains answer already on hand.
+// A chain the daemon runs is relevant to every account it is asked about — it has
+// rows for some of them and will have rows for more — so the picker opens with it
+// listed rather than making the reader find it behind "show more". Chains that are
+// configured but not running (Sepolia today) are left out: naming one would offer a
+// network nothing here can answer for.
+function runningChainIDs() {
+  const ids = [];
+  for (const chain of CHAINS) {
+    if (!chain.running) continue;
+    const id = Number(chain.chain_id);
+    if (Number.isSafeInteger(id) && id > 0 && !RETIRED_CHAINS.has(id) && !ids.includes(id)) ids.push(id);
+  }
+  return ids;
+}
 
 async function openXChain() {
   $('v2-network-modal').hidden = false;
@@ -3995,10 +4010,15 @@ async function openXChain() {
       XCHAIN_MODE = 'published';
       XCHAIN_SOURCE = 'signed-list';
     } else {
-      // What was discovered leads; the fixed set is only what a wallet with no
-      // answer yet has to open on.
+      // What was discovered leads, then every chain this deployment indexes; the
+      // fixed set is only what a wallet with neither has to open on. A lookup
+      // answers for one chain, so "discovered" alone is that chain and nothing
+      // else — which is how the picker ended up naming one network on a daemon
+      // running several.
       const found = discoveredChainIDs();
-      const lead = found.length ? found : PRESELECTED_CHAIN_IDS;
+      const running = runningChainIDs();
+      const union = [...new Set([...found, ...running])];
+      const lead = union.length ? union : PRESELECTED_CHAIN_IDS;
       XCHAIN_ALL = await sweepableChains(lead);
       XCHAIN = lead.map(id => XCHAIN_ALL.find(chain => chain.id === id)).filter(Boolean);
       XLIST = await tokenList();
@@ -4015,11 +4035,16 @@ async function openXChain() {
   }
   $('xchain-panel').inert = false;
   $('xchain-openrow').hidden = true;
-  // Selected: the chains this account was actually found on. A chain with no
-  // endpoint is listed unselected rather than selected and failing at read time, and
-  // an account with nothing discovered yet opens on the non-testnets it can reach.
+  // Selected: the chains this account was found on plus the chains this deployment
+  // indexes. A chain with no endpoint is listed unselected rather than selected and
+  // failing at read time, a running testnet nobody was found on is listed unchecked
+  // because nobody holds anything there by accident — the one the lookup itself ran
+  // against still counts — and an account with nothing at all opens on the
+  // non-testnets it can reach.
   const discovered = new Set(discoveredChainIDs());
-  const found = XCHAIN.filter(chain => discovered.has(chain.id) && chain.rpc);
+  const relevant = new Set([...discovered, ...runningChainIDs()]);
+  const found = XCHAIN.filter(chain =>
+    relevant.has(chain.id) && chain.rpc && (!chain.testnet || discovered.has(chain.id)));
   for (const chain of (found.length ? found : XCHAIN.filter(chain => !chain.testnet && chain.rpc))) {
     XSELECTED.add(chain.id);
   }
