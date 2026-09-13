@@ -42,7 +42,10 @@ type Worker = chainset.Worker
 
 // Deps is everything the HTTP layer needs.
 type Deps struct {
-	Store *store.Store
+	Store         *store.Store
+	StateResolver string
+	StateNode     string
+	StateName     string
 	// Chains is the live set of chains this process runs — their nodes, indexers
 	// and pricers. It is read through rather than copied, because it changes while
 	// the server is up: a chain added over the API has to be visible to the next
@@ -247,9 +250,14 @@ func New(d Deps) *Server {
 	s.mux.HandleFunc("POST /v1/accounts/{address}/hint", s.postAccountHint)
 	// An exact asset list a reader signed after a sweep. It is public only because
 	// the account's signature explicitly authorizes that enumerable disclosure.
+	s.mux.HandleFunc("GET /v1/accounts/{address}/state", s.getUserState)
+	s.mux.HandleFunc("POST /v1/accounts/{address}/state", s.postUserState)
+	s.mux.HandleFunc("GET /v1/state/revisions/{id}", s.getStateRevision)
+	s.mux.HandleFunc("GET /v1/state/checkpoints/{root}", s.getStateCheckpoint)
+	s.mux.HandleFunc("POST /v1/state/checkpoints", s.buildStateCheckpoint)
+	s.mux.HandleFunc("GET /v1/state/status", s.getStateStatus)
 	s.mux.HandleFunc("GET /v1/accounts/{address}/asset-commit", s.getAssetCommit)
 	s.mux.HandleFunc("POST /v1/accounts/{address}/asset-commit", s.postAssetCommit)
-
 
 	if d.WebDir != "" {
 		s.mux.Handle("/", http.FileServer(http.Dir(d.WebDir)))
@@ -321,7 +329,7 @@ func guarded(r *http.Request) bool {
 	// A reader's hint or exact asset list is written with the reader's own
 	// signature, which the handler checks; the operator's token would only stop
 	// readers.
-	if strings.HasPrefix(p, "/v1/accounts/") && (strings.HasSuffix(p, "/hint") || strings.HasSuffix(p, "/asset-commit")) {
+	if strings.HasPrefix(p, "/v1/accounts/") && (strings.HasSuffix(p, "/hint") || strings.HasSuffix(p, "/asset-commit") || (r.Method == http.MethodPost && strings.HasSuffix(p, "/state"))) {
 		return false
 	}
 	return true

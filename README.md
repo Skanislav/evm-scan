@@ -109,6 +109,16 @@ enumerable list and, on a later lookup, read its matching chain entries before b
 candidate discovery. A newer deadline atomically replaces the old snapshot, so an old
 signature cannot restore stale assets.
 
+## Portable wallet state
+
+The wallet can opt into a public signed snapshot of its cross-chain verdicts and
+remembered assets. A deterministic binary Merkle trie makes the snapshot verifiable
+and reproducible on another server. Download/import backups, publish an individual
+checkpoint through an ENSv2 Sepolia name, or verify the operator's automatic batch
+checkpoint. Legacy verdict and asset-list writes remain available and are flagged
+when they differ from the signed snapshot. See [USER_STATE.md](docs/USER_STATE.md)
+for the format, recovery commands, permissions and publisher configuration.
+
 ## Why a snap-synced node is enough
 
 The node requirement is the difference between "you could run this" and "you won't".
