@@ -156,6 +156,7 @@
     <a href="#lookup">Lookup</a>
     <a href="#lens">The lens</a>
     <a href="#architecture">Architecture</a>
+    <a href="#storage">Storage</a>
     <a href="#api">API</a>
     <a class="btn btn-secondary" href="https://github.com/Skanislav/evm-scan" style="margin-left:var(--space-2)">GitHub</a>
   </nav>
@@ -237,6 +238,27 @@
       <div style="background:var(--color-bg);padding:var(--space-4)" class="text-muted">Reading…</div>
     </div>
     <p class="text-muted" id="committed-note" style="margin:var(--space-3) 0 0;font-size:13px"></p>
+
+    <!-- Filled in after a lookup. Two different commitments, kept apart on purpose:
+         what the operator's finalized root proves about this account, and what the
+         account itself signed. -->
+    <div id="account-committed" hidden style="margin-top:var(--space-6)">
+      <div class="section-head" style="margin-bottom:var(--space-4)">
+        <h6 style="color:var(--color-accent-700)">This account</h6>
+        <h2 id="account-committed-who" style="font-size:clamp(20px,2.4vw,26px)"></h2>
+        <p class="text-muted" style="max-width:60ch">Two commitments, and they are not the same thing. One is the operator's: contracts the latest finalized root proves this account touched. The other is the account's own signed list, which saves a reader rediscovering the same contracts and claims nothing about balances.</p>
+      </div>
+      <div style="display:grid;gap:2px;background:var(--color-divider);border:2px solid var(--color-divider)">
+        <div style="background:var(--color-bg);padding:var(--space-4)">
+          <h5 style="margin:0 0 6px">In the finalized root</h5>
+          <div id="account-committed-root" class="text-muted" style="font-size:13.5px">—</div>
+        </div>
+        <div style="background:var(--color-bg);padding:var(--space-4)">
+          <h5 style="margin:0 0 6px">Signed by this account</h5>
+          <div id="account-committed-signed" class="text-muted" style="font-size:13.5px">—</div>
+        </div>
+      </div>
+    </div>
   </section>
 
   <section id="lens" class="section">
@@ -302,6 +324,93 @@
         <p style="margin:var(--space-4) 0 0;font-size:12.5px;line-height:1.5;color:var(--color-accent-700)"><strong>require_local_node is enforced, not documented.</strong> The daemon refuses to start against a non-loopback endpoint unless you explicitly opt out.</p>
       </div>
     </div>
+  </section>
+
+  <section id="storage" class="section">
+    <div class="section-head">
+      <h2>What it stores, and what it shrinks to</h2>
+      <p class="text-muted" style="max-width:58ch">The index is a rollup, never a log. One row per account per contract, holding the first and last block it was seen at, how many events there were, and which side of them it was on — the events themselves are read, folded in and dropped. Every figure below is measured, not estimated.</p>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:var(--space-6);margin-bottom:var(--space-8)">
+      <div style="min-width:0">
+        <h6 style="color:var(--color-accent-700)">The row</h6>
+        <pre style="margin:0 0 var(--space-3);background:var(--color-neutral-900);color:var(--color-neutral-100);padding:var(--space-4);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.65;overflow-x:auto">interactions(
+  chain_id    BIGINT,
+  account     BYTEA,   -- 20 bytes
+  asset       BYTEA,   -- 20 bytes
+  first_block BIGINT,
+  last_block  BIGINT,
+  event_count BIGINT,
+  roles       INT,     -- bitmask
+  updated_at  TIMESTAMPTZ,
+  PRIMARY KEY (chain_id, account, asset))</pre>
+        <p class="text-muted" style="margin:0;font-size:13px;line-height:1.6">An address is twenty raw bytes, not a forty-two character string, and a <code style="font-size:12px">CHECK</code> enforces the length. <strong>Roles is a bitmask</strong>, so sender, receiver, owner and operator cost four bits rather than four rows. A contract discovery has merely seen gets a counter and no per-account row at all.</p>
+      </div>
+      <div style="min-width:0">
+        <h6 style="color:var(--color-accent-700)">The same answer, four sizes</h6>
+        <div style="display:flex;flex-direction:column">
+          <div style="border-top:1px solid var(--color-divider);padding:10px 0;display:flex;gap:var(--space-3);align-items:baseline">
+            <span style="font-family:var(--font-heading);font-weight:800;font-size:17px;font-variant-numeric:tabular-nums;min-width:88px">616 MB</span>
+            <span class="text-muted" style="font-size:13px;line-height:1.5">in Postgres — the whole mainnet rollup, 2,088,691 rows</span>
+          </div>
+          <div style="border-top:1px solid var(--color-divider);padding:10px 0;display:flex;gap:var(--space-3);align-items:baseline">
+            <span style="font-family:var(--font-heading);font-weight:800;font-size:17px;font-variant-numeric:tabular-nums;min-width:88px">2.1 MB</span>
+            <span class="text-muted" style="font-size:13px;line-height:1.5">as a membership filter a reader can download and query offline</span>
+          </div>
+          <div style="border-top:1px solid var(--color-divider);padding:10px 0;display:flex;gap:var(--space-3);align-items:baseline">
+            <span style="font-family:var(--font-heading);font-weight:800;font-size:17px;font-variant-numeric:tabular-nums;min-width:88px">672 B</span>
+            <span class="text-muted" style="font-size:13px;line-height:1.5">one account's inclusion proof — 21 hashes, counted off a real one this deployment serves</span>
+          </div>
+          <div style="border-top:1px solid var(--color-divider);border-bottom:2px solid var(--color-divider);padding:10px 0;display:flex;gap:var(--space-3);align-items:baseline">
+            <span style="font-family:var(--font-heading);font-weight:800;font-size:17px;font-variant-numeric:tabular-nums;min-width:88px;color:var(--color-accent-700)">64 B</span>
+            <span style="font-size:13px;line-height:1.5">on chain. Two <code style="font-size:12px">bytes32</code> roots — the index and its coverage — and that is the entire commitment, whatever the table weighs.</span>
+          </div>
+        </div>
+        <p class="text-muted" style="margin:var(--space-3) 0 0;font-size:12.5px;line-height:1.6">Storage is not what goes on chain. The root is, and it is a fixed sixty-four bytes at any size, which is what makes committing a whole chain's index affordable enough to do on a timer.</p>
+      </div>
+    </div>
+
+    <div style="overflow-x:auto;margin-bottom:var(--space-6)">
+      <table class="table">
+        <thead><tr><th style="min-width:190px">Table</th><th>Rows</th><th>Data</th><th>Indexes</th><th>Total</th><th>Per row</th></tr></thead>
+        <tbody>
+          <tr><td><span class="mono" style="font-size:12.5px">interactions</span><span class="text-muted" style="display:block;font-size:12px">the rollup, one per account per contract</span></td>
+            <td class="mono" style="font-size:12.5px;font-variant-numeric:tabular-nums">2,088,691</td>
+            <td class="mono" style="font-size:12.5px">251 MB</td><td class="mono" style="font-size:12.5px">365 MB</td>
+            <td class="mono" style="font-size:12.5px"><strong>616 MB</strong></td><td class="mono" style="font-size:12.5px">309 B</td></tr>
+          <tr><td><span class="mono" style="font-size:12.5px">epoch_leaves</span><span class="text-muted" style="display:block;font-size:12px">per commitment, one per account</span></td>
+            <td class="mono" style="font-size:12.5px;font-variant-numeric:tabular-nums">1,955,720</td>
+            <td class="mono" style="font-size:12.5px">250 MB</td><td class="mono" style="font-size:12.5px">180 MB</td>
+            <td class="mono" style="font-size:12.5px"><strong>431 MB</strong></td><td class="mono" style="font-size:12.5px">231 B</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="text-muted" style="margin:0 0 var(--space-8);font-size:12.5px;max-width:76ch;line-height:1.6"><strong>The indexes cost more than the data.</strong> 365 MB against 251 MB, because the scan walks by contract and every account lookup walks by account, and a B-tree over random twenty-byte keys does not pack. That is the price of answering both questions, and it is paid on disk rather than on chain.</p>
+
+    <div class="section-head" style="margin-bottom:var(--space-4)">
+      <h4 style="margin:0">Membership, for a reader who will not name themselves</h4>
+      <p class="text-muted" style="margin:0;font-size:13.5px;max-width:56ch">A filter answers "is this pair in the index" without a request. Three encodings, and the right one depends entirely on how many keys there are.</p>
+    </div>
+    <div style="overflow-x:auto">
+      <table class="table">
+        <thead><tr><th style="min-width:210px">Keys</th><th>binary-fuse8</th><th>sorted-u64</th><th>bloom, 1,024-bit</th></tr></thead>
+        <tbody>
+          <tr><td>65 <span class="text-muted">— a real wallet's holdings</span></td>
+            <td class="mono" style="font-size:12.5px">198 B</td><td class="mono" style="font-size:12.5px">562 B</td>
+            <td class="mono" style="font-size:12.5px;color:var(--color-accent-700)"><strong>175 B</strong></td></tr>
+          <tr><td>405 <span class="text-muted">— a curated mainnet token list</span></td>
+            <td class="mono" style="font-size:12.5px">710 B</td><td class="mono" style="font-size:12.5px">3,282 B</td>
+            <td class="mono" style="font-size:12.5px;color:var(--color-accent-700)"><strong>175 B</strong></td></tr>
+          <tr><td>1,955,720 <span class="text-muted">— every account in the index</span></td>
+            <td class="mono" style="font-size:12.5px;color:var(--color-accent-700)"><strong>2.1 MB</strong></td>
+            <td class="mono" style="font-size:12.5px">15.6 MB</td><td class="mono" style="font-size:12.5px">—</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="text-muted" style="margin:var(--space-4) 0 0;font-size:12.5px;max-width:76ch;line-height:1.6">The bloom is 175 bytes at every row because it is fixed by construction: it buys its size back in false positives, and at a wallet's scale that is 0.05% — small enough to publish as a single ENS text record, and cheap enough that a false positive costs one <code style="font-size:12px">balanceOf</code> and nothing else. Past a few hundred keys it stops being a filter at all and fuse8's 1.13 bytes per key wins. <strong>None of them is ever trusted.</strong> A filter says where to look; the live read says what is there, and a miss means "not indexed" rather than "no balance".</p>
+
+    <p class="text-muted" style="margin:var(--space-4) 0 0;font-size:12px;max-width:76ch;line-height:1.6">Row counts are this deployment's, from <code style="font-size:11.5px">/v1/status</code>. Table sizes are <code style="font-size:11.5px">pg_total_relation_size</code> after loading the schema in <code style="font-size:11.5px">migrations/0001_init.sql</code> at those counts with random addresses — sequential ones pack a B-tree tighter and would have flattered the index figure by 80 MB. Filter sizes are the byte length of <code style="font-size:11.5px">hintfilter.Build(…).Encode()</code>. The proof length was counted off <code style="font-size:11.5px">/v1/epochs/9/proof</code>, a commitment over 1,943,106 leaves that this deployment has already published. Nothing here is extrapolated from a smaller sample.</p>
   </section>
 
   <section id="api" class="section">
@@ -582,6 +691,71 @@ async function renderCommitted() {
 
 renderCommitted();
 
+// What this account has committed, in the two senses that exist — kept apart
+// because conflating them would be a lie. The root is the operator's statement,
+// bonded and provable against the chain. The signed list is the account's own
+// disclosure: it saves a later reader rediscovering the same contracts and asserts
+// nothing about balances, and there is usually none, which is not a failure.
+const CHAIN_NAMES = { 1: 'Ethereum', 10: 'OP Mainnet', 56: 'BNB Smart Chain', 100: 'Gnosis',
+  130: 'Unichain', 137: 'Polygon', 146: 'Sonic', 252: 'Fraxtal', 324: 'ZKsync Era',
+  480: 'World Chain', 1101: 'Polygon zkEVM', 1135: 'Lisk', 1868: 'Soneium', 2020: 'Ronin',
+  5000: 'Mantle', 8453: 'Base', 34443: 'Mode', 42161: 'Arbitrum One', 42170: 'Arbitrum Nova',
+  42220: 'Celo', 43114: 'Avalanche', 57073: 'Ink', 59144: 'Linea', 60808: 'BOB',
+  81457: 'Blast', 534352: 'Scroll', 7777777: 'Zora', 11155111: 'Sepolia' };
+const chainName = (id) => CHAIN_NAMES[Number(id)] || ('chain ' + id);
+
+async function renderAccountCommitted(address) {
+  const box = document.getElementById('account-committed');
+  if (!box || !address) return;
+  box.hidden = false;
+  document.getElementById('account-committed-who').textContent = short(address, 6);
+  const root = document.getElementById('account-committed-root');
+  const signed = document.getElementById('account-committed-signed');
+  root.textContent = 'Reading…';
+  signed.textContent = 'Reading…';
+
+  try {
+    const acc = await fetch(API + `/v1/accounts/${address}?chain_id=${CHAIN_ID}`)
+      .then(r => r.ok ? r.json() : Promise.reject(new Error(String(r.status))));
+    const committed = (acc.assets || []).filter(a => a.committed);
+    root.innerHTML = committed.length
+      ? '<div style="margin-bottom:6px">' + num(committed.length) + ' of ' + num((acc.assets || []).length) +
+        ' contracts on ' + esc(chainName(CHAIN_ID)) + ', proven against the latest finalized root</div>' +
+        committed.map(a => '<div style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;word-break:break-all">' +
+          esc(a.symbol || '—') + ' · ' + esc(a.address) + '</div>').join('')
+      : 'Nothing for this account in the latest finalized root yet.';
+  } catch (e) {
+    root.textContent = 'Could not read the index: ' + e.message;
+  }
+
+  try {
+    const res = await fetch(API + `/v1/accounts/${address}/asset-commit`);
+    if (res.status === 404) {
+      signed.innerHTML = 'This account has signed no list. That is the ordinary case — the list is an optional, ' +
+        'public disclosure a reader makes to save their own next lookup, never something the index needs.';
+      return;
+    }
+    if (!res.ok) throw new Error(String(res.status));
+    const c = await res.json();
+    const byChain = new Map();
+    for (const a of c.assets || []) {
+      const k = Number(a.chain_id);
+      if (!byChain.has(k)) byChain.set(k, []);
+      byChain.get(k).push(a.address);
+    }
+    const chains = [...byChain.keys()].sort((x, y) => x - y);
+    signed.innerHTML = '<div style="margin-bottom:6px">' + num((c.assets || []).length) + ' contracts across ' +
+      num(chains.length) + ' chain' + (chains.length === 1 ? '' : 's') +
+      ', signed ' + esc(String(c.signed_at || '').slice(0, 10)) + '</div>' +
+      chains.map(id => '<div style="margin-bottom:4px"><strong style="font-size:12.5px">' + esc(chainName(id)) +
+        '</strong><span class="text-muted" style="font-size:12px"> · ' + num(byChain.get(id).length) + '</span>' +
+        byChain.get(id).map(addr => '<div style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;word-break:break-all">' +
+          esc(addr) + '</div>').join('') + '</div>').join('');
+  } catch (e) {
+    signed.textContent = 'Could not read the signed list: ' + e.message;
+  }
+}
+
 const card = document.getElementById('lookup-card');
 
 const state = {
@@ -744,6 +918,7 @@ async function start(typed) {
     address = await toAddress(typed);
   } catch (e) { fail(e); return; }
   state.address = address;
+  renderAccountCommitted(address);
 
   // The gate is for a host that does not already know. This origin read the
   // address out of its own URL, so the index mode has nothing left to disclose;

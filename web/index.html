@@ -4053,10 +4053,20 @@ async function openXChain() {
   // non-testnets it can reach.
   const discovered = new Set(discoveredChainIDs());
   const relevant = new Set([...discovered, ...runningChainIDs()]);
-  const found = XCHAIN.filter(chain =>
-    relevant.has(chain.id) && chain.rpc && (!chain.testnet || discovered.has(chain.id)));
-  for (const chain of (found.length ? found : XCHAIN.filter(chain => !chain.testnet && chain.rpc))) {
-    XSELECTED.add(chain.id);
+  // Two reasons to start a chain checked, and the second used to be a fallback
+  // that never ran: any chain already relevant to this account or this daemon,
+  // *and* any mainnet the token list actually has contracts on. "Where are my
+  // tokens" is not answered by reading the one chain we happen to index, and a
+  // reader who has to tick fifteen boxes before asking the question has been given
+  // a chore rather than an answer.
+  //
+  // A chain the list knows nothing about is offered but not checked: reading it
+  // would hand an endpoint the address to look up an empty set of contracts.
+  // Testnets stay unchecked unless the account was actually found on one.
+  for (const chain of XCHAIN) {
+    if (!chain.rpc) continue;
+    if (chain.testnet && !discovered.has(chain.id)) continue;
+    if (relevant.has(chain.id) || chain.tokens.length > 0) XSELECTED.add(chain.id);
   }
   renderXChainList();
 }
