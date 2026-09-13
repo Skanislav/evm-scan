@@ -3714,10 +3714,12 @@ const RETIRED_CHAINS = new Set([
 // in the first calls. It removes nothing — the list is still read to the end — so
 // the only thing it can get wrong is which batch a holding lands in.
 
-// sweepChain reads one chain and reports what is held there.
+// sweepChain reads one chain and isolates a bad multicall batch down to its token.
+// A contract that reverts the lens must not discard balances another contract in the
+// same batch already returned, or stop later batches on this chain.
 async function sweepChain(chain, account, onProgress, hint) {
   let tokens = chain.tokens;
-  if (!tokens.length) return { chain, held: [], calls: 0, scanned: 0, hinted: 0 };
+  if (!tokens.length) return { chain, held: [], calls: 0, scanned: 0, hinted: 0, failedCalls: 0 };
 
   // The reader's hint orders the list and never shortens it: pairs the hint knows
   // go first, so they land in the first calls, and every other pair follows in
@@ -3731,17 +3733,21 @@ async function sweepChain(chain, account, onProgress, hint) {
   }
 
   const held = [];
+  const failures = [];
   let calls = 0;
-  for (let i = 0; i < tokens.length; i += LENS_BATCH) {
-    const slice = tokens.slice(i, i + LENS_BATCH);
+  let successfulCalls = 0;
+  const read = async (slice) => {
+    calls++;
     const reply = await withTimeout(lensCall('asset', {
       account, spenders: [],
       tokens: slice.map(t => ({ token: t.address, ids: [] })),
       includeUri: false, includeCode: false,
       enumerateLimit: 0n, gasPerCall: 0n, maxStringBytes: 32n,
     }, chain.rpc), CHAIN_TIMEOUT_MS, `${chain.name} (${chain.host})`);
-    calls++;
-
+    successfulCalls++;
+    return reply;
+  };
+  const addHeld = (slice, reply) => {
     const meta = new Map(slice.map(t => [t.address.toLowerCase(), t]));
     for (const t of (reply.tokens || [])) {
       if (!t.hasBalance || t.balance === 0n) continue;
@@ -3756,9 +3762,37 @@ async function sweepChain(chain, account, onProgress, hint) {
         balance: String(t.balance),
       });
     }
+  };
+
+  for (let i = 0; i < tokens.length; i += LENS_BATCH) {
+    const slice = tokens.slice(i, i + LENS_BATCH);
+    const replies = [];
+    try {
+      replies.push([slice, await read(slice)]);
+    } catch (batchError) {
+      // A batched revert has no useful partial reply. Retry each contract so only
+      // the contract that actually rejects the lens is omitted.
+      if (slice.length === 1) {
+        failures.push({ address: slice[0].address, error: batchError });
+      } else {
+        for (const token of slice) {
+          try {
+            replies.push([[token], await read([token])]);
+          } catch (error) {
+            failures.push({ address: token.address, error });
+          }
+        }
+      }
+    }
+    for (const [asked, reply] of replies) addHeld(asked, reply);
     if (onProgress) onProgress({ chain, done: Math.min(i + LENS_BATCH, tokens.length), total: tokens.length, held });
   }
-  return { chain, held, calls, scanned: tokens.length, hinted };
+  return {
+    chain, held, calls, scanned: tokens.length, hinted, failedCalls: failures.length,
+    // Preserve the existing chain-level error contract only when every call failed.
+    // A partial result remains renderable and reports failedCalls separately.
+    error: successfulCalls ? '' : failures.map(f => `${f.address}: ${f.error.message || f.error}`).join('; '),
+  };
 }
 
 function withTimeout(p, ms, what) {
@@ -3941,6 +3975,7 @@ function updateXChainStatus() {
   else if (XSTATE === 'done' && XLAST) st.textContent =
     `${num(XLAST.holdings)} holding${XLAST.holdings === 1 ? '' : 's'} across ${num(XLAST.answered)} of ${num(XLAST.chains)} chains, over ${num(XLAST.calls)} calls`
     + (XLAST.hinted ? ` · ${num(XLAST.hinted)} hinted first, from ${XLAST.hintSource}` : '')
+    + (XLAST.failedCalls ? ` · ${num(XLAST.failedCalls)} contract call${XLAST.failedCalls === 1 ? '' : 's'} failed; remaining results shown` : '')
     + (XLAST.failed ? ` · ${num(XLAST.failed)} did not answer` : '');
 }
 
@@ -4038,12 +4073,14 @@ async function runXChain() {
   // the hint discloses nothing new.
   const hint = await loadHints().then(m => m.hintFor(addr, true)).catch(() => null);
 
-  // Results are grouped by asset as each enabled chain answers. The status retains
-  // failures so an omitted chain is never indistinguishable from a zero balance.
+  // Results are grouped by asset as each enabled chain answers. A failed contract
+  // call is disclosed separately from a failed chain, because the rest of that
+  // chain's batches remain useful and are rendered.
   const render = () => {
     const failed = done.filter(result => result.error).length;
+    const failedCalls = done.reduce((n, result) => n + (result.failedCalls || 0), 0);
     $('xchain-status').textContent =
-      `${num(done.length)} of ${num(total)} answered${failed ? ` · ${num(failed)} failed` : ''}`;
+      `${num(done.length)} of ${num(total)} answered${failedCalls ? ` · ${num(failedCalls)} contract call${failedCalls === 1 ? '' : 's'} failed` : ''}${failed ? ` · ${num(failed)} chain${failed === 1 ? '' : 's'} failed` : ''}`;
     renderXChainAssets(done);
   };
 
@@ -4055,6 +4092,7 @@ async function runXChain() {
       holdings: done.reduce((n, r) => n + r.held.length, 0),
       answered: done.filter(r => !r.error).length,
       failed: done.filter(r => r.error).length,
+      failedCalls: done.reduce((n, r) => n + (r.failedCalls || 0), 0),
       chains: total,
       calls: done.reduce((n, r) => n + (r.calls || 0), 0),
       hinted: done.reduce((n, r) => n + (r.hinted || 0), 0),
