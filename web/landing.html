@@ -223,6 +223,22 @@
     </div>
   </section>
 
+  <!-- The committed chains, read twice: once from this origin's API and once from
+       the registry itself over a public RPC. The second is the one that matters —
+       it needs nothing from this deployment, so if the two ever disagree it is the
+       chain that is right. Both reads happen at load; nothing here is scripted. -->
+  <section id="committed" class="section">
+    <div class="section-head" style="margin-bottom:var(--space-4)">
+      <h6 style="color:var(--color-accent-700)">Commitments</h6>
+      <h2>Which chains are committed, answered twice</h2>
+      <p class="text-muted" style="max-width:60ch">The daemon will tell you what it has committed. So will the registry, to anyone with an RPC and no access to this server at all. A gateway can withhold an answer; it cannot forge one, and it cannot quietly serve a stale epoch — so the honest way to show the list is to read it both ways and print both.</p>
+    </div>
+    <div id="committed-rows" style="display:grid;gap:2px;background:var(--color-divider);border:2px solid var(--color-divider)">
+      <div style="background:var(--color-bg);padding:var(--space-4)" class="text-muted">Reading…</div>
+    </div>
+    <p class="text-muted" id="committed-note" style="margin:var(--space-3) 0 0;font-size:13px"></p>
+  </section>
+
   <section id="lens" class="section">
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:var(--space-8) var(--space-6)">
       <div style="min-width:0">
@@ -438,7 +454,7 @@ make run        # evmscand against config.demo.yaml — UI at :8080</pre>
 
 <script type="module">
 import {
-  viem, resolveAddress, lens, balances, fmtUnits,
+  viem, resolveAddress, lens, balances, fmtUnits, rpc,
   esc, short, host, num, ADDRESS_RE, DEFAULT_NAME_RPC,
 } from './lensread.js';
 
@@ -466,6 +482,105 @@ const TOKEN_LIST = 'https://tokens.uniswap.org';
 const PUBLIC_RPC = 'https://ethereum-rpc.publicnode.com';
 const NAME_RE = /^[a-z0-9-]+(\.[a-z0-9-]+)+$/i;
 const CHAIN_ID = 1;
+
+// ---------------------------------------------------------------------------
+// The committed chains, read twice.
+//
+// Through the API, because that is one request and this origin already knows.
+// And straight off the registry with an eth_call, because that read needs nothing
+// from this deployment — not the daemon, not the gateway, not this page's origin.
+// The second is the one worth trusting, and printing them side by side is the only
+// honest way to say so: if they disagree, the chain is right.
+//
+// `latestFinalizedEpoch(chainId)` returns (found, epochId, Epoch). Only `found` and
+// `epochId` are decoded here; the struct after them is a dynamic tail this section
+// has no use for.
+// ---------------------------------------------------------------------------
+const REGISTRY_RPCS = {
+  1: 'https://ethereum-rpc.publicnode.com',
+  8453: 'https://mainnet.base.org',
+  11155111: 'https://ethereum-sepolia-rpc.publicnode.com',
+};
+
+async function committedDirect(rpcUrl, registry, chainId) {
+  const v = await viem();
+  const data = v.encodeFunctionData({
+    abi: [{
+      type: 'function', name: 'latestFinalizedEpoch', stateMutability: 'view',
+      inputs: [{ name: 'chainId', type: 'uint64' }],
+      outputs: [{ name: 'found', type: 'bool' }, { name: 'epochId', type: 'uint256' }],
+    }],
+    functionName: 'latestFinalizedEpoch',
+    args: [BigInt(chainId)],
+  });
+  const out = await rpc(rpcUrl, 'eth_call', [{ to: registry, data }, 'latest']);
+  const body = String(out).slice(2);
+  if (body.length < 128) throw new Error('short reply');
+  const found = BigInt('0x' + body.slice(0, 64)) === 1n;
+  const epochId = BigInt('0x' + body.slice(64, 128));
+  return { found, epochId };
+}
+
+async function renderCommitted() {
+  const rows = document.getElementById('committed-rows');
+  const note = document.getElementById('committed-note');
+  const section = document.getElementById('committed');
+  let status;
+  try {
+    status = await fetch(API + '/v1/status').then(r => r.ok ? r.json() : Promise.reject(new Error(String(r.status))));
+  } catch (e) {
+    section.hidden = true;
+    return;
+  }
+  const reg = status.registry || {};
+  if (!reg.address || !reg.chain_id) { section.hidden = true; return; }
+  const rpcUrl = REGISTRY_RPCS[Number(reg.chain_id)];
+  const indexed = (status.chains || []).map(c => Number(c.chain_id)).filter(Boolean);
+
+  const out = [];
+  for (const chainId of indexed) {
+    // The API's answer: the newest epoch this deployment believes is finalized.
+    let apiEpoch = null;
+    try {
+      const eps = await fetch(API + `/v1/epochs?chain_id=${chainId}`).then(r => r.ok ? r.json() : null);
+      // The list is newest first, and `status` is the local record — the list view
+      // leaves `onchain_status` null. Take the newest finalized row rather than the
+      // largest on-chain id: rows committed to a registry this deployment has since
+      // moved off keep their old ids, and one of those is higher than the current
+      // registry's first epoch.
+      apiEpoch = (eps && eps.epochs || []).find(e =>
+        e.status === 'finalized' && e.onchain_epoch_id !== null && e.onchain_epoch_id !== undefined) || null;
+    } catch { /* the API is allowed to be down; the chain still answers */ }
+
+    let direct = null, directErr = '';
+    if (rpcUrl) {
+      try { direct = await committedDirect(rpcUrl, reg.address, chainId); }
+      catch (e) { directErr = e.message || 'no answer'; }
+    } else {
+      directErr = `no public RPC configured for chain ${reg.chain_id}`;
+    }
+
+    const name = (status.chains || []).find(c => Number(c.chain_id) === chainId)?.name || `chain ${chainId}`;
+    const apiTxt = apiEpoch ? `epoch ${num(apiEpoch.onchain_epoch_id)}` : 'nothing finalized';
+    const dirTxt = direct ? (direct.found ? `epoch ${num(direct.epochId)}` : 'nothing finalized') : `— ${esc(directErr)}`;
+    const agree = direct && (direct.found
+      ? (apiEpoch && String(direct.epochId) === String(apiEpoch.onchain_epoch_id))
+      : !apiEpoch);
+    out.push(
+      '<div style="background:var(--color-bg);padding:var(--space-4);display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:var(--space-3) var(--space-4)">' +
+        '<div><h5 style="margin:0 0 3px">' + esc(name) + '</h5><span class="text-muted" style="font-size:12.5px;font-variant-numeric:tabular-nums">chain ' + chainId + (agree ? ' · both agree' : direct ? ' · they differ' : '') + '</span></div>' +
+        '<div><span class="text-muted" style="font-size:12px;text-transform:uppercase;letter-spacing:.04em">through the API</span><div style="font-size:13.5px">' + esc(apiTxt) + '</div><div class="text-muted" style="font-size:12px;word-break:break-all">GET /v1/epochs — this origin sees the request</div></div>' +
+        '<div><span class="text-muted" style="font-size:12px;text-transform:uppercase;letter-spacing:.04em">straight off the registry</span><div style="font-size:13.5px">' + esc(dirTxt) + '</div><div class="text-muted" style="font-size:12px;word-break:break-all">eth_call · ' + esc(rpcUrl ? host(rpcUrl) : '—') + ' · nothing from this server</div></div>' +
+      '</div>');
+  }
+  rows.innerHTML = out.join('') ||
+    '<div style="background:var(--color-bg);padding:var(--space-4)" class="text-muted">This deployment indexes no chains yet.</div>';
+  note.innerHTML = 'Registry <code style="word-break:break-all">' + esc(reg.address) + '</code> on chain ' + esc(String(reg.chain_id)) +
+    '. The direct column is <code>latestFinalizedEpoch(chainId)</code> called from your browser against a public endpoint — ' +
+    'no key, no account, and nothing this deployment can influence.';
+}
+
+renderCommitted();
 
 const card = document.getElementById('lookup-card');
 
