@@ -32,6 +32,14 @@
 //	    -request 0xToken:20:8000000:5000000000000000
 //
 //	evmscan-deploy -node https://... -key 0x... -registry 0x... -fund 0xToken:1000000000000000
+//
+// -request, -fund and -vote all name an asset, and an asset key is (chain id,
+// token address) where the chain id is the one the *token* lives on. That is the
+// node's chain only when the registry sits on the chain being indexed. A split
+// deployment — mainnet index, registry somewhere cheaper — must say so:
+//
+//	evmscan-deploy -node https://<sepolia> -key 0x... -registry 0x... \
+//	    -index-chain 1 -request 0xMainnetToken:20:<mainnet block>:<wei>
 package main
 
 import (
@@ -70,7 +78,7 @@ type opts struct {
 	requests, funds     []string
 	gateways            []string
 	votes               []string
-	voteChain           uint64
+	indexChain          uint64
 	transferOwner       string
 	acceptOwner         bool
 }
@@ -97,10 +105,16 @@ func main() {
 	minFund := flag.String("min-funding", "0", "minimum requestIndexing deposit above the bond, in wei")
 	reward := flag.String("reward-per-block", "0", "paid to a publisher per newly covered block of a funded asset, in wei")
 	flag.DurationVar(&o.timeout, "timeout", 3*time.Minute, "how long to wait for each receipt")
-	flag.Var(&requests, "request", "requestIndexing as token:kind:fromBlock:valueWei (repeatable)")
-	flag.Var(&funds, "fund", "fundAsset for a token on this chain as token:valueWei (repeatable)")
-	flag.Var(&votes, "vote", "vote for a token to be indexed (repeatable); the token lives on -vote-chain")
-	flag.Uint64Var(&o.voteChain, "vote-chain", 0, "chain id the -vote tokens live on (default: the node's chain)")
+	flag.Var(&requests, "request", "requestIndexing as token:kind:fromBlock:valueWei (repeatable); the token lives on -index-chain")
+	flag.Var(&funds, "fund", "fundAsset as token:valueWei (repeatable); the token lives on -index-chain")
+	flag.Var(&votes, "vote", "vote for a token to be indexed (repeatable); the token lives on -index-chain")
+	// Every asset identifier below names the chain the *token* lives on, which a
+	// split deployment reaches over a different RPC than the registry: the index is
+	// mainnet's, the registry is on Sepolia, and only the transaction's destination
+	// is the registry's chain. Defaulting this to the node's chain is right for a
+	// same-chain deployment and silently wrong for a split one, which is why it is
+	// printed rather than assumed.
+	flag.Uint64Var(&o.indexChain, "index-chain", 0, "chain id the -request / -fund / -vote tokens live on (default: the node's chain)")
 	flag.StringVar(&o.transferOwner, "transfer-owner", "", "start rotating the arbiter of an existing registry to this address (Ownable2Step step one, sent by the current owner)")
 	flag.BoolVar(&o.acceptOwner, "accept-owner", false, "finish a rotation: acceptOwnership on an existing registry, sent by the pending owner")
 	flag.Var(&gateways, "gateway", "ERC-3668 gateway URL template for contractsOf, e.g. https://host/ccip/{sender}/{data}.json (repeatable; set at deployment, or replaces the list on an existing local-arbiter registry)")
@@ -268,12 +282,24 @@ func run(ctx context.Context, o opts) error {
 		}
 	}
 
+	// An asset key names the chain the token lives on, not the chain this
+	// transaction is sent to. They are the same thing only in a same-chain
+	// deployment; get it backwards in a split one and the funding buys a key
+	// nothing can ever cover, which no call refunds.
+	indexChain := o.indexChain
+	if indexChain == 0 {
+		indexChain = chainID
+	}
+	if len(o.requests)+len(o.funds)+len(o.votes) > 0 && indexChain != chainID {
+		fmt.Printf("index chain %d (tokens live there; the registry is on %d)\n", indexChain, chainID)
+	}
+
 	for _, spec := range o.requests {
 		token, kind, from, value, err := parseRequest(spec)
 		if err != nil {
 			return err
 		}
-		data, err := regABI.Pack("requestIndexing", chainID, token, kind, from)
+		data, err := regABI.Pack("requestIndexing", indexChain, token, kind, from)
 		if err != nil {
 			return fmt.Errorf("pack requestIndexing: %w", err)
 		}
@@ -283,12 +309,6 @@ func run(ctx context.Context, o opts) error {
 	}
 
 	if len(o.votes) > 0 {
-		// A vote names the chain the tokens live on, which is the indexed chain and
-		// not necessarily this one — the same footgun requestIndexing has.
-		voteChain := o.voteChain
-		if voteChain == 0 {
-			voteChain = chainID
-		}
 		tokens := make([]common.Address, 0, len(o.votes))
 		for _, v := range o.votes {
 			if !common.IsHexAddress(v) {
@@ -296,11 +316,11 @@ func run(ctx context.Context, o opts) error {
 			}
 			tokens = append(tokens, common.HexToAddress(v))
 		}
-		data, err := regABI.Pack("vote", voteChain, tokens)
+		data, err := regABI.Pack("vote", indexChain, tokens)
 		if err != nil {
 			return fmt.Errorf("pack vote: %w", err)
 		}
-		if err := send(ctx, sub, registry, nil, data, fmt.Sprintf("vote (%d tokens on chain %d)", len(tokens), voteChain)); err != nil {
+		if err := send(ctx, sub, registry, nil, data, fmt.Sprintf("vote (%d tokens on chain %d)", len(tokens), indexChain)); err != nil {
 			return err
 		}
 	}
@@ -315,7 +335,7 @@ func run(ctx context.Context, o opts) error {
 		if !ok {
 			return fmt.Errorf("bad -fund value %q", parts[1])
 		}
-		data, err := regABI.Pack("fundAsset", [32]byte(hintreg.AssetKey(chainID, token)))
+		data, err := regABI.Pack("fundAsset", [32]byte(hintreg.AssetKey(indexChain, token)))
 		if err != nil {
 			return fmt.Errorf("pack fundAsset: %w", err)
 		}
