@@ -375,33 +375,64 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 
 // publisherLoop keeps commitments moving through their lifecycle.
 //
-// On start it resumes any submission the previous process left waiting. Then, if
-// auto-publish is on, each tick: settle what is still pending, finalize what is past
-// its challenge window, claim the coverage reward on what has finalized (which is
-// what pays the publisher back), and post a new commitment only when the index or
-// its coverage has actually changed and the registry says it is worth posting.
+// The lifecycle has two halves and they do not want the same cadence. Settling —
+// resuming a submission whose receipt was never recorded, finalizing what is past
+// its challenge window, claiming the coverage that finalizing made claimable — is
+// cheap and idempotent: when nothing is due it sends nothing and costs nothing.
+// Building a commitment is the expensive half, in gas and in the leaf rows an epoch
+// writes, which is what auto_publish_interval is actually sized against.
+//
+// Running both on the publish interval makes the challenge window decorative: a
+// 600-second window settled by an hourly tick leaves a commitment proposed for the
+// rest of the hour, and nothing reads as committed until it is finalized. So
+// settling runs on the registry's sync interval and building on its own.
 func publisherLoop(ctx context.Context, p *hintreg.Publisher, set *chainset.Set, cfg *config.Config, log *slog.Logger) {
-	for _, id := range set.IDs() {
-		if _, err := p.ResumePending(ctx, id); err != nil && ctx.Err() == nil {
-			log.Error("resume pending submissions failed", "chain_id", id, "err", err)
+	// Both halves send from the same EOA, and an EOA has one nonce, so they take
+	// turns rather than overlap. Settling is short; building is not, which is
+	// exactly why the settle ticker exists — but a settle that starts mid-build
+	// would pick a nonce the build is already using.
+	var sending sync.Mutex
+	settle := func() {
+		sending.Lock()
+		defer sending.Unlock()
+		for _, id := range set.IDs() {
+			settleTick(ctx, p, id, log)
 		}
 	}
+	settle()
 	if cfg.Registry.AutoPublishInterval <= 0 {
 		return
 	}
+
+	settleEvery := cfg.Registry.SyncInterval.D()
+	if settleEvery <= 0 || settleEvery > cfg.Registry.AutoPublishInterval.D() {
+		settleEvery = cfg.Registry.AutoPublishInterval.D()
+	}
+	st := time.NewTicker(settleEvery)
+	defer st.Stop()
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-st.C:
+				settle()
+			}
+		}
+	}()
 
 	t := time.NewTicker(cfg.Registry.AutoPublishInterval.D())
 	defer t.Stop()
 
 	for {
-		// Settle before waiting, not after. A ticker does not fire until a full
-		// interval has passed, so waiting first means every restart postpones
-		// finalizing and claiming by the whole interval — and a deployment that
-		// restarts more often than the interval would never settle anything at all.
-		// Everything in a tick is idempotent: nothing is due, nothing is sent.
+		// Build before waiting, not after. A ticker does not fire until a full
+		// interval has passed, so waiting first means every restart postpones the
+		// first commitment by the whole interval.
+		sending.Lock()
 		for _, id := range set.IDs() {
-			publishTick(ctx, p, id, cfg.Registry.CommitmentURI, log)
+			buildTick(ctx, p, id, cfg.Registry.CommitmentURI, log)
 		}
+		sending.Unlock()
 
 		select {
 		case <-ctx.Done():
@@ -411,22 +442,31 @@ func publisherLoop(ctx context.Context, p *hintreg.Publisher, set *chainset.Set,
 	}
 }
 
-func publishTick(ctx context.Context, p *hintreg.Publisher, chainID uint64, uri string, log *slog.Logger) {
+// settleTick moves this publisher's existing commitments along and reports how many
+// submissions are still in flight. Publishing is only half of the loop: a commitment
+// stays challengeable, and its bond stays locked, until someone settles it. In oracle
+// mode this is also what settles the assertion.
+func settleTick(ctx context.Context, p *hintreg.Publisher, chainID uint64, log *slog.Logger) int {
 	pending, err := p.ResumePending(ctx, chainID)
 	if err != nil {
-		log.Error("resume pending submissions failed", "chain_id", chainID, "err", err)
-		return
+		if ctx.Err() == nil {
+			log.Error("resume pending submissions failed", "chain_id", chainID, "err", err)
+		}
+		// Unknown rather than zero: a caller that reads this as "nothing in flight"
+		// would build a second commitment on top of one it failed to look at.
+		return 1
 	}
-	// Publishing is only half of the loop: a commitment stays challengeable, and its
-	// bond stays locked, until someone settles it. In oracle mode this is also what
-	// settles the assertion.
 	if _, err := p.FinalizeDue(ctx, chainID); err != nil && ctx.Err() == nil {
 		log.Error("finalize failed", "chain_id", chainID, "err", err)
 	}
 	if _, err := p.ClaimDue(ctx, chainID); err != nil && ctx.Err() == nil {
 		log.Error("claim coverage reward failed", "chain_id", chainID, "err", err)
 	}
-	if pending > 0 {
+	return pending
+}
+
+func buildTick(ctx context.Context, p *hintreg.Publisher, chainID uint64, uri string, log *slog.Logger) {
+	if pending := settleTick(ctx, p, chainID, log); pending > 0 {
 		log.Info("submission still in flight; not building another", "chain_id", chainID, "pending", pending)
 		return
 	}
