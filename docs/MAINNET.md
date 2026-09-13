@@ -399,7 +399,60 @@ hold, the key can write the checkpoint and nothing else on the name.
 Done 2026-09-13: sender `0x14FafAc780CB30024B309Fa12e059EFE04A3e9a6`, funded with
 0.1 Sepolia ETH from the publisher, grant tx
 `0xbbb1c34a4e41d5e6a56c29b2b2de7f837e34ee03119cfa01350eb47058f6b618`. Estimated
-`setText` gas is 136,358 against the profile's `max_gas: 300000` cap.
+`setText` gas is 136,358 against the profile's `max_gas: 300000` cap. The record
+on `5can.eth` read `evmscan:states:1:0x8ce5…3719` within a tick of the first boot.
+
+**Getting the first epoch onto a fresh registry.** Two things stop it, both of
+which look like bugs and are not.
+
+*Nothing is funded.* A registry knows about no assets until somebody pays, and
+`Publisher.Build` refuses to store an epoch worth less than
+`min_expected_reward_wei`, so a fresh registry publishes nothing at all until a
+`requestIndexing` lands on it. Hand-promoted assets carry no funding and do not
+count. Note the `-index-chain`: an asset key names the chain the **token** lives
+on, and the tool defaults it to the node's chain, which is the registry's.
+
+```bash
+./bin/evmscan-deploy -node https://ethereum-sepolia-rpc.publicnode.com \
+  -key 0x<publisher key> -registry 0x1751707400E7287C4dA4e0c5032cE8803B2B14f1 \
+  -index-chain 1 \
+  -request 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48:20:<block above history_floor>:20000000000000000
+```
+
+*The chain is not trusted.* `chains.trust` lives in the database and outlives the
+config, so a chain that has been reached over a third-party RPC in the past stays
+`unverified` even once it is served by loopback Helios, and `Build` refuses with
+`ErrUntrusted` — a bond is money staked on logs we did not verify. Read it back
+and promote it deliberately:
+
+```bash
+curl https://<domain>/v1/chains                      # trust: unverified, node_local: true
+curl -XPATCH -H "Authorization: Bearer $EVMSCAN_API_TOKEN" \
+  https://<domain>/v1/chains/1 -d '{"trust":"verified"}'
+```
+
+Then publish, and read the result off the **registry**, not the daemon:
+
+```bash
+curl -XPOST -H "Authorization: Bearer $EVMSCAN_API_TOKEN" \
+  https://<domain>/v1/epochs -d '{"chain_id":1,"publish":true,"force":true}'
+cast call --rpc-url <sepolia> 0x1751… "epochCount()(uint256)"        # 1
+cast call --rpc-url <sepolia> 0x1751… "latestFinalizedEpoch(uint64)" 1   # found after the window
+```
+
+First epoch: local id 8, on-chain id 0, tx
+`0x4aff672118bcc46aefcfc0153a0493389b75a2068421386d5ce4306bfab5b8d0`, 1,938,863
+leaves, expected reward 742,670,000,000,000 wei.
+
+**A note on Sepolia RPCs.** The follower makes `eth_getLogs` calls that name many
+addresses at once, and free Sepolia endpoints disagree about that. publicnode
+refuses an address-less or wide request (`Request blocked`) but serves every
+`eth_call` and every send this deployment needs; Tenderly's public gateway is the
+only free endpoint that answers the wide form and it rate-limits the daemon into
+429s on the registry sync, the state tick and the follower alike. publicnode is
+the one configured. Its `getLogs` refusals here are for ~89 stale Sepolia asset
+rows left in the database by an older deployment, which this profile does not
+index; marking them `revoked` stops the noise, since `ListCursors` skips revoked.
 
 ## 7. Seed it and test the whole loop
 
