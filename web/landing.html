@@ -185,8 +185,10 @@
   <section id="lookup" class="section">
     <div class="section-head">
       <h2>The read, end to end</h2>
-      <p class="text-muted" style="max-width:60ch">This one is live, against mainnet. A hex address is checksum-checked, a name is normalised and resolved in your tab. Then pick who answers: the index, which already knows where to look and costs one request — or nothing but your own RPC, which costs twenty-one and tells no indexer who you are. Every call either way is printed on the right, with the host that saw it.</p>
-      <p class="text-muted" style="max-width:60ch;font-size:13.5px">This card reads one address on one chain, to show what the two paths cost. <a href="index.html">The app</a> is the same read with the rest of it attached — every chain at once, prices, what the index has committed for the account, and a signed verdict on what it got right.</p>
+      <div style="max-width:60ch;min-width:0;display:flex;flex-direction:column;gap:var(--space-3)">
+      <p class="text-muted">This one is live, against mainnet. A hex address is checksum-checked, a name is normalised and resolved in your tab. Then pick who answers: the index, which already knows where to look and costs one request — or nothing but your own RPC, which costs twenty-one and tells no indexer who you are. Every call either way is printed on the right, with the host that saw it.</p>
+      <p class="text-muted" style="font-size:13.5px">This card reads one address on one chain, to show what the two paths cost. <a href="index.html">The app</a> is the same read with the rest of it attached — every chain at once, prices, what the index has committed for the account, and a signed verdict on what it got right.</p>
+      </div>
     </div>
     <div id="lookup-card"></div>
   </section>
