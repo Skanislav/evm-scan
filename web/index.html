@@ -866,9 +866,9 @@
       <details class="verdict-bar" id="portable-state-card" hidden>
         <summary>Portable wallet memory · public, signed, recoverable</summary>
         <p class="hint">Keep your verdicts and remembered assets on this server and in a downloadable backup. Publishing makes the list and your preferences public. The indexer may include your signed state in its ENS checkpoint. A hash cannot restore a missing backup.</p>
-        <p class="hint">ENSv2 Sepolia checkpoints. Your RPC sees the name being read. Publishing from your wallet costs Sepolia ETH. The operator checkpoint is a separate batch. Both halves below read these two.</p>
+        <p class="hint">ENSv2 Sepolia checkpoints. Your RPC sees the name being read. Publishing from your wallet costs Sepolia ETH. The operator checkpoint is a separate batch. Both halves below read these two; the endpoint defaults to the one viem's chain catalog names, and you can replace it.</p>
         <div class="row" style="gap:8px">
-          <input class="input" id="state-rpc" placeholder="Your Sepolia RPC URL" spellcheck="false">
+          <input class="input" id="state-rpc" placeholder="Sepolia RPC (viem's public endpoint by default)" spellcheck="false">
           <input class="input" id="state-ens-name" placeholder="Your ENSv2 Sepolia name" spellcheck="false">
         </div>
 
@@ -1637,6 +1637,7 @@ function openStateCard() {
   card.hidden = false;
   card.open = true;
   $('state-optin').checked = true;
+  fillSepoliaRPC();
   card.scrollIntoView({ block: 'center', behavior: 'smooth' });
 }
 document.addEventListener('click', (e) => {
@@ -3962,6 +3963,9 @@ function discoveredChainIDs() {
   if (WALLET_CHAIN) add(WALLET_CHAIN);
   for (const asset of (V2_DISCOVERED || [])) add(asset.chainId);
   for (const asset of ((ASSET_COMMIT && ASSET_COMMIT.assets) || [])) add(asset.chain_id);
+  // The signed snapshot names every chain the account committed to, whether it came
+  // from this server or was restored from the record on chain — both land here.
+  for (const entry of ((PORTABLE && PORTABLE.entries) || [])) add(entry.chain_id);
   return [...ids];
 }
 
@@ -5923,11 +5927,32 @@ const STATE_RESOLVER_ABI = [
     outputs: [],
   },
 ];
+const SEPOLIA_CHAIN_ID = 11155111;
+
+// The RPC field is an override, not a prerequisite: viem's chain catalog already
+// names a public Sepolia endpoint, so a reader with no preference gets a working one
+// — and sees which host it is in the field before anything is sent to it. A typed
+// value, or one saved for this chain, still wins.
+async function sepoliaRPC() {
+  const typed = $("state-rpc").value.trim();
+  if (typed) return typed;
+  const chains = await allChains().catch(() => []);
+  return rpcForChain(SEPOLIA_CHAIN_ID, chains.find(c => c.id === SEPOLIA_CHAIN_ID)).url;
+}
+
+async function fillSepoliaRPC() {
+  try {
+    if ($("state-rpc").value.trim()) return;
+    const url = await sepoliaRPC();
+    if (url && !$("state-rpc").value.trim()) $("state-rpc").value = url;
+  } catch { /* the catalog is a convenience; typing one still works */ }
+}
+
 async function stateENS(name, key) {
   const c = await stateCode(),
     v = c.v,
-    url = $("state-rpc").value.trim();
-  if (!url) throw Error("Enter your Sepolia RPC URL");
+    url = await sepoliaRPC();
+  if (!url) throw Error("No Sepolia endpoint: type one above");
   if (BigInt(await rpc(url, "eth_chainId", [])) !== 11155111n)
     throw Error("ENS state checkpoints require Sepolia");
   const norm = normalizeName(name);
