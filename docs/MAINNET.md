@@ -506,15 +506,57 @@ once `hints.5can.eth` is bound every account already resolves —
 and no gas spent per account. There is no onboarding step to sponsor because there
 is no onboarding step.
 
-**What cannot be sponsored.** Pointing a name the *reader* owns at this resolver is
-a different matter: `ETHRegistry.setSubregistry` and `setResolver` are gated on the
-owner or an operator approved through `setApprovalForAll`, and the registry carries
-no `permit`, no `DOMAIN_SEPARATOR`, no `eip712Domain` and no ERC-2771 forwarder. A
-signature therefore cannot authorize anyone to act for a name owner on the ENSv2
-beta. The cheapest honest flow is one transaction from the reader —
-`setApprovalForAll(<publisher>, true)` — after which everything else can be
-relayed and paid for by the publisher, the way `POST /v1/demand/relay` already
-carries a signed vote.
+**What cannot be sponsored.** Pointing a name the *reader already owns* at this
+resolver is a different matter: `ETHRegistry.setSubregistry` and `setResolver` are
+gated on the owner or an operator approved through `setApprovalForAll`, and the
+registry carries no `permit`, no `DOMAIN_SEPARATOR`, no `eip712Domain` and no
+ERC-2771 forwarder. A signature therefore cannot authorize anyone to act for a name
+owner on the ENSv2 beta; that needs one transaction from the reader,
+`setApprovalForAll(<publisher>, true)`, before anything else can be relayed.
+
+### 6h. A readable name, signed by the reader and paid for here
+
+The wildcard gives every account a name and it is forty hex characters.
+`HintAliasResolver` is `HintResolver` plus one mapping, so `alice.hints.5can.eth`
+resolves beside `<hex>.hints.5can.eth`, and — this is the point — **the claim is an
+EIP-712 signature rather than a transaction**, so a wallet with no Sepolia ETH can
+publish its own name. `claimFor` may be sent by anyone; the contract recovers the
+signer; the carrier is nobody and is recorded nowhere. `POST /v1/names` is what
+carries it, with the publisher's key, allowlisted in `guarded()` beside
+`/v1/demand/relay` for the same reason: the credential is the reader's signature,
+and an operator token would only stop readers.
+
+Deploy it, repoint the label (a strict widening — it answers every name the plain
+resolver does), and tell the daemon:
+
+```bash
+./bin/evmscan-ens deploy-resolver -alias -node <sepolia> -key 0x<key> \
+  -registry 0x1751707400E7287C4dA4e0c5032cE8803B2B14f1 -chain-id 1
+./bin/evmscan-ens attach -node <sepolia> -key 0x<key> -name 5can.eth -label hints \
+  -resolver 0x<from above> -eth-registry 0xBDC8… -factory 0x10dc… -impl 0x624a…
+# then EVMSCAN_ENS_NAME_RESOLVER=0x<from above> and redeploy
+```
+
+Live: `0xFe63a912172a44C3A8278EDF57A2BdeA5077394a`. Proven end to end on 2026-09-13
+with a key that never held a wei: it signed, `POST /v1/names` (no bearer token) paid
+for tx `0x37a35a11b783af2509c60698649cb5dd3fa24c8ddc07ecb67e0d4adf337ce213`, and the
+canonical Universal Resolver then answered `addr(alice.hints.5can.eth)` with that
+account while its balance stayed zero.
+
+**What a claim does not buy.** A signature proves the claimant controls the address
+and says exactly nothing about the label. Names are first come, first served, and
+neither the contract nor this deployment has any opinion about whether the holder of
+`alice` is Alice — so nothing may read a claimed name as identity. What it cannot do
+was checked against the live deployment: a second account's well-formed signature for
+a held label is refused in simulation, before any gas, and a second claim from the
+same account inside ten minutes is refused before that. A label that parses as hex is
+refused outright, which is what keeps the two namespaces from colliding: the hex name
+always belongs to the account whose address it spells.
+
+Labels are lowercase ASCII letters, digits and inner hyphens, three to sixty-three
+characters. That is narrower than ENS allows on purpose — this contract cannot run
+ENSIP-15, and a label it cannot normalise is one that could resolve differently in
+two clients.
 
 ## 7. Seed it and test the whole loop
 

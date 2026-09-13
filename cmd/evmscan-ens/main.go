@@ -197,6 +197,10 @@ func deployResolver(ctx context.Context, args []string) error {
 	c.bind(fs)
 	registryHex := fs.String("registry", "", "HintRegistry the resolver answers from")
 	defaultChain := fs.Uint64("chain-id", 0, "chain the index is about (default: the node's own chain)")
+	// HintAliasResolver is HintResolver plus claimed labels; it answers every name
+	// the plain one does, so there is no reason to run both and repointing the label
+	// at it is a strict widening.
+	alias := fs.Bool("alias", false, "deploy HintAliasResolver: the same records, plus labels an account can claim by signature")
 	_ = fs.Parse(args)
 
 	registry, err := address("-registry", *registryHex)
@@ -228,7 +232,11 @@ func deployResolver(ctx context.Context, args []string) error {
 		fmt.Println("note: the registry advertises no gateways yet; evmscan.contracts will not resolve until it does")
 	}
 
-	art, err := contracts.Load("HintResolver")
+	which := "HintResolver"
+	if *alias {
+		which = "HintAliasResolver"
+	}
+	art, err := contracts.Load(which)
 	if err != nil {
 		return err
 	}
@@ -250,7 +258,7 @@ func deployResolver(ctx context.Context, args []string) error {
 		return err
 	}
 	if r.Status != types.ReceiptStatusSuccessful {
-		return errors.New("HintResolver deployment reverted")
+		return errors.New(which + " deployment reverted")
 	}
 	resolver := r.ContractAddress
 	fmt.Printf("resolver   %s\n", resolver.Hex())
