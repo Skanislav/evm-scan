@@ -306,7 +306,16 @@ shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module 
   interpolated into markup goes through `esc()`. `landing.html` is the project's
   front door at `/landing.html` — a self-contained explainer page (hero, the live
   lookup, AssetLens, architecture, the API table, running costs) in a separate
-  visual language from the app, linked from nowhere in the nav. Its lookup card is
+  visual language from the app. **landing explains, index shows it running**, and
+  that is the rule that keeps them from duplicating: an argument is made once on
+  landing and linked from the beat that runs it, a live or instrumented reading is
+  made once on index and linked from the landing section that describes it. The two
+  pages reference each other in both directions — landing's nav and footer to
+  `index.html`, index's nav and footer to `landing.html`, plus section-to-beat links
+  (`#architecture`→`#beat4`, `#storage`/`#names`→`#beat5`, `#lens`/`#storage` back the
+  other way) — so a figure that appears on both is a bug. The measured filter and
+  storage sizes live on landing `#storage` only; the app links to them rather than
+  restating them, because a second copy goes stale at a different rate. Its lookup card is
   **live and mainnet-only**, and the reader picks who answers: *through the index*
   is one `GET /v1/accounts/{addr}` to this origin, which returns the contracts,
   balances, prices and `committed` in one response and sees the address; *browser

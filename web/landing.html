@@ -88,6 +88,9 @@
   .nav-brand { font-family: var(--font-heading); font-weight: 800; font-size: 20px; letter-spacing: -0.02em; margin-right: auto; }
   .nav a { color: inherit; font-size: 14px; }
   .nav a:hover { color: var(--color-accent-700); text-decoration: none; }
+  /* .nav a is more specific than .btn-primary, so the filled button in the nav
+     would otherwise inherit the body colour and lose its contrast. */
+  .nav a.btn-primary, .nav a.btn-primary:hover { color: #fff; }
 
   .table { width: 100%; border-collapse: collapse; font-size: 14px; }
   .table th {
@@ -158,7 +161,8 @@
     <a href="#architecture">Architecture</a>
     <a href="#storage">Storage</a>
     <a href="#api">API</a>
-    <a class="btn btn-secondary" href="https://github.com/Skanislav/evm-scan" style="margin-left:var(--space-2)">GitHub</a>
+    <a class="btn btn-primary" href="index.html" style="margin-left:var(--space-2)">Open the app</a>
+    <a class="btn btn-secondary" href="https://github.com/Skanislav/evm-scan">GitHub</a>
   </nav>
 
   <header style="padding:var(--space-8) 0 var(--space-6);display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:var(--space-8) var(--space-6);align-items:end">
@@ -182,6 +186,7 @@
     <div class="section-head">
       <h2>The read, end to end</h2>
       <p class="text-muted" style="max-width:60ch">This one is live, against mainnet. A hex address is checksum-checked, a name is normalised and resolved in your tab. Then pick who answers: the index, which already knows where to look and costs one request — or nothing but your own RPC, which costs twenty-one and tells no indexer who you are. Every call either way is printed on the right, with the host that saw it.</p>
+      <p class="text-muted" style="max-width:60ch;font-size:13.5px">This card reads one address on one chain, to show what the two paths cost. <a href="index.html">The app</a> is the same read with the rest of it attached — every chain at once, prices, what the index has committed for the account, and a signed verdict on what it got right.</p>
     </div>
     <div id="lookup-card"></div>
   </section>
@@ -197,7 +202,7 @@
         <h2 style="letter-spacing:-0.02em;margin-bottom:var(--space-4)">The index, readable as a name</h2>
         <p style="font-size:15px;line-height:1.6;max-width:48ch">The committed index is served as ENS text records through an ENSIP-10 wildcard resolver, so <strong>every account already has a name</strong> — nobody registers one. Ask any ENS client for <code style="font-size:13px;background:var(--color-surface);padding:1px 5px">evmscan.contracts</code> and the resolver reverts <code style="font-size:13px;background:var(--color-surface);padding:1px 5px">OffchainLookup</code> at the registry's own gateway; the callback hands the answer back to the registry, which checks it against the latest finalized root. A gateway can withhold an answer. It cannot forge one.</p>
         <p style="font-size:15px;line-height:1.6;max-width:48ch">Forty hex characters is a name nobody reads, so an account can point a label at itself. That claim is an EIP-712 signature, not a transaction: a wallet holding mainnet tokens rarely holds gas on the registry's chain, and needing some is where the flow would end. The signature is carried by this deployment, which pays for it and is recorded nowhere.</p>
-        <p style="font-size:15px;line-height:1.6;max-width:48ch;margin-bottom:0"><strong>A name is not an identity.</strong> The signature proves the claimant controls the address and says nothing about the label. Names are first come, first served and nothing here adjudicates them — whatever needs to know who an address belongs to has to check the address against something else.</p>
+        <p style="font-size:15px;line-height:1.6;max-width:48ch;margin-bottom:0"><strong>A name is not an identity.</strong> The signature proves the claimant controls the address and says nothing about the label. Names are first come, first served and nothing here adjudicates them — whatever needs to know who an address belongs to has to check the address against something else. <a href="index.html#beat5">Read a record back against the live root</a>.</p>
       </div>
       <div style="min-width:0;display:flex;flex-direction:column;gap:var(--space-4)">
         <div style="display:grid;gap:2px;background:var(--color-divider);border:2px solid var(--color-divider)">
@@ -295,7 +300,7 @@
   <section id="architecture" class="section">
     <div class="section-head">
       <h2>Architecture</h2>
-      <p class="text-muted" style="max-width:56ch">Discovery is wide and shallow; indexing is narrow and deep. The one query with no address filter only ever writes counters — the per-account index, and any history read, is reserved for promoted contracts. That asymmetry is what lets a single machine watch a whole chain.</p>
+      <p class="text-muted" style="max-width:56ch">Discovery is wide and shallow; indexing is narrow and deep. The one query with no address filter only ever writes counters — the per-account index, and any history read, is reserved for promoted contracts. That asymmetry is what lets a single machine watch a whole chain. <a href="index.html#beat4">Watch it run on this deployment</a>: the live candidate counters, the promotion queue and the two scan cursors per asset.</p>
     </div>
 
     <div class="grid-cards">
@@ -329,7 +334,7 @@
   <section id="storage" class="section">
     <div class="section-head">
       <h2>What it stores, and what it shrinks to</h2>
-      <p class="text-muted" style="max-width:58ch">The index is a rollup, never a log. One row per account per contract, holding the first and last block it was seen at, how many events there were, and which side of them it was on — the events themselves are read, folded in and dropped. Every figure below is measured, not estimated.</p>
+      <p class="text-muted" style="max-width:58ch">The index is a rollup, never a log. One row per account per contract, holding the first and last block it was seen at, how many events there were, and which side of them it was on — the events themselves are read, folded in and dropped. Every figure below is measured, not estimated. The commitments those sixty-four bytes go into, and the command that replays one, are <a href="index.html#beat5">on the app's verify section</a>.</p>
     </div>
 
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:var(--space-6);margin-bottom:var(--space-8)">
@@ -352,11 +357,11 @@
         <div style="display:flex;flex-direction:column">
           <div style="border-top:1px solid var(--color-divider);padding:10px 0;display:flex;gap:var(--space-3);align-items:baseline">
             <span style="font-family:var(--font-heading);font-weight:800;font-size:17px;font-variant-numeric:tabular-nums;min-width:88px">616 MB</span>
-            <span class="text-muted" style="font-size:13px;line-height:1.5">in Postgres — the whole mainnet rollup, 2,088,691 rows</span>
+            <span class="text-muted" style="font-size:13px;line-height:1.5">in Postgres — the whole mainnet rollup, measured at 2,088,691 rows</span>
           </div>
           <div style="border-top:1px solid var(--color-divider);padding:10px 0;display:flex;gap:var(--space-3);align-items:baseline">
-            <span style="font-family:var(--font-heading);font-weight:800;font-size:17px;font-variant-numeric:tabular-nums;min-width:88px">2.1 MB</span>
-            <span class="text-muted" style="font-size:13px;line-height:1.5">as a membership filter a reader can download and query offline</span>
+            <span style="font-family:var(--font-heading);font-weight:800;font-size:17px;font-variant-numeric:tabular-nums;min-width:88px">2.4 MB</span>
+            <span class="text-muted" style="font-size:13px;line-height:1.5">as a membership filter over the index's (account, contract) pairs, downloaded and queried offline</span>
           </div>
           <div style="border-top:1px solid var(--color-divider);padding:10px 0;display:flex;gap:var(--space-3);align-items:baseline">
             <span style="font-family:var(--font-heading);font-weight:800;font-size:17px;font-variant-numeric:tabular-nums;min-width:88px">672 B</span>
@@ -402,15 +407,15 @@
           <tr><td>405 <span class="text-muted">— a curated mainnet token list</span></td>
             <td class="mono" style="font-size:12.5px">710 B</td><td class="mono" style="font-size:12.5px">3,282 B</td>
             <td class="mono" style="font-size:12.5px;color:var(--color-accent-700)"><strong>175 B</strong></td></tr>
-          <tr><td>1,955,720 <span class="text-muted">— every account in the index</span></td>
-            <td class="mono" style="font-size:12.5px;color:var(--color-accent-700)"><strong>2.1 MB</strong></td>
-            <td class="mono" style="font-size:12.5px">15.6 MB</td><td class="mono" style="font-size:12.5px">—</td></tr>
+          <tr><td>2,101,275 <span class="text-muted">— every (account, contract) pair in the index</span></td>
+            <td class="mono" style="font-size:12.5px;color:var(--color-accent-700)"><strong>2.4 MB</strong></td>
+            <td class="mono" style="font-size:12.5px">16.8 MB</td><td class="mono" style="font-size:12.5px">—</td></tr>
         </tbody>
       </table>
     </div>
     <p class="text-muted" style="margin:var(--space-4) 0 0;font-size:12.5px;max-width:76ch;line-height:1.6">The bloom is 175 bytes at every row because it is fixed by construction: it buys its size back in false positives, and at a wallet's scale that is 0.05% — small enough to publish as a single ENS text record, and cheap enough that a false positive costs one <code style="font-size:12px">balanceOf</code> and nothing else. Past a few hundred keys it stops being a filter at all and fuse8's 1.13 bytes per key wins. <strong>None of them is ever trusted.</strong> A filter says where to look; the live read says what is there, and a miss means "not indexed" rather than "no balance".</p>
 
-    <p class="text-muted" style="margin:var(--space-4) 0 0;font-size:12px;max-width:76ch;line-height:1.6">Row counts are this deployment's, from <code style="font-size:11.5px">/v1/status</code>. Table sizes are <code style="font-size:11.5px">pg_total_relation_size</code> after loading the schema in <code style="font-size:11.5px">migrations/0001_init.sql</code> at those counts with random addresses — sequential ones pack a B-tree tighter and would have flattered the index figure by 80 MB. Filter sizes are the byte length of <code style="font-size:11.5px">hintfilter.Build(…).Encode()</code>. The proof length was counted off <code style="font-size:11.5px">/v1/epochs/9/proof</code>, a commitment over 1,943,106 leaves that this deployment has already published. Nothing here is extrapolated from a smaller sample.</p>
+    <p class="text-muted" style="margin:var(--space-4) 0 0;font-size:12px;max-width:76ch;line-height:1.6">Row counts are this deployment's, from <code style="font-size:11.5px">/v1/status</code>. Table sizes are <code style="font-size:11.5px">pg_total_relation_size</code> after loading the schema in <code style="font-size:11.5px">migrations/0001_init.sql</code> at those counts with random addresses — sequential ones pack a B-tree tighter and would have flattered the index figure by 80 MB. Filter sizes are the byte length of <code style="font-size:11.5px">hintfilter.Build(…).Encode()</code>; the index-wide row is the <code style="font-size:11.5px">count</code> and <code style="font-size:11.5px">bytes</code> this deployment publishes at <code style="font-size:11.5px">/v1/hints</code>, so it moves as the index grows while the Postgres table above is pinned to the counts it was measured at. The proof length was counted off <code style="font-size:11.5px">/v1/epochs/9/proof</code>, a commitment over 1,943,106 leaves that this deployment has already published. Nothing here is extrapolated from a smaller sample.</p>
   </section>
 
   <section id="api" class="section">
@@ -451,6 +456,7 @@ make run        # evmscand against config.demo.yaml — UI at :8080</pre>
 
   <footer class="site">
     <span class="brand">evm-scan</span>
+    <a href="index.html">The app</a>
     <a href="https://github.com/Skanislav/evm-scan">GitHub</a>
     <a href="https://github.com/Skanislav/evm-scan/blob/main/docs/CLIENT-SIDE.md">Client-side reads</a>
     <a href="https://github.com/Skanislav/evm-scan/blob/main/docs/TOKENOMICS.md">Tokenomics</a>

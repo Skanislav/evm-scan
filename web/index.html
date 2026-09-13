@@ -721,6 +721,7 @@
     <span class="pill amber" id="pill-epoch" hidden></span>
     <nav class="toplinks">
       <a class="v2-link" id="v2-explain" href="#v2-trail">Read details</a>
+      <a class="v2-link" href="landing.html">How it works</a>
       <a class="v2-link" href="https://github.com/Skanislav/evm-scan" target="_blank" rel="noopener">GitHub</a>
       <a href="#beat5">Verify</a>
       <a href="#beat4">Operator</a>
@@ -1010,6 +1011,7 @@
 <footer class="v2-footer">
   <a class="linkbtn" href="#portable-state-card" data-open-state>Wallet memory</a>
   <a href="#beat4">Operator triage</a>
+  <a href="landing.html">How it works</a>
   <a href="https://github.com/Skanislav/evm-scan" target="_blank" rel="noopener">GitHub</a>
 </footer>
 
@@ -1029,16 +1031,16 @@
       </div>
       <div class="card">
         <div class="ch"><span class="dotc"></span>The balances</div>
-        <div class="cb">Live reads at head through a lens contract that is never deployed — no address to
-          trust, no upgrade key. Never summed from <code>Transfer</code> events, which rebasing and
-          fee-on-transfer tokens make wrong. Point the page at your own RPC and this deployment reads none of it.</div>
+        <div class="cb">Live reads at head through a lens contract that is never deployed, so the whole table
+          above is one call at one block rather than a hundred landing at a hundred. Point the page at your own RPC
+          and this deployment reads none of it. <a href="landing.html#lens">How the lens works</a>.</div>
       </div>
       <div class="card amber">
         <div class="ch"><span class="dotc amber"></span>What is missing</div>
         <div class="cb" id="claim-missing">A snap-synced node serves logs only back to a history floor, so
           anything older is unreadable here and <code>history_complete</code> stays false rather than
-          implying coverage. Contracts nobody promoted are not indexed at all — a miss means "not
-          indexed", never "no balance".</div>
+          implying coverage. Contracts nobody promoted are not indexed at all, and a miss is never read as
+          an empty balance.</div>
       </div>
     </div>
   </div>
@@ -1051,9 +1053,9 @@
       <span class="kicker">04 · The machine</span>
       <span class="sub">the operator's side of the same page — no login, nothing hidden</span>
     </div>
-    <p class="lede">Discovery is wide and cheap; indexing is narrow and expensive. Keeping those apart is
-      what lets one machine watch a whole chain — and it is why a contract has to be <em>promoted</em>
-      before it gets history.</p>
+    <p class="lede">Discovery is wide and shallow; indexing is narrow and deep — which is why a contract has to be
+      <em>promoted</em> before it gets history. Below is that asymmetry running on this deployment;
+      <a href="landing.html#architecture">the architecture page</a> is where it is argued.</p>
 
     <div class="stages" id="stats"><span class="empty mono">loading…</span></div>
     <div class="hint" id="node-note" hidden style="margin:-12px 0 26px; max-width:80ch"></div>
@@ -1241,9 +1243,10 @@
             the <code>.xorf</code>, reads the latest finalized epoch off-chain, fetches the manifest that epoch
             named, and compares. Without that step the on-chain digest is decoration.</p>
           <p style="margin-top:10px">You can go further and rebuild it yourself from the published snapshot — no
-            database, no node. Measured against the hosted mainnet index: 773 948 accounts and 857 417 pairs compile
-            to 974 918 bytes at 1.14 bytes per key, against 50 MB for the gzipped table it came from. Fifty-one
-            times smaller, for the one question a portfolio read actually asks.</p>
+            database, no node — and diff the bytes, because construction is deterministic. What this deployment is
+            serving right now is listed at <code>/v1/hints</code>, with its count, its structure and its digest;
+            what those encodings cost, and why a bloom wins below a few hundred keys where fuse8 wins above, is
+            measured once on <a href="landing.html#storage">the storage page</a>.</p>
           <p class="ceiling" style="margin-top:11px; padding-top:11px; border-top:1px solid var(--line); color:var(--amber-text)">The
             limit is the URI scheme, and it is worth saying out loud: over <code>ipfs://</code> the URI <em>is</em>
             the content, so the commitment fixes the document; over <code>https://</code> it fixes only the address —
@@ -1252,11 +1255,10 @@
         </div>
         <div class="card">
           <h3>Or read it with no evm-scan code at all</h3>
-          <p>The same answer is an ENS text record and an ERC-3668 gateway response — including
-            <code>evmscan.uri</code>, which hands back the committed pointer verbatim rather than parsing it, because a
-            resolver that picked documents apart would be committing itself to a format it cannot verify. Any viem or
-            ENS client can fetch it; a gateway can withhold an answer but cannot forge one, and cannot serve a stale
-            epoch.</p>
+          <p>The same answer is an ENS text record and an ERC-3668 gateway response, so any viem or ENS client can
+            fetch it without a line of this repo. <code>evmscan.uri</code> hands back the committed pointer verbatim
+            rather than parsing it, because a resolver that picked documents apart would be committing itself to a
+            format it cannot verify. <a href="landing.html#names">What the name is and what it is not</a>.</p>
         </div>
         <div class="card">
           <h3>What we do <em>not</em> claim</h3>
@@ -1888,7 +1890,7 @@ function renderClaims() {
     ? (partial
         ? `History is partial for ${num(partial)} of ${num(ASSETS.length)} indexed assets. `
         : `Every one of the ${num(ASSETS.length)} indexed assets is walked back to the floor. `)
-    : '') + floorNote + ' Contracts nobody promoted are not indexed at all — a miss means "not indexed", never "no balance".';
+    : '') + floorNote + ' Contracts nobody promoted are not indexed at all, and a miss is never read as an empty balance.';
 
   const fromEpoch = fin || EPOCHS[0];
   const acct = WALLET_ADDR || '<0x…>';
