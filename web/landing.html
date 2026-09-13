@@ -1,0 +1,720 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>evm-scan</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;800&display=swap">
+<style>
+  /* Tokens taken from the modernist design system, with the accent ramp
+     resolved to its "emerald" variant ahead of time — this page has no
+     runtime theme switch. */
+  :root {
+    --color-bg: #f3f2f2;
+    --color-surface: #eae9e9;
+    --color-text: #201e1d;
+    --color-divider: color-mix(in srgb, #201e1d 40%, transparent);
+
+    --color-neutral-100: #f8f4f4;
+    --color-neutral-200: #eae7e7;
+    --color-neutral-300: #d7d3d3;
+    --color-neutral-400: #bab6b6;
+    --color-neutral-500: #9b9797;
+    --color-neutral-600: #7d7979;
+    --color-neutral-700: #605d5d;
+    --color-neutral-800: #444141;
+    --color-neutral-900: #2d2b2b;
+
+    --color-accent: oklch(0.55 0.125 156);
+    --color-accent-500: oklch(0.55 0.125 156);
+    --color-accent-600: oklch(0.47 0.115 156);
+    --color-accent-700: oklch(0.44 0.110 156);
+    --color-accent-800: oklch(0.39 0.100 156);
+    --color-accent-2: oklch(0.55 0.125 156);
+    --color-accent-2-700: oklch(0.44 0.110 156);
+
+    --font-heading: "Archivo", system-ui, sans-serif;
+    --font-body: "Archivo", system-ui, sans-serif;
+
+    --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px; --space-6: 24px; --space-8: 32px;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body { background: var(--color-bg); color: var(--color-text); font-family: var(--font-body); font-size: 15px; line-height: 1.55; }
+  h1, h2, h3, h4, h5, h6 { font-family: var(--font-heading); font-weight: 800; line-height: 1.12; letter-spacing: -0.015em; margin: 0 0 var(--space-2); }
+  h1 { font-size: 42px; } h2 { font-size: 32px; } h3 { font-size: 25px; }
+  h4 { font-size: 20px; } h5 { font-size: 16px; }
+  h6 { font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; }
+  p { margin: 0 0 var(--space-3); }
+  a { color: var(--color-accent-700); text-underline-offset: 3px; text-decoration: none; }
+  a:hover { color: var(--color-accent-800); text-decoration: underline; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .text-muted { color: color-mix(in srgb, var(--color-text) 55%, transparent); }
+  :focus { outline: none; }
+  :focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    cursor: pointer; text-decoration: none;
+    font-family: var(--font-heading); font-weight: 800; font-size: 14px; line-height: 1.2;
+    color: var(--color-text); background: transparent; border: 1px solid transparent;
+    padding: var(--space-2) calc(var(--space-3) * 1.2); border-radius: 0;
+  }
+  .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  .btn-primary { background: var(--color-accent-700); color: #fff; }
+  .btn-primary:hover:not(:disabled) { background: var(--color-accent-800); }
+  .btn-secondary { border-color: var(--color-divider); }
+  .btn-secondary:hover { background: color-mix(in srgb, var(--color-text) 7%, transparent); }
+  .btn-ghost { color: var(--color-accent-700); padding-inline: var(--space-1); }
+  .btn-ghost:hover { background: color-mix(in srgb, var(--color-accent-700) 10%, transparent); }
+  .btn-block { width: 100%; margin-top: var(--space-2); justify-content: flex-start; text-align: left; }
+
+  .input {
+    width: 100%; min-height: 36px; padding: 6px 10px; font: inherit; font-size: 14px;
+    color: var(--color-text); caret-color: var(--color-accent);
+    background: var(--color-surface); border: 1px solid var(--color-divider); border-radius: 0;
+  }
+  .input:hover { border-color: color-mix(in srgb, var(--color-text) 45%, transparent); }
+  .input:focus-visible { border-color: var(--color-accent); outline-offset: 0; }
+
+  .radio { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px; }
+  .radio input { position: absolute; opacity: 0; width: 0; height: 0; pointer-events: none; }
+  .radio .dot { width: 16px; height: 16px; flex: none; border-radius: 0; border: 1.5px solid var(--color-divider); }
+  .radio input:checked + .dot { border-color: var(--color-accent); background: var(--color-accent); }
+
+  .nav { display: flex; align-items: center; gap: var(--space-6); flex-wrap: wrap; padding: var(--space-4) 0; }
+  .nav-brand { font-family: var(--font-heading); font-weight: 800; font-size: 20px; letter-spacing: -0.02em; margin-right: auto; }
+  .nav a { color: inherit; font-size: 14px; }
+  .nav a:hover { color: var(--color-accent-700); text-decoration: none; }
+
+  .table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  .table th {
+    text-align: left; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
+    color: color-mix(in srgb, var(--color-text) 60%, transparent);
+    padding: var(--space-2); border-bottom: 2px solid var(--color-divider);
+  }
+  .table td { padding: var(--space-2); border-bottom: 1px solid var(--color-divider); }
+  .table tbody tr:hover { background: color-mix(in srgb, var(--color-text) 4%, transparent); }
+
+  .dialog-backdrop {
+    position: fixed; inset: 0; display: grid; place-items: center; padding: var(--space-4); z-index: 50;
+    background: color-mix(in srgb, var(--color-neutral-900) 50%, transparent);
+  }
+
+  .wrap { max-width: 1280px; margin: 0 auto; padding: 0 var(--space-6); }
+  .tile { padding: var(--space-4); box-shadow: 0 0 0 2px var(--color-divider); }
+  .tile-n { font-family: var(--font-heading); font-weight: 800; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .section { padding: var(--space-8) 0; border-top: 2px solid var(--color-divider); }
+  .section-head { display: flex; align-items: baseline; gap: var(--space-4); flex-wrap: wrap; margin-bottom: var(--space-6); }
+  .section-head h2 { margin: 0; letter-spacing: -0.02em; }
+  .section-head p { margin: 0; font-size: 14px; }
+  .grid-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 2px; background: var(--color-divider); border: 2px solid var(--color-divider); }
+  .grid-cards > div { padding: var(--space-6); min-width: 0; }
+
+  @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+  @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  /* The card is rebuilt whole on every state change, which would re-fade parts
+     that were already on screen. Anything that has already risen wears this. */
+  .no-anim { animation: none !important; }
+
+  /* Lookup demo card */
+  #lookup-card { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 2px; background: var(--color-divider); border: 2px solid var(--color-divider); font-family: var(--font-body); color: var(--color-text); }
+  #lookup-card .pane { background: var(--color-bg); padding: var(--space-6); display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; }
+  #lookup-card .pane.explain { background: var(--color-surface); }
+  .row-baseline { display: flex; align-items: baseline; gap: var(--space-3); flex-wrap: wrap; }
+  .lookup-input { width: 100%; background: var(--color-surface); border: 1px solid var(--color-divider); border-radius: 0; padding: 12px 14px; font: inherit; font-size: 18px; color: var(--color-text); caret-color: var(--color-accent); font-variant-numeric: tabular-nums; }
+  .quick-links { display: flex; gap: var(--space-3); }
+  .confirm-box { border: 2px solid var(--color-accent); padding: var(--space-4); animation: rise .25s ease-out; display: flex; flex-direction: column; gap: var(--space-3); }
+  .ledger-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 2px; padding: 2px; animation: rise .25s ease-out; }
+  .asset-row { padding: var(--space-3) 0; border-top: 1px solid var(--color-divider); }
+  .asset-row:first-child { border-top-color: transparent; }
+  .chain-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+  .spent-box { border: 2px solid var(--color-divider); padding: var(--space-3) var(--space-4); animation: rise .25s ease-out; }
+  .rise { animation: rise .25s ease-out; }
+  .trail-item { display: grid; grid-template-columns: 24px minmax(0,1fr) auto; gap: 10px; align-items: baseline; animation: rise .25s ease-out; border-top: 1px solid var(--color-divider); padding-top: var(--space-3); }
+  .trail-item:first-child { border-top-color: transparent; padding-top: 0; }
+  #nets-dialog .row { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; font: inherit; font-size: 14px; color: var(--color-text); background: transparent; border: 0; padding: 9px var(--space-3); cursor: pointer; }
+  #nets-dialog .row:hover { background: var(--color-surface); }
+
+  footer.site { padding: var(--space-6) 0; display: flex; gap: var(--space-6); flex-wrap: wrap; align-items: baseline; }
+  footer.site .brand { font-family: var(--font-heading); font-weight: 800; font-size: 15px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <nav class="nav">
+    <span class="nav-brand">evm-scan</span>
+    <a href="#lookup">Lookup</a>
+    <a href="#lens">The lens</a>
+    <a href="#architecture">Architecture</a>
+    <a href="#api">API</a>
+    <a class="btn btn-secondary" href="https://github.com/Skanislav/evm-scan" style="margin-left:var(--space-2)">GitHub</a>
+  </nav>
+
+  <header style="padding:var(--space-8) 0 var(--space-6);display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:var(--space-8) var(--space-6);align-items:end">
+    <div style="min-width:0">
+      <h6 style="color:var(--color-accent-700);margin-bottom:var(--space-4)">Permissionless asset indexing</h6>
+      <h1 style="font-size:clamp(40px,6vw,68px);line-height:0.98;letter-spacing:-0.03em;margin:0 0 var(--space-4);text-wrap:balance">What does this address hold?</h1>
+      <p style="font-size:19px;line-height:1.4;max-width:38ch;margin:0">Answered from your own node, in one call, at one block. No indexing provider in the read path.</p>
+    </div>
+    <div style="min-width:0;display:flex;flex-direction:column;gap:var(--space-4)">
+      <p style="font-size:15px;line-height:1.6;max-width:46ch;margin:0;opacity:.85">Almost every wallet outsources this question to a handful of indexing providers — a real centralisation point in an otherwise decentralised stack, over data that is entirely public. evm-scan runs a node, indexes only what someone actually asked for, and publishes the result on-chain so nobody has to trust the indexer.</p>
+      <div style="display:flex;gap:var(--space-3);flex-wrap:wrap">
+        <a class="btn btn-primary" href="#lookup" style="padding:var(--space-3) var(--space-6)">Try a lookup</a>
+        <a class="btn btn-secondary" href="https://github.com/Skanislav/evm-scan" style="padding:var(--space-3) var(--space-6)">Read the source</a>
+      </div>
+    </div>
+  </header>
+
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:2px;padding:2px" id="stats-grid"></div>
+
+  <section id="lookup" class="section">
+    <div class="section-head">
+      <h2>The read, end to end</h2>
+      <p class="text-muted" style="max-width:56ch">The index says where to look; the read says what is there. A hex address is checksum-checked, a name is NFC-normalised and resolved in your tab. If the index has no rows, one confirmation decides which host gets to see the address — and every call is printed on the right.</p>
+    </div>
+    <div id="lookup-card"></div>
+  </section>
+
+  <section id="lens" class="section">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:var(--space-8) var(--space-6)">
+      <div style="min-width:0">
+        <h6 style="color:var(--color-accent-700)">AssetLens</h6>
+        <h2 style="letter-spacing:-0.02em;margin-bottom:var(--space-4)">One call, no deployment</h2>
+        <p style="font-size:15px;line-height:1.6;max-width:48ch">A balance, an allowance, a symbol, decimals, an owner, a URI — one <code style="font-size:13px;background:var(--color-surface);padding:1px 5px">eth_call</code> each over plain RPC. Twenty tokens is well over a hundred round trips, and because each lands at whatever block the node was on, the portfolio that comes out never existed as a state the chain was ever in. Balances summed from <code style="font-size:13px;background:var(--color-surface);padding:1px 5px">Transfer</code> events are worse still: rebasing, fee-on-transfer and upgradeable tokens all make them wrong.</p>
+        <p style="font-size:15px;line-height:1.6;max-width:48ch">The lens does all of it inside one EVM execution: native balance, ERC-20 balances and allowances, ERC-165 detection, NFT ids and URIs, ERC-721Enumerable walking, and the account's own code, code hash and EIP-7702 delegation target. One round trip, one consistent snapshot — instead of a hundred calls landing at a hundred different blocks.</p>
+        <p style="font-size:15px;line-height:1.6;max-width:48ch;margin-bottom:0"><strong>It is never deployed.</strong> <code style="font-size:13px;background:var(--color-surface);padding:1px 5px">eth_call</code> with no <code style="font-size:13px;background:var(--color-surface);padding:1px 5px">to</code> address executes creation code and returns whatever the constructor returns, so shipping the bytecode as the call payload turns a contract into a pure function. No address to trust, no upgrade key, nothing to fund on each chain.</p>
+      </div>
+      <div style="min-width:0;display:flex;flex-direction:column;gap:var(--space-4)">
+        <pre style="margin:0;background:var(--color-neutral-900);color:var(--color-neutral-100);padding:var(--space-4);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;line-height:1.7;overflow-x:auto;white-space:pre-wrap;word-break:break-word">eth_call({
+  data: &lt;AssetLens creation code&gt; || abi.encode(request)
+}, "latest")</pre>
+        <div style="display:grid;gap:2px;background:var(--color-divider);border:2px solid var(--color-divider)">
+          <div style="background:var(--color-bg);padding:var(--space-4)">
+            <h5 style="margin:0 0 4px">The reply is treated as contract code</h5>
+            <p class="text-muted" style="margin:0;font-size:13.5px;line-height:1.5">EIP-170's 24,576-byte limit applies to it, so the client batches tokens and halves the batch when a node says no. Chains differ on where that ceiling sits, which is why the limit is discovered rather than assumed.</p>
+          </div>
+          <div style="background:var(--color-bg);padding:var(--space-4)">
+            <h5 style="margin:0 0 4px">Nonces are not in there</h5>
+            <p class="text-muted" style="margin:0;font-size:13.5px;line-height:1.5">The EVM has no opcode for another account's nonce. It comes from <code style="font-size:12.5px">eth_getTransactionCount</code> alongside the call, and the response says whether that read landed instead of printing a confident 0.</p>
+          </div>
+          <div style="background:var(--color-bg);padding:var(--space-4)">
+            <h5 style="margin:0 0 4px">Hostile tokens are boxed</h5>
+            <p class="text-muted" style="margin:0;font-size:13.5px;line-height:1.5">Every inner read is a staticcall with capped gas and capped returndata. A token that stays silent comes back as <em>unknown</em>, never as zero — a wallet rendering a failed call as a balance of nought is a bug, not a rounding error.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="architecture" class="section">
+    <div class="section-head">
+      <h2>Architecture</h2>
+      <p class="text-muted" style="max-width:56ch">Discovery is wide and shallow; indexing is narrow and deep. The one query with no address filter only ever writes counters — the per-account index, and any history read, is reserved for promoted contracts. That asymmetry is what lets a single machine watch a whole chain.</p>
+    </div>
+
+    <div class="grid-cards">
+      <div style="background:var(--color-bg)">
+        <h6 style="color:var(--color-accent-700)">On-chain</h6>
+        <h4 style="margin:0 0 var(--space-4)">HintRegistry</h4>
+        <div style="display:flex;flex-direction:column;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px" id="registry-calls"></div>
+        <p class="text-muted" style="margin:var(--space-4) 0 0;font-size:12.5px;line-height:1.5">Two dispute paths, fixed once at deployment: UMA's Optimistic Oracle V3 with a bond and a challenge window, or a local arbiter key. Either way the registry only reacts to a callback — the oracle's, or the arbiter calling <code style="font-size:12px">resolveChallenge</code>.</p>
+      </div>
+
+      <div style="background:var(--color-surface)">
+        <h6 style="color:var(--color-accent-700)">The daemon</h6>
+        <h4 style="margin:0 0 var(--space-4)">evmscand</h4>
+        <div style="display:flex;flex-direction:column" id="workers-list"></div>
+        <p class="text-muted" style="margin:var(--space-4) 0 0;font-size:12.5px;line-height:1.5">PostgreSQL holds candidate counters and the interactions rollup. Events enter only once deeper than the confirmation lag, so a reorg deletes a buffered row and rescans — the aggregate is never wrong.</p>
+      </div>
+
+      <div style="background:var(--color-bg)">
+        <h6 style="color:var(--color-accent-700)">Yours</h6>
+        <h4 style="margin:0 0 var(--space-4)">Your own geth</h4>
+        <p style="font-size:13.5px;line-height:1.55;margin:0 0 var(--space-4)">Snap sync, any depth. No archive node: nothing here asks for a balance at an old block, and the indexer probes its node for the oldest block whose logs it can actually serve, then treats that as a hard floor.</p>
+        <div style="display:flex;flex-direction:column;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px">
+          <span style="border-top:1px solid var(--color-divider);padding:7px 0">eth_getLogs<span class="text-muted"> — receipts, for the range read</span></span>
+          <span style="border-top:1px solid var(--color-divider);padding:7px 0">eth_call<span class="text-muted"> — head state</span></span>
+        </div>
+        <p style="margin:var(--space-4) 0 0;font-size:12.5px;line-height:1.5;color:var(--color-accent-700)"><strong>require_local_node is enforced, not documented.</strong> The daemon refuses to start against a non-loopback endpoint unless you explicitly opt out.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="api" class="section">
+    <div class="section-head">
+      <h2>API</h2>
+      <p class="text-muted" style="max-width:52ch">Every account response carries <code style="font-size:13px">as_of_block</code>, so a caller can pin what it saw.</p>
+    </div>
+    <div style="overflow-x:auto">
+      <table class="table">
+        <thead><tr><th style="width:72px">Method</th><th style="min-width:240px">Path</th><th>Purpose</th></tr></thead>
+        <tbody id="api-rows"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="section" style="padding-bottom:var(--space-6)">
+    <div class="section-head">
+      <h2>What it costs to run</h2>
+      <p class="text-muted" style="max-width:54ch">Discovery is the standing cost and it only ever writes counters. Everything expensive — a per-account index, a walk back through history — is reserved for a contract something already decided was worth indexing.</p>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:2px;padding:2px" id="footprint-grid"></div>
+    <p class="text-muted" style="margin:var(--space-4) 0 0;font-size:12.5px;max-width:70ch">Figures are the deployment's declared shape, from <code style="font-size:12px">deploy/config.railway.yaml</code> and the Railway runbook. CPU and memory are not benchmarked in the repo, so nothing is claimed for them here.</p>
+  </section>
+
+  <section style="border-top:2px solid var(--color-divider);background:var(--color-accent-700);color:#ffffff;margin:0 calc(var(--space-6) * -1);padding:var(--space-8) var(--space-6)">
+    <div style="max-width:1280px;margin:0 auto;display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:var(--space-6);align-items:end">
+      <h2 style="margin:0;font-size:clamp(32px,4.5vw,52px);line-height:1;letter-spacing:-0.03em;max-width:16ch;color:#fff">Run a node. Index what somebody asked for. Publish the proof.</h2>
+      <div>
+        <pre style="margin:0 0 var(--space-4);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:15px;line-height:1.8;white-space:pre-wrap;word-break:break-word;color:#ffffff">createdb evmscan
+make build
+make devchain   # foreground, separate terminal
+make demo       # deploys HintRegistry + demo tokens, writes config.demo.yaml
+make run        # evmscand against config.demo.yaml — UI at :8080</pre>
+        <p style="margin:0;font-size:15px;color:#ffffff">Go 1.24+, PostgreSQL 16+, a geth binary. No third-party RPC required or used.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer class="site">
+    <span class="brand">evm-scan</span>
+    <a href="https://github.com/Skanislav/evm-scan">GitHub</a>
+    <a href="https://github.com/Skanislav/evm-scan/blob/main/docs/CLIENT-SIDE.md">Client-side reads</a>
+    <a href="https://github.com/Skanislav/evm-scan/blob/main/docs/TOKENOMICS.md">Tokenomics</a>
+    <a href="https://github.com/Skanislav/evm-scan/blob/main/docs/MAINNET.md">Mainnet runbook</a>
+    <a href="https://github.com/Skanislav/evm-scan/blob/main/docs/PRIVACY.md">Privacy</a>
+    <span class="text-muted" style="margin-left:auto;font-size:12.5px">Read public state from your own node, ask nobody's permission.</span>
+  </footer>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---- static content (mirrors the design's renderVals()) --------------
+
+  var STATS = [
+    { n: '1', unit: '', label: 'eth_call per portfolio read' },
+    { n: '0', unit: '', label: 'contracts deployed, on any chain' },
+    { n: '2', unit: '', label: 'node operations, neither needing an archive' },
+    { n: '215', unit: ' ms', label: 'measured: three-token read from a browser' },
+    { n: '4', unit: '', label: 'ways a contract becomes indexed: registered, signed for, promoted, or active' },
+    { n: '24,576', unit: '', label: 'byte reply ceiling the batcher discovers rather than assumes' },
+    { n: '8,191', unit: '', label: 'blocks Helios can verify — a rolling day on mainnet' },
+    { n: '3', unit: '', label: 'price confidence tiers, each naming the contracts behind it' },
+  ];
+
+  var FOOTPRINT = [
+    { n: '1', unit: ' machine', label: 'one replica: one database writer, one Helios light client' },
+    { n: '1', unit: ' GB', label: 'volume, so Helios keeps its checkpoint across restarts' },
+    { n: '0', unit: '', label: 'per-account rows for a discovered contract — a counter, until it is promoted' },
+    { n: '20', unit: ' blocks', label: 'per eth_getLogs window; Helios caps a single call at 4,096' },
+  ];
+
+  var REGISTRY_CALLS = [
+    'requestIndexing(chainId, token, kind, fromBlock)',
+    'publishIndex(chainId, from, to, root, covRoot, uri)',
+    'challengeIndex(epochId)',
+    'finalizeIndex(epochId)',
+    'claimCoverage(epochId, claims[])',
+  ];
+
+  var WORKERS = [
+    { name: 'discovery', call: 'eth_getLogs — all contracts' },
+    { name: 'follower', call: 'eth_subscribe + eth_getLogs' },
+    { name: 'backfiller', call: 'eth_getLogs — promoted only' },
+    { name: 'api', call: 'eth_call at head' },
+  ];
+
+  var API_ROWS = [
+    { method: 'GET', path: '/v1/accounts/{addr}/contracts', purpose: 'The discovery surface. Each contract carries whether it is committed in the latest finalized epoch and its demand from signed verdicts.' },
+    { method: 'GET', path: '/v1/accounts/{addr}', purpose: 'Same, enriched with token metadata and live balances.' },
+    { method: 'GET', path: '/v1/accounts/{addr}/portfolio', purpose: 'Live state via the deployless lens: balances, allowances, NFT ids, nonce, 7702 delegation — one call, one block.' },
+    { method: 'POST', path: '/v1/accounts/{addr}/asset-commit', purpose: 'An account’s exact signed sweep list. Replaces the prior one only when the deadline rises; no promotion, no scan.' },
+    { method: 'POST', path: '/v1/verdict', purpose: 'The reader’s act: EIP-712 signed verdicts. Signer must be the account; the set replaces its previous verdict.' },
+    { method: 'GET', path: '/v1/prices?tokens=', purpose: 'Every feed and pool found on-chain for each token, the route chosen, everything that lost, and the sources consulted.' },
+    { method: 'GET', path: '/v1/candidates', purpose: 'Contracts discovered at the head, ranked by activity.' },
+    { method: 'POST', path: '/v1/epochs', purpose: 'Build and publish a commitment. Proofs come from /v1/epochs/{id}/proof.' },
+    { method: 'GET', path: '/ccip/{sender}/{data}.json', purpose: 'ERC-3668 gateway for HintRegistry.contractsOf: leaf and proof for the latest finalized epoch, verified on-chain by the callback.' },
+    { method: 'GET', path: '/v1/status', purpose: 'Sync state, node locality, index size, registry economics. Health is 503 when a node, the database or an indexer is down.' },
+  ];
+
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  document.getElementById('stats-grid').innerHTML = STATS.map(function (s) {
+    return '<div class="tile"><div class="tile-n" style="font-size:34px"><span>' + esc(s.n) + '</span><span style="font-size:19px">' + esc(s.unit) + '</span></div><div class="text-muted" style="font-size:12.5px">' + esc(s.label) + '</div></div>';
+  }).join('');
+
+  document.getElementById('footprint-grid').innerHTML = FOOTPRINT.map(function (f) {
+    return '<div class="tile"><div class="tile-n" style="font-size:30px"><span>' + esc(f.n) + '</span><span style="font-size:17px">' + esc(f.unit) + '</span></div><div class="text-muted" style="font-size:12.5px">' + esc(f.label) + '</div></div>';
+  }).join('');
+
+  document.getElementById('registry-calls').innerHTML = REGISTRY_CALLS.map(function (c) {
+    return '<span style="border-top:1px solid var(--color-divider);padding:7px 0;word-break:break-word">' + esc(c) + '</span>';
+  }).join('');
+
+  document.getElementById('workers-list').innerHTML = WORKERS.map(function (w) {
+    return '<div style="border-top:1px solid var(--color-divider);padding:9px 0;display:flex;gap:var(--space-3);align-items:baseline"><span style="font-family:var(--font-heading);font-weight:800;font-size:13px;min-width:78px">' + esc(w.name) + '</span><span class="text-muted" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;margin-left:auto;text-align:right">' + esc(w.call) + '</span></div>';
+  }).join('');
+
+  document.getElementById('api-rows').innerHTML = API_ROWS.map(function (r) {
+    var color = r.method === 'GET' ? 'var(--color-text)' : 'var(--color-accent-700)';
+    return '<tr><td style="font-family:var(--font-heading);font-weight:800;font-size:12px;color:' + color + ';vertical-align:top">' + esc(r.method) + '</td><td class="mono" style="font-size:12.5px;vertical-align:top;word-break:break-word">' + esc(r.path) + '</td><td style="font-size:13.5px;vertical-align:top">' + esc(r.purpose) + '</td></tr>';
+  }).join('');
+
+  // ---- the Lookup demo --------------------------------------------------
+  //
+  // This is a scripted walkthrough, not a second live reader: index.html's
+  // wallet tab and read.html are the actual read paths, and this repo is
+  // deliberately careful about not having two implementations of that
+  // arithmetic. Every number, host and timing below is illustrative.
+
+  var PUBLIC_RPC = 'eth.llamarpc.com';
+  var DAEMON = 'evm-scan-production.up.railway.app';
+  var BLOCK = '23,418,771';
+  var BLOCK_N = 23418771;
+  var COMMITTED = { epoch: 13, block: 23410580, contracts: 4, status: 'finalized' };
+  var ADDR_RE = /^0x[0-9a-fA-F]{40}$/;
+  var NAME_RE = /^[a-z0-9-]+\.eth$/i;
+
+  var NETS = (function () {
+    var base = [
+      { id: 'eth', name: 'Ethereum', chainId: 1, color: 'var(--color-accent)' },
+      { id: 'base', name: 'Base', chainId: 8453, color: 'var(--color-neutral-900)' },
+      { id: 'arb', name: 'Arbitrum One', chainId: 42161, color: 'var(--color-accent-2)' },
+      { id: 'op', name: 'OP Mainnet', chainId: 10, color: 'var(--color-accent-700)' },
+      { id: 'pol', name: 'Polygon', chainId: 137, color: 'var(--color-neutral-600)' },
+    ];
+    var more = [
+      ['Avalanche', 43114], ['BNB Chain', 56], ['Gnosis', 100], ['zkSync Era', 324],
+      ['Linea', 59144], ['Scroll', 534352], ['Blast', 81457], ['Mantle', 5000],
+      ['Mode', 34443], ['Zora', 7777777], ['Celo', 42220], ['Fantom', 250],
+    ];
+    more.forEach(function (n, i) {
+      base.push({ id: 'c' + i, name: n[0], chainId: n[1], color: i % 3 === 0 ? 'var(--color-neutral-500)' : i % 3 === 1 ? 'var(--color-neutral-700)' : 'var(--color-neutral-400)' });
+    });
+    return base;
+  })();
+
+  var DATA = [
+    { symbol: 'ETH', name: 'Ether', dec: 4, price: 3402.18, conf: 'high', per: { eth: 790.1247, base: 14.3002, arb: 8.0222, op: 2.115 } },
+    { symbol: 'USDC', name: 'USD Coin', dec: 2, price: 1.0001, conf: 'high', per: { eth: 120000, base: 64220, pol: 5000 } },
+    { symbol: 'WETH', name: 'Wrapped Ether', dec: 4, price: 3401.9, conf: 'medium', per: { eth: 19 } },
+    { symbol: 'UNI', name: 'Uniswap', dec: 2, price: 6.61, conf: 'low', per: { eth: 312.55 } },
+    { symbol: 'ENS', name: '3 names', dec: 0, price: null, conf: 'unpriced', per: { eth: 3 } },
+  ];
+
+  function fmtN(n) { return n.toLocaleString('en-US'); }
+  function fmt(n, d) { return n.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }); }
+  function short(a) { return a.slice(0, 6) + '…' + a.slice(-4); }
+  function hostOf(u) { try { return new URL(u).host; } catch (e) { return u || '127.0.0.1:8545'; } }
+
+  var state = {
+    active: ['eth', 'base', 'arb'],
+    typed: '', phase: 'idle', trail: [], chains: [],
+    ownRpcOpen: false, ownRpc: '', remember: false,
+    mode: 'indexed', name: '', address: '', status: '', via: '',
+    netsOpen: false, netQuery: '',
+    explainOpen: true,
+  };
+  var timers = [];
+  var remembered = null;
+  try { remembered = sessionStorage.getItem('evmscan.rpcChoice'); } catch (e) {}
+
+  function clearTimers() { timers.forEach(clearTimeout); timers = []; }
+  function after(ms, fn) { timers.push(setTimeout(function () { fn(); render(); }, ms)); }
+  function push(step) { state.trail = state.trail.concat([Object.assign({ n: state.trail.length + 1 }, step)]); }
+  function setState(patch) { Object.assign(state, patch); render(); }
+
+  function scenarioFor(typed) {
+    if (/^0x1{40}$/.test(typed)) return 'not-indexed';
+    if (/^0x0{38}[0-9a-f]{2}$/i.test(typed)) return 'empty';
+    return 'indexed';
+  }
+
+  function chainsFor(mode) { return mode === 'empty' ? [] : DATA; }
+
+  function assetsView() {
+    var on = state.active;
+    return state.chains.map(function (a) {
+      var chains = NETS.filter(function (n) { return on.indexOf(n.id) !== -1 && a.per[n.id] != null; })
+        .map(function (n) { return Object.assign({}, n, { raw: a.per[n.id] }); });
+      var total = chains.reduce(function (s, c) { return s + c.raw; }, 0);
+      return {
+        symbol: a.symbol, name: a.name, balance: fmt(total, a.dec),
+        value: a.price == null ? 'unpriced' : '$' + fmt(total * a.price, 0) + ' · ' + a.conf,
+        chains: chains.map(function (c) { return { name: c.name, color: c.color, balance: fmt(c.raw, a.dec), pct: Math.round(c.raw / total * 100) + '%' }; }),
+      };
+    }).filter(function (a) { return a.chains.length; })
+      .map(function (r, i) { return Object.assign({}, r, { rule: i === 0 ? 'transparent' : 'var(--color-divider)' }); });
+  }
+
+  function readVia(via) {
+    var mode = state.mode;
+    var own = via === 'own';
+    var host = via === 'daemon' ? (DAEMON + ' → Helios light client on loopback')
+      : own ? (hostOf(state.ownRpc) + ' · your node')
+      : (PUBLIC_RPC + ' · public RPC · saw the address');
+    var color = via === 'public' ? 'var(--color-accent-2-700)' : 'var(--color-accent-700)';
+    state.phase = 'busy'; state.via = via;
+    state.status = via === 'daemon' ? 'Reading your node · one call, one block…' : ('Reading from ' + (own ? hostOf(state.ownRpc) : PUBLIC_RPC) + '…');
+    var t = 0;
+    if (via !== 'daemon') {
+      t += 300;
+      after(t, function () { push({ t: 'Chose what to ask about', d: 'no index rows, so the Uniswap token list stands in · 312 contracts batched 13 × 24 under the 24,576-byte reply ceiling', host: 'this browser', ms: '90 ms', color: 'var(--color-neutral-700)' }); });
+    }
+    t += mode === 'empty' ? 700 : 1300;
+    after(t, function () {
+      push({ t: 'Read every mainnet balance in one call', d: 'eth_call { to: null, data: AssetLens creation code ‖ request } at latest → block ' + BLOCK + ' · native + ERC-20 + ERC-165 + NFT ids · every inner read a capped staticcall', host: host, m: 'eth_call', c: 1, ms: via === 'daemon' ? '1.9 s' : own ? '340 ms' : '1.1 s', msN: via === 'daemon' ? 1900 : own ? 340 : 1100, color: color });
+      push({ t: 'Read the nonce separately', d: "eth_getTransactionCount → 1,482 · the EVM has no opcode for another account's nonce", host: host, m: 'eth_getTransactionCount', c: 1, ms: '60 ms', msN: 60, color: color });
+    });
+    if (mode !== 'empty') {
+      t += 600;
+      after(t, function () { push({ t: 'Priced on-chain', d: 'Chainlink ETH/USD 41 s old · USDC/USD feed · WETH 30 m TWAP · UNI v2 spot · ENS unpriced: a floor is a market question', host: host, m: 'eth_call', c: 4, ms: '640 ms', msN: 640, color: color }); });
+      t += 520;
+      after(t, function () { push({ t: 'Asked base and arbitrum the same way', d: 'identical lens call, one endpoint each · a chain that will not answer is listed, never guessed', host: 'this browser · mainnet.base.org · arb1.arbitrum.io · both saw the address', m: 'eth_call', c: 2, ms: '780 ms', msN: 780, color: 'var(--color-accent-2-700)' }); });
+    }
+    t += 200;
+    after(t, function () { state.phase = 'answer'; state.chains = chainsFor(mode); state.status = 'Block ' + BLOCK; });
+  }
+
+  function start(typed) {
+    clearTimers();
+    var isName = NAME_RE.test(typed);
+    var mode = scenarioFor(typed);
+    var address = isName ? '0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045' : typed;
+    state.phase = 'busy'; state.trail = []; state.chains = []; state.mode = mode;
+    state.name = isName ? typed.toLowerCase() : ''; state.address = address;
+    state.status = isName ? 'Resolving name…' : 'Asking the index…';
+    var t = 0;
+    if (isName) {
+      t += 420;
+      after(t, function () {
+        push({ t: 'Resolved ' + typed.toLowerCase() + ' → ' + short(address), d: 'eth_call · ENS Universal Resolver · resolve(bytes name, bytes data) · name NFC-normalised and lowercased in this tab', host: PUBLIC_RPC + ' · saw the name only', m: 'eth_call', c: 1, ms: '212 ms', msN: 212, color: 'var(--color-accent-2-700)' });
+        state.status = 'Asking the index…';
+      });
+    }
+    t += 380;
+    after(t, function () {
+      var hit = mode === 'indexed';
+      push({ t: hit ? 'Index knows this address' : 'Index has no rows for this address', d: 'GET /v1/accounts/' + short(address) + ' · ' + (hit ? '4 contracts touched · as_of_block ' + BLOCK : '0 contracts · history floor 23,410,580'), host: DAEMON + ' · read the address from the path', m: 'GET /v1/accounts', c: 1, ms: '48 ms', msN: 48, color: hit ? 'var(--color-accent-700)' : 'var(--color-accent-2-700)' });
+      if (hit) { readVia('daemon'); }
+      else if (remembered === 'public' || remembered === 'own') {
+        push({ t: 'Confirmation remembered for this session', d: 'sessionStorage evmscan.rpcChoice = ' + remembered, host: 'this browser', ms: '0 ms', color: 'var(--color-neutral-700)' });
+        readVia(remembered);
+      } else { state.phase = 'confirm'; state.status = 'Needs one confirmation'; }
+    });
+  }
+
+  function set(typed) {
+    state.typed = typed;
+    if (ADDR_RE.test(typed) || NAME_RE.test(typed)) { start(typed); }
+    else if (state.phase !== 'idle') { clearTimers(); state.phase = 'idle'; state.trail = []; state.chains = []; state.status = ''; }
+    render();
+  }
+
+  function callsRollup() {
+    var by = {};
+    state.trail.filter(function (x) { return x.m; }).forEach(function (x) {
+      var e = by[x.m] || { m: x.m, c: 0, ms: 0 };
+      e.c += x.c || 1; e.ms += x.msN || 0;
+      by[x.m] = e;
+    });
+    return Object.keys(by).map(function (k) {
+      var e = by[k];
+      return { m: e.m, c: '× ' + e.c, ms: e.ms >= 1000 ? (e.ms / 1000).toFixed(1) + ' s' : e.ms + ' ms' };
+    });
+  }
+
+  function callTotal() {
+    var rows = state.trail.filter(function (x) { return x.m; });
+    var n = rows.reduce(function (a, x) { return a + (x.c || 1); }, 0);
+    var ms = rows.reduce(function (a, x) { return a + (x.msN || 0); }, 0);
+    return n + ' request' + (n === 1 ? '' : 's') + ' · ' + (ms >= 1000 ? (ms / 1000).toFixed(1) + ' s' : ms + ' ms') + ' total';
+  }
+
+  function ledgerRows() {
+    var live = assetsView().length;
+    var dBlocks = BLOCK_N - COMMITTED.block;
+    var dAssets = live - COMMITTED.contracts;
+    var mut = 'color-mix(in srgb, var(--color-text) 55%, transparent)';
+    return [
+      { label: 'Committed', value: 'epoch ' + COMMITTED.epoch, note: 'block ' + fmtN(COMMITTED.block) + ' · ' + COMMITTED.contracts + ' contracts · ' + COMMITTED.status, color: mut },
+      { label: 'Read just now', value: 'block ' + BLOCK, note: live + ' assets · head state, never a commitment', color: mut },
+      { label: 'Drift', value: '+' + fmtN(dBlocks) + ' block' + (dBlocks === 1 ? '' : 's'), note: (dAssets >= 0 ? '+' : '') + dAssets + ' asset' + (Math.abs(dAssets) === 1 ? '' : 's') + ' since the commitment', color: 'var(--color-accent-700)' },
+    ];
+  }
+
+  var card = document.getElementById('lookup-card');
+  // What has already played its entrance, so a rebuild does not replay it.
+  var risen = { trail: 0, answer: false, confirm: false, dialog: false };
+  function still(seen) { return seen ? ' no-anim' : ''; }
+
+  function render() {
+    var s = state;
+    var ownHost = hostOf(s.ownRpc);
+    var isIdle = s.phase === 'idle', isBusy = s.phase === 'busy', isConfirm = s.phase === 'confirm', hasAnswer = s.phase === 'answer';
+    var assets = assetsView();
+
+    var html = '<div class="pane">';
+    html += '<div class="row-baseline"><h6 style="margin:0">Lookup</h6><span class="text-muted" style="font-size:12px;margin-left:auto;font-variant-numeric:tabular-nums">block ' + BLOCK + '</span><button class="btn btn-secondary" id="lk-explain-toggle" style="font-size:12px;padding:4px 10px">' + (s.explainOpen ? 'Hide explanation' : 'Explain this read') + '</button></div>';
+
+    html += '<div>';
+    html += '<label style="display:block;font-size:12px;color:color-mix(in srgb, var(--color-text) 70%, transparent);margin-bottom:5px">Address or ENS name</label>';
+    html += '<input type="text" id="lk-input" value="' + esc(s.typed) + '" spellcheck="false" autocomplete="off" placeholder="0x… or vitalik.eth" class="lookup-input">';
+    html += '<div style="display:flex;justify-content:space-between;gap:var(--space-3);align-items:baseline;margin-top:8px;font-size:12.5px;min-height:20px">';
+    html += '<span class="text-muted" style="animation:' + (isBusy ? 'blink 1.2s ease-in-out infinite' : 'none') + '">' + esc(s.status) + '</span>';
+    if (isIdle) { html += '<span class="quick-links"><button class="btn btn-ghost" id="lk-try-vitalik" style="font-size:12.5px">vitalik.eth</button><button class="btn btn-ghost" id="lk-try-cold" style="font-size:12.5px">0x1111…</button></span>'; }
+    html += '</div></div>';
+
+    if (isIdle) { html += '<button class="btn btn-primary btn-block" disabled style="justify-content:flex-start;padding:12px var(--space-4);font-size:15px">Paste an address to begin</button>'; }
+    if (isBusy) { html += '<button class="btn btn-primary btn-block" disabled style="justify-content:flex-start;padding:12px var(--space-4);font-size:15px;opacity:.7">Reading…</button>'; }
+
+    if (isConfirm) {
+      var rpcHost = s.ownRpcOpen ? ownHost : PUBLIC_RPC;
+      html += '<div class="confirm-box' + still(risen.confirm) + '"><h4 style="margin:0">Not in the index</h4>';
+      html += '<p style="margin:0;font-size:13.5px;line-height:1.5;opacity:.85">Its activity is older than this node\'s history, or touches contracts nobody indexed. Reading it anyway sends one call to <strong>' + esc(rpcHost) + '</strong>, which will see the address.</p>';
+      if (s.ownRpcOpen) { html += '<input class="input" type="text" id="lk-own-rpc" value="' + esc(s.ownRpc) + '" placeholder="http://127.0.0.1:8545" spellcheck="false">'; }
+      html += '<label class="radio" style="gap:8px;font-size:13.5px"><input type="checkbox" id="lk-remember" ' + (s.remember ? 'checked' : '') + '><span class="dot"></span>Don\'t ask again this session</label>';
+      html += '<div style="display:flex;gap:var(--space-4);font-size:13.5px"><button class="btn btn-ghost" id="lk-swap-rpc">' + (s.ownRpcOpen ? 'Use the public RPC instead' : 'Use my own RPC') + '</button><button class="btn btn-ghost" id="lk-cancel" style="margin-left:auto;color:var(--color-text)">Cancel</button></div>';
+      html += '</div><button class="btn btn-primary btn-block" id="lk-confirm" style="justify-content:flex-start;padding:12px var(--space-4);font-size:15px">' + (s.ownRpcOpen ? 'Read from ' + esc(ownHost) : 'Read from ' + esc(PUBLIC_RPC)) + '</button>';
+    }
+
+    if (hasAnswer) {
+      var activeNets = NETS.filter(function (n) { return s.active.indexOf(n.id) !== -1; }).slice(0, 8);
+      html += '<div style="display:flex;align-items:center;gap:var(--space-2);border-top:2px solid var(--color-divider);padding-top:var(--space-3)"><h6 style="margin:0">Networks</h6><span style="display:flex;gap:3px">' + activeNets.map(function (n) { return '<span title="' + esc(n.name) + '" style="width:10px;height:10px;background:' + n.color + '"></span>'; }).join('') + '</span><span class="text-muted" style="font-size:12px;font-variant-numeric:tabular-nums">' + s.active.length + ' of ' + NETS.length + ' · block ' + BLOCK + '</span><button class="btn btn-ghost" id="lk-open-nets" style="margin-left:auto;font-size:13px">Change</button></div>';
+
+      html += '<div class="ledger-grid' + still(risen.answer) + '">' + ledgerRows().map(function (l) {
+        return '<div class="tile"><div class="text-muted" style="font-size:10px;letter-spacing:0.08em;text-transform:uppercase">' + esc(l.label) + '</div><div style="font-family:var(--font-heading);font-weight:800;font-size:18px;font-variant-numeric:tabular-nums;margin-top:3px">' + esc(l.value) + '</div><div style="font-size:11.5px;font-variant-numeric:tabular-nums;color:' + l.color + '">' + esc(l.note) + '</div></div>';
+      }).join('') + '</div>';
+
+      html += '<div class="rise' + still(risen.answer) + '">';
+      if (assets.length === 0) { html += '<div class="text-muted" style="font-size:14px;padding:var(--space-3) 0">Nothing held on any chain we reached.</div>'; }
+      html += assets.map(function (a) {
+        var row = '<div class="asset-row" style="border-top-color:' + a.rule + '">';
+        row += '<div style="display:flex;align-items:baseline;gap:var(--space-2)"><span style="font-family:var(--font-heading);font-weight:800;font-size:16px">' + esc(a.symbol) + '</span><span class="text-muted" style="font-size:12.5px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(a.name) + '</span><span style="margin-left:auto;text-align:right;white-space:nowrap"><span style="font-size:16px;font-variant-numeric:tabular-nums">' + esc(a.balance) + '</span><span class="text-muted" style="display:block;font-size:11.5px;font-variant-numeric:tabular-nums">' + esc(a.value) + '</span></span></div>';
+        row += '<div style="display:flex;flex-direction:column;gap:3px;margin-top:6px">' + a.chains.map(function (c) {
+          return '<div class="chain-row text-muted"><span style="width:7px;height:7px;background:' + c.color + ';flex:none"></span><span>' + esc(c.name) + '</span><span style="font-variant-numeric:tabular-nums;color:var(--color-text)">' + esc(c.pct) + '</span><span style="margin-left:auto;font-variant-numeric:tabular-nums">' + esc(c.balance) + '</span></div>';
+        }).join('') + '</div></div>';
+        return row;
+      }).join('');
+      var footLine = s.via === 'daemon' ? 'Read from this node. Only the address left your browser.' : s.via === 'own' ? ('Read from ' + ownHost + '.') : ('Read from ' + PUBLIC_RPC + ' with your permission.');
+      html += '<div class="text-muted" style="font-size:12px;border-top:2px solid var(--color-divider);padding-top:var(--space-2);margin-top:var(--space-2)">' + esc(footLine) + '</div>';
+      html += '</div>';
+
+      html += '<div class="spent-box' + still(risen.answer) + '"><div class="row-baseline"><h6 style="margin:0">Spent on this read</h6><span class="text-muted" style="font-size:11.5px;margin-left:auto;font-variant-numeric:tabular-nums">' + esc(callTotal()) + '</span></div>';
+      html += '<div style="display:flex;flex-direction:column;margin-top:var(--space-2)">' + callsRollup().map(function (k) {
+        return '<div style="display:flex;align-items:baseline;gap:var(--space-3);border-top:1px solid var(--color-divider);padding:6px 0;font-size:12.5px"><span class="mono" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(k.m) + '</span><span class="text-muted" style="font-variant-numeric:tabular-nums;margin-left:auto">' + esc(k.c) + '</span><span style="font-variant-numeric:tabular-nums;min-width:56px;text-align:right">' + esc(k.ms) + '</span></div>';
+      }).join('') + '</div></div>';
+    }
+
+    html += '</div>';
+
+    if (s.explainOpen) {
+      html += '<div class="pane explain"><div class="row-baseline"><h6 style="margin:0">What happened</h6><span class="text-muted" style="font-size:12px;margin-left:auto">every call, host and block</span></div>';
+      if (s.trail.length === 0) { html += '<p class="text-muted" style="font-size:13.5px;margin:0;max-width:42ch">Each read prints its own trail here: which host was asked, what it was asked for, at which block, and how long it took. Nothing is summarised away.</p>'; }
+      html += '<ol style="list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:var(--space-4)">' + s.trail.map(function (step) {
+        return '<li class="trail-item' + still(step.n <= risen.trail) + '"><span style="font-family:var(--font-heading);font-weight:800;font-size:13px;color:' + step.color + ';font-variant-numeric:tabular-nums">' + step.n + '</span><div style="min-width:0"><div style="font-size:14px;font-weight:600">' + esc(step.t) + '</div><div class="text-muted" style="font-size:12px;line-height:1.5;word-break:break-word;margin-top:3px">' + esc(step.d) + '</div><div style="font-size:11.5px;color:' + step.color + ';margin-top:3px">' + esc(step.host) + '</div></div><span class="text-muted" style="font-size:11.5px;font-variant-numeric:tabular-nums;white-space:nowrap">' + esc(step.ms) + '</span></li>';
+      }).join('') + '</ol></div>';
+    }
+
+    if (s.netsOpen) {
+      var q = (s.netQuery || '').trim().toLowerCase();
+      var shown = NETS.filter(function (n) { return !q || n.name.toLowerCase().indexOf(q) !== -1 || String(n.chainId).indexOf(q) !== -1; })
+        .sort(function (a, b) { return (s.active.indexOf(b.id) !== -1) - (s.active.indexOf(a.id) !== -1); });
+      html += '<div class="dialog-backdrop" id="lk-nets-backdrop"><div id="nets-dialog" class="' + (risen.dialog ? 'no-anim' : '') + '" role="dialog" aria-modal="true" style="width:min(440px,100%);max-height:min(680px,86vh);background:var(--color-bg);border:2px solid var(--color-text);display:flex;flex-direction:column;overflow:hidden;animation:rise .2s ease-out">';
+      html += '<div style="padding:var(--space-4);display:flex;align-items:baseline;gap:var(--space-2);border-bottom:2px solid var(--color-divider)"><h4 style="margin:0">Networks</h4><span class="text-muted" style="font-size:12px;font-variant-numeric:tabular-nums">' + s.active.length + ' of ' + NETS.length + ' · block ' + BLOCK + '</span><button class="btn btn-secondary" id="lk-nets-done" style="margin-left:auto">Done</button></div>';
+      html += '<div style="padding:var(--space-4) var(--space-4) var(--space-3)"><input class="input" type="text" id="lk-net-query" value="' + esc(s.netQuery || '') + '" placeholder="Search chains" spellcheck="false"><div style="display:flex;gap:var(--space-4);font-size:12.5px;margin-top:8px"><button class="btn btn-ghost" id="lk-select-all">Select shown</button><button class="btn btn-ghost" id="lk-select-none">Clear all</button></div></div>';
+      html += '<div style="overflow-y:auto;padding:0 var(--space-2) var(--space-3);display:flex;flex-direction:column">';
+      if (shown.length === 0) { html += '<div class="text-muted" style="padding:var(--space-4);font-size:14px">No chain matches.</div>'; }
+      html += shown.map(function (n) {
+        var on = s.active.indexOf(n.id) !== -1;
+        return '<button class="row" data-net="' + n.id + '" style="opacity:' + (on ? 1 : .6) + '"><span style="width:18px;height:18px;background:' + n.color + ';flex:none"></span><span style="min-width:0;flex:1"><span style="display:block">' + esc(n.name) + '</span><span class="text-muted" style="display:block;font-size:11.5px;font-variant-numeric:tabular-nums">chain ' + n.chainId + '</span></span><span style="width:18px;height:18px;flex:none;border:1.5px solid ' + (on ? 'var(--color-accent)' : 'var(--color-divider)') + ';background:' + (on ? 'var(--color-accent)' : 'transparent') + ';display:grid;place-items:center;color:var(--color-bg);font-size:12px;line-height:1">' + (on ? '✓' : '') + '</span></button>';
+      }).join('');
+      html += '</div></div></div>';
+    }
+
+    // A full rebuild throws away the focused element, so put the caret back
+    // where the reader left it — otherwise typing loses a keystroke a tick.
+    var focused = document.activeElement;
+    var focusId = focused && card.contains(focused) ? focused.id : '';
+    var caret = focusId && focused.setSelectionRange ? focused.selectionStart : null;
+
+    card.innerHTML = html;
+    risen.trail = s.trail.length;
+    risen.answer = hasAnswer;
+    risen.confirm = isConfirm;
+    risen.dialog = s.netsOpen;
+    wire();
+
+    var again = focusId ? document.getElementById(focusId) : null;
+    if (again) {
+      again.focus();
+      if (caret != null && again.setSelectionRange) { again.setSelectionRange(caret, caret); }
+    }
+  }
+
+  function wire() {
+    var input = document.getElementById('lk-input');
+    if (input) { input.addEventListener('input', function (e) { set(e.target.value.trim()); }); }
+    var byId = document.getElementById.bind(document);
+    var on = function (id, fn) { var el = byId(id); if (el) el.addEventListener('click', fn); };
+    on('lk-explain-toggle', function () { setState({ explainOpen: !state.explainOpen }); });
+    on('lk-try-vitalik', function () { set('vitalik.eth'); });
+    on('lk-try-cold', function () { set('0x1111111111111111111111111111111111111111'); });
+    on('lk-swap-rpc', function () { setState({ ownRpcOpen: !state.ownRpcOpen }); });
+    on('lk-cancel', function () { clearTimers(); setState({ phase: 'idle', typed: '', trail: [], chains: [], status: '' }); });
+    var ownRpc = byId('lk-own-rpc');
+    if (ownRpc) { ownRpc.addEventListener('input', function (e) { state.ownRpc = e.target.value; render(); }); }
+    var remember = byId('lk-remember');
+    if (remember) { remember.addEventListener('change', function () { state.remember = !state.remember; }); }
+    on('lk-confirm', function () {
+      var v = state.ownRpcOpen ? 'own' : 'public';
+      if (state.remember) { remembered = v; try { sessionStorage.setItem('evmscan.rpcChoice', v); } catch (e) {} }
+      push({ t: 'You confirmed the read', d: (v === 'own' ? hostOf(state.ownRpc) : PUBLIC_RPC) + ' will see ' + short(state.address), host: 'this browser', ms: '—', color: v === 'own' ? 'var(--color-accent-700)' : 'var(--color-accent-2-700)' });
+      readVia(v);
+      render(); // paint now, so the confirm button is gone before a second click lands
+    });
+    on('lk-open-nets', function () { setState({ netsOpen: true, netQuery: '' }); });
+    on('lk-nets-done', function () { setState({ netsOpen: false }); });
+    var backdrop = byId('lk-nets-backdrop');
+    if (backdrop) {
+      backdrop.addEventListener('click', function (e) { if (e.target === backdrop) setState({ netsOpen: false }); });
+    }
+    var netQuery = byId('lk-net-query');
+    if (netQuery) { netQuery.addEventListener('input', function (e) { state.netQuery = e.target.value; render(); }); }
+    on('lk-select-all', function () {
+      var q = (state.netQuery || '').trim().toLowerCase();
+      var shown = NETS.filter(function (n) { return !q || n.name.toLowerCase().indexOf(q) !== -1 || String(n.chainId).indexOf(q) !== -1; });
+      var set = {}; state.active.forEach(function (id) { set[id] = true; }); shown.forEach(function (n) { set[n.id] = true; });
+      state.active = Object.keys(set); render();
+    });
+    on('lk-select-none', function () { state.active = []; render(); });
+    document.querySelectorAll('#nets-dialog [data-net]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var id = btn.getAttribute('data-net');
+        var i = state.active.indexOf(id);
+        if (i === -1) { state.active.push(id); } else { state.active.splice(i, 1); }
+        render();
+      });
+    });
+  }
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && state.netsOpen) { setState({ netsOpen: false }); }
+  });
+
+  render();
+})();
+</script>
+</body>
+</html>

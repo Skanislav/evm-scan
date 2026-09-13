@@ -303,7 +303,14 @@ shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module 
   latest finalized root), balances from a deployless `AssetLens` call on another
   RPC; the only request to this origin is `GET /v1/lens`, which never carries an
   account. Token metadata is attacker-controlled text from the chain, so everything
-  interpolated into markup goes through `esc()`.
+  interpolated into markup goes through `esc()`. `landing.html` is the project's
+  front door at `/landing.html` — a self-contained explainer page (hero, the read
+  walkthrough, AssetLens, architecture, the API table, running costs) in a separate
+  visual language from the app, linked from nowhere in the nav. Its lookup card is a
+  **scripted walkthrough**, not a third reader: it reaches no endpoint, and the
+  addresses, balances, hosts and timings in it are illustrative. Anything it states
+  as fact about this repo — route names, registry signatures, config numbers — is
+  checked against the source, so re-check it when those change.
 - `mirror/` is a separate TypeScript package (`make test-mirror`, own `node_modules`, not
   in the Go build): the commitment encoding ported for clients, plus a local-first mirror
   that keeps the committed rows in the client's SQLite via Evolu and rebuilds the keccak
