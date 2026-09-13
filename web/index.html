@@ -841,9 +841,10 @@
         <button class="v2-network-change" id="v2-network-change">Change</button>
       </div>
       <div id="v2-commit-wrap" hidden>
-        <a class="btn btn-primary" id="v2-commit-link" href="commit.html">Sweep more networks and commit your list →</a>
-        <div class="hint" style="margin:8px 4px 0">Commit lives on its own page now: sweep every network, review the exact
-          list, sign — no gas, no transaction. A later lookup reads that list before broad discovery.</div>
+        <a class="btn btn-primary" id="v2-commit-link" href="#portable-state-card" data-open-state>Sweep more networks and commit your list →</a>
+        <div class="hint" style="margin:8px 4px 0">Review the exact list and sign it once — no gas, no transaction. That
+          signature is the record; publishing its root to ENS is a separate, optional step. A later lookup reads the list
+          before broad discovery.</div>
       </div>
       <div id="v2-filter-bar" hidden>
         <span class="fb">committed filter</span>
@@ -1035,7 +1036,7 @@
   </div>
 </section>
 <footer class="v2-footer">
-  <a class="linkbtn" href="commit.html">Sweep and commit a list</a>
+  <a class="linkbtn" href="#portable-state-card" data-open-state>Sign and publish your list</a>
   <a href="#xchain-hint">Register a hint</a>
   <a href="#beat4">Operator triage</a>
   <a href="#beat4">Private watchlist</a>
@@ -1630,17 +1631,35 @@ function v2CommitCandidates() {
   });
 }
 
+// Every "commit" affordance on the page opens the one card that does it.
+function openStateCard() {
+  const card = $('portable-state-card');
+  card.hidden = false;
+  card.open = true;
+  $('state-optin').checked = true;
+  card.scrollIntoView({ block: 'center', behavior: 'smooth' });
+}
+document.addEventListener('click', (e) => {
+  const t = e.target.closest('[data-open-state]');
+  if (!t) return;
+  e.preventDefault();
+  openStateCard();
+});
+
 function renderV2CommitAction() {
   const candidates = v2CommitCandidates();
   $('v2-commit-wrap').hidden = candidates.length === 0;
   const link = $('v2-commit-link');
-  link.href = `commit.html?account=${WALLET_ADDR}`;
   link.textContent = `Found ${num(candidates.length)} more asset${candidates.length === 1 ? '' : 's'} on other networks — commit them on the commit page →`;
 }
 
-// commitV2Assets and its typed-data builders moved to commit.html: commit is its own
-// page, not a control on the answer. The digest the banner names comes straight from
-// the stored commit, so nothing here re-derives it.
+// There is one flow that commits a root, and it is the portable-state card: it signs
+// a trie root over this account's verdicts *and* its assets, and optionally writes
+// that root to ENS. An earlier asset-commit page signed a digest over the assets
+// alone — the same list, a second signature, a second thing to keep in step — so the
+// banner opens the card instead. The digest named below still comes straight from a
+// stored asset commit, because the daemon keeps accepting those; nothing here
+// re-derives it.
 // How long ago, in the register the ledger reads in: exact enough to order by, vague
 // enough not to imply a precision the timestamp does not carry.
 function ago(iso) {
@@ -3930,6 +3949,22 @@ async function committedSweepableChains() {
   out.sort((a, b) => (a.testnet - b.testnet) || (b.tokens.length - a.tokens.length));
   return { chains: out, list };
 }
+// discoveredChainIDs is this account's own footprint: the chains its answer actually
+// turned up assets on, the chain the lookup ran against, and whatever a signed list
+// already names. It opens the picker on what was discovered instead of on a fixed
+// four, which were somebody's guess about a typical wallet and never this one's.
+function discoveredChainIDs() {
+  const ids = new Set();
+  const add = (raw) => {
+    const id = Number(raw);
+    if (Number.isSafeInteger(id) && id > 0 && !RETIRED_CHAINS.has(id)) ids.add(id);
+  };
+  if (WALLET_CHAIN) add(WALLET_CHAIN);
+  for (const asset of (V2_DISCOVERED || [])) add(asset.chainId);
+  for (const asset of ((ASSET_COMMIT && ASSET_COMMIT.assets) || [])) add(asset.chain_id);
+  return [...ids];
+}
+
 async function openXChain() {
   $('v2-network-modal').hidden = false;
   if (XCHAIN) {
@@ -3956,8 +3991,12 @@ async function openXChain() {
       XCHAIN_MODE = 'published';
       XCHAIN_SOURCE = 'signed-list';
     } else {
-      XCHAIN_ALL = await sweepableChains(PRESELECTED_CHAIN_IDS);
-      XCHAIN = PRESELECTED_CHAIN_IDS.map(id => XCHAIN_ALL.find(chain => chain.id === id)).filter(Boolean);
+      // What was discovered leads; the fixed set is only what a wallet with no
+      // answer yet has to open on.
+      const found = discoveredChainIDs();
+      const lead = found.length ? found : PRESELECTED_CHAIN_IDS;
+      XCHAIN_ALL = await sweepableChains(lead);
+      XCHAIN = lead.map(id => XCHAIN_ALL.find(chain => chain.id === id)).filter(Boolean);
       XLIST = await tokenList();
       XCHAIN_MODE = 'preselected';
       XCHAIN_SOURCE = 'token-list';
@@ -3972,7 +4011,14 @@ async function openXChain() {
   }
   $('xchain-panel').inert = false;
   $('xchain-openrow').hidden = true;
-  for (const chain of XCHAIN) if (!chain.testnet && chain.rpc) XSELECTED.add(chain.id);
+  // Selected: the chains this account was actually found on. A chain with no
+  // endpoint is listed unselected rather than selected and failing at read time, and
+  // an account with nothing discovered yet opens on the non-testnets it can reach.
+  const discovered = new Set(discoveredChainIDs());
+  const found = XCHAIN.filter(chain => discovered.has(chain.id) && chain.rpc);
+  for (const chain of (found.length ? found : XCHAIN.filter(chain => !chain.testnet && chain.rpc))) {
+    XSELECTED.add(chain.id);
+  }
   renderXChainList();
 }
 
@@ -4204,7 +4250,7 @@ function renderCommittedFilter(chainRows) {
   $('v2-filter-note').innerHTML =
     `viewing your signed list — <strong>${num(inList.length)}</strong> of the ${num(chainRows.length)} ` +
     `chain entr${chainRows.length === 1 ? 'y is' : 'ies are'} in it${signed ? ` · signed ${esc(ago(signed.toISOString()))}` : ''}` +
-    ` · digest <code>${esc(String(ASSET_COMMIT.digest).slice(0, 10))}…</code> · <a href="commit.html?account=${esc(WALLET_ADDR)}">re-sign on the commit page</a>`;
+    ` · digest <code>${esc(String(ASSET_COMMIT.digest).slice(0, 10))}…</code> · <a href="#portable-state-card" data-open-state>re-sign below</a>`;
   bar.hidden = false;
   box.hidden = excluded.length === 0;
   $('v2-filter-excluded-head').textContent =
@@ -4672,6 +4718,9 @@ async function lookup() {
     const resolveStarted = performance.now();
     const resolved = await resolveAccount(typed);
     const addr = resolved.address;
+    // The panel promises "same account, same meter", so a different account starts
+    // over rather than showing the last one's cost against this one's entry count.
+    if (WALLET_ADDR !== addr) { COST.create = null; COST.view = null; renderStateCost(); }
     WALLET_ADDR = addr;
     WALLET_NAME = resolved.name || '';
     showResolved(resolved.name ? resolved : null);
@@ -5518,11 +5567,12 @@ function renderStateCost() {
   }
   const ct = c.bytesIn + c.bytesOut, vt = v.bytesIn + v.bytesOut;
   const ratio = vt > 0 ? ct / vt : 0;
-  compare.innerHTML = `Making the record cost <b>${num(c.calls)}</b> calls and <b>${costBytes(ct)}</b>; ` +
-    `reading it back cost <b>${num(v.calls)}</b> and <b>${costBytes(vt)}</b>` +
-    (ratio ? ` — <b>${ratio.toFixed(1)}×</b> the bytes` : "") +
-    `. The two do not scale together: making it walks a token list, so it grows with the list, ` +
-    `while reading it is one record plus the one revision that record names, whatever the list holds.`;
+  const hosts = (scope) => [...scope.hosts].map(esc).join(", ") || "this origin";
+  compare.innerHTML = `Making the record cost <b>${num(c.calls)}</b> calls and <b>${costBytes(ct)}</b> ` +
+    `against ${hosts(c)}; reading it back cost <b>${num(v.calls)}</b> and <b>${costBytes(vt)}</b> ` +
+    `against ${hosts(v)}` + (ratio ? ` — <b>${ratio.toFixed(1)}×</b> the bytes` : "") +
+    `. Both figures count only the calls their own buttons made: the page's background ` +
+    `polling is paused while either half is being measured.`;
 }
 function cachePortable(s) {
   PORTABLE = s;
@@ -6170,6 +6220,10 @@ Promise.all([loadAssets(), loadCandidates()]).then(() => {
 // Discovery moves; the rest does not. An account lookup, the epochs table and the
 // graph are left alone until something asks for them again.
 setInterval(() => {
+  // A measurement is open: these polls are the page's own housekeeping, not the
+  // cost of the half being measured, and counting them would make the number a
+  // function of how long the reader waited. They resume when the scope closes.
+  if (COST_SCOPE) return;
   loadChains(); loadStatus(); loadCandidates(); loadDecisions(); loadAssets();
 }, 5000);
 </script>
