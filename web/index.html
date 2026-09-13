@@ -3599,15 +3599,18 @@ async function tokenList(url = DEFAULT_TOKEN_LIST) {
 // does not hang: a chain the list has tokens for, that viem knows, and that has
 // somewhere to ask. Busiest first, because that is the order a reader cares about
 // and the order in which partial results are worth showing.
-async function sweepableChains() {
+async function sweepableChains(extraIDs = []) {
   const [chains, list] = await Promise.all([allChains(), tokenList()]);
   const byId = new Map(chains.map(c => [c.id, c]));
   const out = [];
-  for (const [chainId, tokens] of list.byChain) {
+  const included = new Set();
+  const add = (chainId, tokens) => {
+    if (included.has(chainId)) return;
     const c = byId.get(chainId);
-    if (!c || RETIRED_CHAINS.has(chainId)) continue;
+    if (!c || RETIRED_CHAINS.has(chainId)) return;
     const { url, mine } = rpcForChain(chainId, c);
-    if (!url) continue;
+    if (!url) return;
+    included.add(chainId);
     out.push({
       id: chainId, name: c.name, native: c.nativeCurrency?.symbol || '',
       testnet: !!c.testnet,
@@ -3615,7 +3618,11 @@ async function sweepableChains() {
       // viem's public default, kept so "use the default" can put it back.
       defaultRpc: c.rpcUrls?.default?.http?.[0] || '',
     });
-  }
+  };
+  for (const [chainId, tokens] of list.byChain) add(chainId, tokens);
+  // The short non-published picker names these chains even when the list happens
+  // not to carry a token for one. “Show more” remains the exhaustive list view.
+  for (const chainId of extraIDs) add(Number(chainId), []);
   // Mainnets first, busiest first within each. The testnets that are left are live
   // ones, listed but never swept by default: nobody holds anything there by accident.
   out.sort((a, b) => (a.testnet - b.testnet) || (b.tokens.length - a.tokens.length));
@@ -3779,6 +3786,47 @@ let XLIST = null;         // the token list's own name and version, for the disc
 let XSTATE = 'idle';      // idle | running | done
 let XLAST = null;         // the last sweep's totals, for the status line after it
 let XRPC_EDIT = null;     // the chain whose endpoint row is open, if any
+let XCHAIN_ALL = null;   // the complete viem/token-list view, behind “show more”
+let XCHAIN_MODE = 'all'; // all | published | preselected
+let XCHAIN_SOURCE = 'token-list';
+const PRESELECTED_CHAIN_IDS = [1, 42161, 8453, 10];
+
+function sweepChainView(id, viemChain, tokens) {
+  const configured = CHAINS.find(chain => Number(chain.chain_id) === id);
+  const { url, mine } = rpcForChain(id, viemChain);
+  return {
+    id,
+    name: viemChain?.name || configured?.name || `Chain ${id}`,
+    native: viemChain?.nativeCurrency?.symbol || '',
+    testnet: !!viemChain?.testnet,
+    tokens, rpc: url, mine, host: url ? hostOf(url) : 'an endpoint is required',
+    defaultRpc: viemChain?.rpcUrls?.default?.http?.[0] || '',
+  };
+}
+
+// A signed asset commit is an account's exact cross-chain record. Its pairs, not
+// the broad token list, determine both the chains and contracts in this picker.
+async function committedSweepableChains() {
+  const [viem, list] = await Promise.all([allChains(), tokenList().catch(() => null)]);
+  const byID = new Map(viem.map(chain => [chain.id, chain]));
+  const committed = new Map();
+  for (const item of (ASSET_COMMIT?.assets || [])) {
+    const id = Number(item.chain_id);
+    const address = String(item.address || '');
+    if (!Number.isSafeInteger(id) || id <= 0 || !ADDRESS_RE.test(address)) continue;
+    const assets = committed.get(id) || new Set();
+    assets.add(address.toLowerCase());
+    committed.set(id, assets);
+  }
+  const out = [];
+  for (const [id, addresses] of committed) {
+    if (RETIRED_CHAINS.has(id)) continue;
+    const listed = new Map((list?.byChain.get(id) || []).map(token => [token.address.toLowerCase(), token]));
+    out.push(sweepChainView(id, byID.get(id), [...addresses].map(address => listed.get(address) || { address })));
+  }
+  out.sort((a, b) => (a.testnet - b.testnet) || (b.tokens.length - a.tokens.length));
+  return { chains: out, list };
+}
 async function openXChain() {
   $('v2-network-modal').hidden = false;
   if (XCHAIN) {
@@ -3796,8 +3844,21 @@ async function openXChain() {
   $('xchain-panel').inert = true;
   $('xchain-list').innerHTML = '<div class="empty" style="padding:14px 0">Loading available networks…</div>';
   try {
-    XCHAIN = await sweepableChains();
-    XLIST = await tokenList();
+    XSELECTED.clear();
+    if (ASSET_COMMIT?.assets?.length) {
+      const committed = await committedSweepableChains();
+      XCHAIN = committed.chains;
+      XCHAIN_ALL = null;
+      XLIST = committed.list;
+      XCHAIN_MODE = 'published';
+      XCHAIN_SOURCE = 'signed-list';
+    } else {
+      XCHAIN_ALL = await sweepableChains(PRESELECTED_CHAIN_IDS);
+      XCHAIN = PRESELECTED_CHAIN_IDS.map(id => XCHAIN_ALL.find(chain => chain.id === id)).filter(Boolean);
+      XLIST = await tokenList();
+      XCHAIN_MODE = 'preselected';
+      XCHAIN_SOURCE = 'token-list';
+    }
   } catch (e) {
     $('xchain-panel').hidden = true;
     $('xchain-panel').inert = false;
@@ -3808,7 +3869,7 @@ async function openXChain() {
   }
   $('xchain-panel').inert = false;
   $('xchain-openrow').hidden = true;
-  for (const c of XCHAIN) if (!c.testnet) XSELECTED.add(c.id);
+  for (const chain of XCHAIN) if (!chain.testnet && chain.rpc) XSELECTED.add(chain.id);
   renderXChainList();
 }
 
@@ -3826,7 +3887,7 @@ function renderXChainList() {
         <span class="box ${on ? 'on' : ''}">${on ? '✓' : ''}</span>
         <span style="min-width:0">
           <span class="cn">${esc(c.name)}${c.testnet ? ' <span class="tag">testnet</span>' : ''}</span>
-          <span class="ch" title="${esc(c.rpc)}">${c.mine ? 'your endpoint · ' : ''}${esc(c.host)} · ${num(c.tokens.length)} contract${c.tokens.length === 1 ? '' : 's'}</span>
+          <span class="ch" title="${esc(c.rpc)}">${c.mine ? 'your endpoint · ' : ''}${esc(c.host)} · ${num(c.tokens.length)} ${XCHAIN_SOURCE === 'signed-list' ? 'signed' : 'listed'} contract${c.tokens.length === 1 ? '' : 's'}</span>
         </span>
       </button>
       <button class="linkbtn set" data-xrpc="${c.id}" title="use an endpoint of your own for ${esc(c.name)}">${editing ? 'cancel' : 'set'}</button>
@@ -3837,7 +3898,9 @@ function renderXChainList() {
         <button class="btn btn-ghost btn-sm" data-xrpc-reset="${c.id}" title="${esc(c.defaultRpc || c.rpc)}">default</button>
       </div>` : ''}
     </div>`;
-  }).join('');
+  }).join('') + (XCHAIN_MODE === 'preselected'
+    ? '<button class="btn btn-secondary btn-sm" id="xchain-show-more" type="button" style="justify-self:start">Show more chains</button>'
+    : '');
 
   for (const el of $('xchain-list').querySelectorAll('[data-xchain]')) {
     el.addEventListener('click', () => {
@@ -3847,6 +3910,12 @@ function renderXChainList() {
       renderXChainList();
     });
   }
+  const showMore = $('xchain-show-more');
+  if (showMore) showMore.addEventListener('click', () => {
+    XCHAIN = XCHAIN_ALL;
+    XCHAIN_MODE = 'all';
+    renderXChainList();
+  });
   for (const el of $('xchain-list').querySelectorAll('[data-xrpc]')) {
     el.addEventListener('click', (ev) => {
       ev.preventDefault();
@@ -3863,7 +3932,7 @@ function renderXChainList() {
     setRpcForChain(id, v);
     c.rpc = v || c.defaultRpc || c.rpc;
     c.mine = !!v;
-    c.host = hostOf(c.rpc);
+    c.host = c.rpc ? hostOf(c.rpc) : 'an endpoint is required';
     XRPC_EDIT = null;
     XSTATE = 'idle';
     renderXChainList();
@@ -3896,7 +3965,9 @@ function updateXChainStatus() {
 
   const contracts = picked.reduce((n, c) => n + c.tokens.length, 0);
   const calls = picked.reduce((n, c) => n + Math.ceil(c.tokens.length / LENS_BATCH), 0);
-  const list = XLIST ? `<code>${esc(XLIST.name)}</code> lists ${num(contracts)} contracts on them, ${num(calls)} lens calls. ` : '';
+  const list = XCHAIN_SOURCE === 'signed-list'
+    ? `Your signed list names ${num(contracts)} contract${contracts === 1 ? '' : 's'} on them, ${num(calls)} lens call${calls === 1 ? '' : 's'}. `
+    : XLIST ? `<code>${esc(XLIST.name)}</code> lists ${num(contracts)} contracts on them, ${num(calls)} lens calls. ` : '';
   $('xchain-disclosure').innerHTML = `Every endpoint reached sees the address — <strong>${
       !picked.length ? 'nothing is selected, so nothing is asked'
       : strangers === 0 ? 'none of the endpoints you selected are strangers — this sweep only asks your own node'
@@ -3934,10 +4005,12 @@ function renderV2NetworkPicker() {
     const on = XSELECTED.has(chain.id);
     return `<button class="v2-network-row" data-v2-chain="${chain.id}" aria-pressed="${on}">
       <span class="dot" style="background:${chainColor(chain.id)}"></span>
-      <span><strong>${esc(chain.name)}</strong><span class="empty" style="display:block;font-size:12px">${num(chain.tokens.length)} indexed contracts${chain.mine ? ' · your endpoint' : ''}</span></span>
+      <span><strong>${esc(chain.name)}</strong><span class="empty" style="display:block;font-size:12px">${num(chain.tokens.length)} ${XCHAIN_SOURCE === 'signed-list' ? 'signed' : 'listed'} contract${chain.tokens.length === 1 ? '' : 's'}${chain.mine ? ' · your endpoint' : ''}</span></span>
       <span class="check ${on ? 'on' : ''}">${on ? '✓' : ''}</span>
     </button>`;
-  }).join('');
+  }).join('') + (XCHAIN_MODE === 'preselected'
+    ? '<button class="v2-network-row" id="v2-network-show-more" type="button"><span>Show more chains</span></button>'
+    : '');
   for (const button of $('v2-network-list').querySelectorAll('[data-v2-chain]')) {
     button.addEventListener('click', () => {
       const id = Number(button.dataset.v2Chain);
@@ -3946,6 +4019,12 @@ function renderV2NetworkPicker() {
       renderXChainList();
     });
   }
+  const showMore = $('v2-network-show-more');
+  if (showMore) showMore.addEventListener('click', () => {
+    XCHAIN = XCHAIN_ALL;
+    XCHAIN_MODE = 'all';
+    renderXChainList();
+  });
   const read = $('v2-network-read');
   read.disabled = !picked.length || !WALLET_ADDR || XSTATE === 'running';
   read.textContent = XSTATE === 'running' ? 'Reading enabled networks…' : !picked.length ? 'Select a network' : `Read ${num(picked.length)} enabled network${picked.length === 1 ? '' : 's'}`;
@@ -4473,6 +4552,14 @@ async function lookup() {
   // explicit new lookup releases that answer back to the single-chain view.
   XSTATE = 'idle';
   XLAST = null;
+  XCHAIN = null;
+  XCHAIN_ALL = null;
+  XLIST = null;
+  XCHAIN_MODE = 'all';
+  XCHAIN_SOURCE = 'token-list';
+  XSELECTED.clear();
+  XRPC_EDIT = null;
+  ASSET_COMMIT = null;
   renderV2Trail();
   showErr('account-err', null);
   $('lookup').disabled = true;

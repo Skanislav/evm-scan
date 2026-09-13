@@ -23,20 +23,39 @@ import * as R from './ensrec.js';
 
 const $ = (id) => document.getElementById(id);
 const VIEM_MODULE = 'https://esm.sh/viem@2.56.3?bundle';
+const VIEM_CHAINS_MODULE = 'https://esm.sh/viem@2.56.3/es2022/chains.mjs';
 let viemModule = null;
 const viem = () => (viemModule ||= import(VIEM_MODULE));
+let chainsByID = new Map();
+let chainsByIDLoad = null;
+
+function loadChainCatalog() {
+  if (!chainsByIDLoad) {
+    chainsByIDLoad = import(VIEM_CHAINS_MODULE).then(module => {
+      for (const chain of Object.values(module)) {
+        if (chain && typeof chain === 'object' && chain.id && chain.rpcUrls) chainsByID.set(chain.id, chain);
+      }
+      return chainsByID;
+    }).catch(() => chainsByID);
+  }
+  return chainsByIDLoad;
+}
+
+function chainRpcFor(id) {
+  const own = load(chainRpcKey(id));
+  if (own) return own;
+  return chainsByID.get(Number(id))?.rpcUrls?.default?.http?.[0] || '';
+}
+
+function chainNameFor(id) {
+  return chainsByID.get(Number(id))?.name || '';
+}
 
 // The same storage keys index.html uses, so a reader who named an RPC there has it
 // here too.
 const NAME_RPC_KEY = 'evmscan.name-rpc';
 const DEFAULT_NAME_RPC = 'https://ethereum-rpc.publicnode.com';
 const chainRpcKey = (id) => `evmscan.chain-rpc.${id}`;
-const PUBLIC_RPC = {
-  1: 'https://ethereum-rpc.publicnode.com',
-  8453: 'https://base-rpc.publicnode.com',
-  11155111: 'https://ethereum-sepolia-rpc.publicnode.com',
-};
-const CHAIN_NAME = { 1: 'Ethereum mainnet', 8453: 'Base', 11155111: 'Sepolia' };
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const short = (a, n = 4) => a ? `${a.slice(0, 2 + n)}…${a.slice(-n)}` : '';
@@ -367,9 +386,6 @@ function render(r, bal, rpcUrl) {
 // ---------------------------------------------------------------------------
 // Wiring
 // ---------------------------------------------------------------------------
-function chainRpcFor(id) {
-  return load(chainRpcKey(id)) || PUBLIC_RPC[id] || '';
-}
 
 async function run() {
   reset();
@@ -378,6 +394,7 @@ async function run() {
   const go = $('go');
   go.disabled = true;
   try {
+    await loadChainCatalog();
     store(NAME_RPC_KEY, $('ens-rpc').value.trim() === DEFAULT_NAME_RPC ? '' : $('ens-rpc').value.trim());
     const r = await readRegistry(typed, $('parent').value.trim());
 
@@ -389,7 +406,8 @@ async function run() {
     url = url || chainRpcFor(r.chainId);
     if (!url) throw new Error(`no RPC for chain ${r.chainId}; type one under "balances, read at head from"`);
     $('chain-rpc').value = url;
-    $('chain-rpc-note').textContent = `chain ${r.chainId}${CHAIN_NAME[r.chainId] ? ` · ${CHAIN_NAME[r.chainId]}` : ''} · this one sees the address`;
+    const chainName = chainNameFor(r.chainId);
+    $('chain-rpc-note').textContent = `chain ${r.chainId}${chainName ? ` · ${chainName}` : ''} · this one sees the address`;
 
     if (!r.contracts.length) {
       step('The record is empty', 'nothing to read balances for');
@@ -415,9 +433,11 @@ async function run() {
 
 async function init() {
   $('ens-rpc').value = load(NAME_RPC_KEY) || DEFAULT_NAME_RPC;
-  $('chain-rpc').value = load(chainRpcKey(1)) || load('evmscan.chain-rpc') || PUBLIC_RPC[1];
+  $('chain-rpc').value = load(chainRpcKey(1)) || load('evmscan.chain-rpc');
   $('go').addEventListener('click', run);
   $('name').addEventListener('keydown', e => { if (e.key === 'Enter') run(); });
+  await loadChainCatalog();
+  if (!$('chain-rpc').value) $('chain-rpc').value = chainRpcFor(1);
 
   // The parent comes from the deployment when it has a resolver attached; a typed one
   // wins, so a reader can point this page at somebody else's.
