@@ -5,9 +5,10 @@ remembered asset list. One account signature authorizes both storage and indexin
 demand. Asset-list entries only prioritize subsequent reads. Negative verdicts
 remain enumerable and remain in live balance reads.
 
-The wallet's **Portable wallet memory** card is available even when the index has
-no holdings. Review the complete list, adjust verdicts, and sign it. Download a
-backup after signing. Browser storage is a cache; the server keeps immutable signed
+All commit links open the wallet's **Portable wallet memory** card, available even
+when the index has no holdings. The separate asset-commit page has been removed;
+its API remains available for compatibility. Review the complete list, adjust
+verdicts, and sign it. Download a backup after signing. Browser storage is a cache; the server keeps immutable signed
 snapshots. Neither a snapshot nor an ENS commitment asserts a current balance.
 
 ## Format v1
@@ -183,9 +184,12 @@ answers a different question from the one this measures.
 The per-entry figure divides by the entries in the signed snapshot — the trie's
 leaves, which is exactly what the root covers — not by holdings on screen and not by
 chains swept. Both the totals and the per-entry figure are shown, because the two
-halves do not scale together: making the record walks a token list and grows with it,
-while reading it is one record plus the one revision that record names, whatever the
-list holds.
+halves perform different operations. Each scope counts only requests made by its
+own action buttons, not the earlier portfolio lookup or token-list sweep. Background
+polling is paused while a scope is open, and looking up another account clears the
+comparison. The readout names the hosts contacted and compares observed costs;
+it does not establish a complexity or scaling claim. Fetching a signed revision
+still transfers its enumerable entries, whose size grows with the snapshot.
 
 ## Export and replacement-server recovery
 
