@@ -83,8 +83,15 @@ registry:
   address: ""
   publisher_key: ""
   sync_interval: 60s
-  # Sepolia gas is free, so the timer, not the cost, is what bounds how often a
-  # commitment is posted. Identical roots are skipped either way.
+  # How often a *new* commitment is built. Sepolia gas is free, so what bounds this
+  # is not the gas but the ~2M leaf rows an epoch writes. Identical roots are
+  # skipped either way.
+  #
+  # Settling — finalizing what is past its challenge window and claiming the
+  # coverage that makes — is not on this clock. It runs on sync_interval above,
+  # because it is idempotent and sends nothing when nothing is due, and because
+  # settling on the build clock would leave a 600-second window proposed for the
+  # rest of the hour.
   auto_publish_interval: 1h
   # ENS. Every account gets <hex>.hints.<ens_parent>. 5can.eth is the name this
   # operator actually holds — on ENSv2 Sepolia, which is also where the state
