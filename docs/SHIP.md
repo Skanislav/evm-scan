@@ -1,8 +1,11 @@
 # SHIP.md — the last eight hours
 
-Written 2026-09-13. One page that says what ships, what is cut, what the reader
-does on the page, and the order the work runs in. When this file and another doc
-disagree, this file wins for the ship.
+Historical ship plan, written 2026-09-13. The decisions and checklist below record
+the earlier ship scope. Subsequent merged work added portable wallet state and
+ENSv2 Sepolia state checkpoints, unified the commit links, and removed the separate
+asset-commit page. For current product behavior use [PRODUCT.md](PRODUCT.md) and
+[USER_STATE.md](USER_STATE.md). The custom ENS **index** resolvers below remain
+deferred; they are separate from the implemented **state** checkpoints.
 
 ## 0. The product, in one paragraph
 

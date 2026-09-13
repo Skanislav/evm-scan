@@ -1,17 +1,15 @@
 # evm-scan
 
-Permissionless asset indexing for the access layer, built on your own node.
+evm-scan finds contracts worth checking for a wallet, reads their live balances,
+and remembers the owner's choices to improve future reads and indexing.
 
-Wallets need to answer one question fast: **"what does this address hold?"** Answering it
-properly means scanning the whole chain, which is why almost every wallet outsources it
-to a handful of indexing providers. That is a real centralisation point in an otherwise
-decentralised stack — and the data being outsourced is entirely public.
+Run a node, index requested token contracts, and publish the account-to-contract
+index as an optimistic onchain commitment. Readers verify published lists and read
+balances at head. Signed wallet state keeps recognition choices and remembered
+assets recoverable across browsers and servers.
 
-evm-scan takes the opposite approach: run a node, index only what someone actually asked
-for, and publish the result back on-chain so nobody has to trust the indexer. The person
-asking is the wallet's owner: the page sorts what an address holds into recognized and
-junk, the reader corrects it and signs once, and that signature is what the index
-spends its history on next.
+[Product shape](docs/PRODUCT.md) explains the current reader flow, the wallet-state
+trie rewrite, proof boundaries and remaining cleanup proposals.
 
 ## The idea
 
@@ -40,8 +38,8 @@ once**, which is enough to build a complete per-account index for it.
 **4. The output is a hint, not an oracle.** The derived `account → contracts` table is
 committed on-chain as a merkle root with a challenge window. A wallet uses it to learn
 *which contracts are worth pulling history for*, then fetches that history from whatever
-source it trusts — including its own node. Nothing here has to be believed, which is why
-publishing it permissionlessly is safe.
+source it trusts — including its own node. The proof authenticates the published
+list, not complete history or current holdings; coverage still depends on the node and the challenge process.
 
 ## What a reader does
 
@@ -51,8 +49,9 @@ from (a Chainlink feed beats a DEX pool), a curated token list, who paid to inde
 how many others vouched, whether this wallet ever *sent* the token rather than only
 received it, and whether the symbol impersonates a listed one. The reader looks the
 split over, flips anything the page got wrong, and **signs one message**. The next
-lookup, by anyone, is ordered by what was signed. That is the whole act: no vote
-button, no aside toggle, no report, no hint card, no on-chain transaction.
+lookup, by anyone, is ordered by what was signed. The signature itself sends no
+transaction. Optional public wallet state combines verdicts and remembered assets;
+publishing its ENS checkpoint is a separate transaction.
 
 Step by step:
 
@@ -83,14 +82,18 @@ Step by step:
 4. **Verify.** Two groups: recognized on top, the rest below, each row with its chips
    and one toggle to move it across. Junk sits in the lower group with a red chip and
    is promoted with the same toggle.
-5. **Sign once.** One button, *Sign my verdict*: EIP-712
+5. **Sign.** Without public-state opt-in, *Sign my verdict* uses EIP-712
    `Verdict(account, chainId, digest, deadline)`, where `digest` is a keccak over the
    sorted `(address, weight)` pairs. The wallet shows three named fields. The page posts
    the pairs and the signature to `POST /v1/verdict`; the daemon recovers the signer,
    checks it is the account, checks the deadline is later than the last one it stored,
-   and replaces that account's previous verdict with this one.
-6. **Remember.** `localStorage["evmscan.verdict.<account>"]` keeps the signed pairs and
-   the deadline, so the next lookup is pre-split the same way before the daemon answers.
+   and replaces that account's previous verdict with this one. With public state
+   selected, the button instead opens review of the complete cross-chain snapshot
+   before signing `State`; see [Portable wallet state](#portable-wallet-state).
+6. **Remember.** Standalone verdicts use `localStorage["evmscan.verdict.<account>"]`.
+   Portable state caches the signed snapshot under `evmscan.state.<account>` and
+   stores it on the server, with downloadable backups for recovery. Both seed
+   subsequent reads and classification.
 7. **Next query.** Everyone's list is ordered by the same rule: reported contracts and
    those with more `against` than `for` sink to the bottom; contracts committed in the
    latest finalized epoch come first; then net signers; then paid funding, then
@@ -102,22 +105,26 @@ A verdict is a priority signal and nothing else. It buys no position — an oper
 report or a majority against still sinks a contract regardless of how many signed for
 it — and it changes nothing about what a balance read says.
 
-An account can also sign an exact sweep snapshot through **Commit discovered assets**.
-`AssetCommit(account, digest, deadline)` covers sorted `(chain_id, address)` pairs.
-It does not register or promote contracts; it authorizes the daemon to keep that
-enumerable list and, on a later lookup, read its matching chain entries before broad
-candidate discovery. A newer deadline atomically replaces the old snapshot, so an old
-signature cannot restore stale assets.
-
 ## Portable wallet state
 
-The wallet can opt into a public signed snapshot of its cross-chain verdicts and
-remembered assets. A deterministic binary Merkle trie makes the snapshot verifiable
-and reproducible on another server. Download/import backups, publish an individual
-checkpoint through an ENSv2 Sepolia name, or verify the operator's automatic batch
-checkpoint. Legacy verdict and asset-list writes remain available and are flagged
-when they differ from the signed snapshot. See [USER_STATE.md](docs/USER_STATE.md)
-for the format, recovery commands, permissions and publisher configuration.
+All commit links open **Portable wallet memory** on the wallet page. Review the
+complete public snapshot, correct its verdicts, and sign once to store cross-chain
+verdicts and remembered assets together. Remembered assets seed future reads;
+verdicts contribute indexing demand. The separate asset-commit page is removed;
+legacy `AssetCommit` and `Verdict` API writes remain accepted and are flagged when
+they differ from an existing signed state snapshot.
+
+The trie rewrite adds a deterministic sparse binary tree for each account's state
+and a second tree mapping accounts to signed revisions in an aggregate checkpoint.
+Download/import backups, optionally publish a personal checkpoint through an
+ENSv2 Sepolia name, or verify an operator checkpoint when configured. The card
+separately measures making the record and reading it back. A root cannot restore
+missing data: retain a backup or replica.
+
+This does **not** replace the publisher's sorted-pair history-index Merkle tree or
+its full snapshot build. An absence proof refers to the state checkpoint, not to
+whether an account owns assets. See [USER_STATE.md](docs/USER_STATE.md) for the
+format, recovery commands, measurement limits and publisher configuration.
 
 ## Why a snap-synced node is enough
 
