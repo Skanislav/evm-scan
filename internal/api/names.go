@@ -133,12 +133,22 @@ func (s *Server) nameInfo(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, "account must be an address", nil)
 			return
 		}
-		n, err := s.nameNonce(r.Context(), common.HexToAddress(v))
+		account := common.HexToAddress(v)
+		n, err := s.nameNonce(r.Context(), account)
 		if err != nil {
 			out["available"] = false
 			out["reason"] = "the configured resolver does not answer nonces()"
 		} else {
 			out["nonce"] = n.String()
+		}
+		// The two states a client renders: a label comes back and the account
+		// resolves by name, or nothing does and it is reachable at its hex address
+		// — which every account already is, and which nothing here can take away.
+		if held, err := s.labelOf(r.Context(), account); err == nil {
+			out["held_label"] = held
+			if held != "" && s.d.ENSParent != "" {
+				out["held_name"] = held + ".hints." + s.d.ENSParent
+			}
 		}
 	}
 	if label := r.URL.Query().Get("label"); label != "" {
@@ -150,6 +160,23 @@ func (s *Server) nameInfo(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// labelOf is the reverse of nameHolder: what this account is called, or "".
+func (s *Server) labelOf(ctx context.Context, account common.Address) (string, error) {
+	data, err := aliasABI.Pack("labelOfAccount", account)
+	if err != nil {
+		return "", err
+	}
+	out, err := s.callNameResolver(ctx, data)
+	if err != nil {
+		return "", err
+	}
+	vals, err := aliasABI.Unpack("labelOfAccount", out)
+	if err != nil {
+		return "", err
+	}
+	return vals[0].(string), nil
 }
 
 func (s *Server) nameHolder(ctx context.Context, label string) (common.Address, error) {

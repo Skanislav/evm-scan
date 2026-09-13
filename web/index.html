@@ -629,8 +629,11 @@
      chains. The detailed classifier remains in the DOM for its signed-verdict flow. */
   #beat2 { display: grid; place-items: start center; background: #f5f4f0; }
   #beat2 > .wrap { width: 100%; max-width: 560px; padding-top: 24px; }
+  /* Two cards survive the v2 answer: the cross-chain sweep and the account's
+     name. Both are secondary to the answer and neither is part of the detailed
+     classifier this rule exists to hide. */
   #beat2 > .wrap > .kicker, #wallet-head, #networks, #chain-unverified,
-  #holdings-wrap > :not(#xchain) { display: none !important; }
+  #holdings-wrap > :not(#xchain):not(#hintname) { display: none !important; }
   #v2-answer { width: 100%; border-radius: 28px; background: #fff; box-shadow: 0 12px 32px rgba(20,22,26,.13); padding: 12px; }
   .v2-answer-address { padding: 10px 16px 12px; }
   .v2-answer-name { font: 600 20px/1.2 'Syne', var(--sans); }
@@ -978,6 +981,34 @@
         </div>
         <p class="hint" id="verdict-note" style="margin:10px 0 0; max-width:92ch; text-wrap:pretty"></p>
         <div class="err" id="verdict-err" hidden></div>
+      </div>
+
+      <!-- The account's ENS name, under the operator's parent. Two states and no
+           third: a label is claimed and the account resolves by name, or nothing is
+           and it resolves at its hex address — which it already does, and which no
+           claim here can take away. The claim is an EIP-712 signature, never a
+           transaction from this wallet: POST /v1/names carries it and the deployment
+           pays the gas. -->
+      <div class="sweep" id="hintname" hidden>
+        <div class="sweep-head">
+          <span class="label">Your name for this index</span>
+          <span class="colnote" id="hintname-parent"></span>
+        </div>
+        <div class="sweep-body">
+          <p class="hint" style="margin:0 0 12px; max-width:680px; text-wrap:pretty">Every account already answers at
+            its address. Claiming a label points a readable name at the same records — the same index, proven against
+            the same on-chain root. You sign; this deployment pays the gas.</p>
+          <div id="hintname-state" class="subrow" style="margin-bottom:10px"></div>
+          <div class="row" style="gap:10px; flex-wrap:wrap">
+            <input class="input" type="text" id="hintname-label" spellcheck="false" autocomplete="off"
+                   placeholder="alice" style="max-width:220px" disabled>
+            <button class="btn btn-primary btn-sm" id="hintname-claim" disabled>Claim this name</button>
+            <button class="btn btn-secondary btn-sm" id="hintname-release" hidden>Release</button>
+            <span class="hint" id="hintname-status"></span>
+          </div>
+          <p class="hint" id="hintname-note" style="margin:10px 0 0; max-width:92ch; text-wrap:pretty"></p>
+          <div class="err" id="hintname-err" hidden></div>
+        </div>
       </div>
 
 
@@ -5111,7 +5142,7 @@ async function connectForVerdict() {
   btn.disabled = true;
   try { await connectVerdictWallet(); }
   catch (e) { showErr('verdict-err', e); }
-  finally { btn.disabled = false; updateVerdictBar(); }
+  finally { btn.disabled = false; updateVerdictBar(); renderHintName(); }
 }
 
 async function signVerdict() {
@@ -5156,6 +5187,159 @@ async function signVerdict() {
     showErr('verdict-err', e.status ? new Error(`${e.status}: ${e.message}`) : e);
   } finally {
     updateVerdictBar();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The account's readable name.
+//
+// Two states and no third. A label is claimed, and the account resolves by name;
+// or nothing is, and it resolves at <hex>.hints.<parent>, which every account
+// already does and which no claim here can take away. Both are read from one
+// eth_call the daemon makes for us — GET /v1/names?account= returns held_label —
+// so deciding which to render costs the reader no signature.
+//
+// The claim itself is EIP-712 Claim(label, account, nonce, deadline) with the
+// resolver as the verifying contract and its chain in the domain, because unlike
+// Verdict this one is checked on chain by one contract. The wallet signs and
+// sends nothing: POST /v1/names carries it and this deployment pays.
+// ---------------------------------------------------------------------------
+let NAMEINFO = null;   // the last GET /v1/names for the account on screen
+
+function hintnameTypedData(info, label, account, nonce, deadline, primary) {
+  const fields = [
+    { name: 'label', type: 'string' }, { name: 'account', type: 'address' },
+    { name: 'nonce', type: 'uint256' }, { name: 'deadline', type: 'uint256' },
+  ];
+  return {
+    types: {
+      EIP712Domain: [
+        { name: 'name', type: 'string' }, { name: 'version', type: 'string' },
+        { name: 'chainId', type: 'uint256' }, { name: 'verifyingContract', type: 'address' },
+      ],
+      [primary]: fields,
+    },
+    primaryType: primary,
+    domain: {
+      name: info.domain.name, version: info.domain.version,
+      chainId: Number(info.domain.chainId), verifyingContract: info.domain.verifyingContract,
+    },
+    message: { label, account, nonce: String(nonce), deadline: String(deadline) },
+  };
+}
+
+// A sensible default for the input, and only a default: the reader's mainnet
+// primary ENS name with its suffix removed. It is a suggestion because the label
+// here is not that name and claiming it proves nothing about it — the two live in
+// different registries and only the address connects them.
+function suggestedLabel(primaryName) {
+  if (!primaryName) return '';
+  const first = String(primaryName).split('.')[0].toLowerCase();
+  return /^[a-z0-9-]{3,63}$/.test(first) && !/^[0-9a-f]{40}$/.test(first) ? first : '';
+}
+
+async function loadHintName() {
+  const card = $('hintname');
+  if (!WALLET_ADDR) { card.hidden = true; NAMEINFO = null; return; }
+  try {
+    NAMEINFO = await api(`/v1/names?account=${WALLET_ADDR}`);
+  } catch (e) {
+    // 404 is the ordinary answer on a deployment that serves no names; it is not
+    // an error to put in front of a reader who never asked for one.
+    card.hidden = true; NAMEINFO = null; return;
+  }
+  card.hidden = false;
+  $('hintname-parent').textContent = NAMEINFO.parent ? `under hints.${NAMEINFO.parent}` : '';
+  const input = $('hintname-label');
+  if (!input.value) {
+    const held = NAMEINFO.held_label || '';
+    if (held) input.value = held;
+    else {
+      // Best effort, and silent when it fails: a missing suggestion costs nothing.
+      try {
+        const rev = await reverseName(WALLET_ADDR);
+        if (rev && rev.name) input.value = suggestedLabel(rev.name);
+      } catch { /* no suggestion */ }
+    }
+  }
+  renderHintName();
+}
+
+function renderHintName() {
+  if (!NAMEINFO) return;
+  const info = NAMEINFO;
+  const held = info.held_label || '';
+  const state = $('hintname-state');
+  const hexName = info.parent && WALLET_ADDR
+    ? `${WALLET_ADDR.slice(2).toLowerCase()}.hints.${info.parent}` : '';
+  if (held) {
+    state.innerHTML = `<span class="label">claimed</span> <code>${esc(info.held_name || held)}</code>` +
+      (hexName ? ` <span class="hint">· also at <code>${esc(hexName)}</code></span>` : '');
+  } else {
+    state.innerHTML = `<span class="label">only by address</span>` +
+      (hexName ? ` <code>${esc(hexName)}</code>` : '') +
+      ` <span class="hint">· no label claimed</span>`;
+  }
+  const connected = VERDICT_WALLET && WALLET_ADDR &&
+    VERDICT_WALLET.toLowerCase() === WALLET_ADDR.toLowerCase();
+  const input = $('hintname-label');
+  input.disabled = !connected || info.available === false;
+  const claim = $('hintname-claim');
+  claim.disabled = input.disabled || !input.value.trim() || input.value.trim() === held;
+  claim.textContent = held ? 'Change to this name' : 'Claim this name';
+  $('hintname-release').hidden = !held || !connected;
+  const note = $('hintname-note');
+  if (info.available === false) {
+    note.textContent = 'This deployment is not carrying name claims right now, so a claim would have to be sent from your own wallet.';
+  } else if (!VERDICT_WALLET) {
+    note.textContent = 'Connect the wallet above to claim a name. The signature costs nothing and sends nothing from it.';
+  } else if (!connected) {
+    note.textContent = `The connected wallet is ${short(VERDICT_WALLET)} and the account on screen is ${short(WALLET_ADDR)} — only an account can name itself.`;
+  } else {
+    note.textContent = 'A name is first come, first served, and says nothing about who you are: it points at your address, ' +
+      'and anything that needs your identity has to check the address against something else. One name per account — ' +
+      'claiming another releases this one.';
+  }
+}
+
+async function hintnameAct(release) {
+  const status = $('hintname-status');
+  const say = (t) => { status.textContent = t; };
+  showErr('hintname-err', null);
+  const btns = [$('hintname-claim'), $('hintname-release')];
+  btns.forEach(b => b.disabled = true);
+  try {
+    const info = NAMEINFO;
+    if (!info) throw new Error('this deployment serves no names');
+    const wallet = VERDICT_WALLET || await connectVerdictWallet();
+    if (wallet.toLowerCase() !== WALLET_ADDR.toLowerCase()) {
+      throw new Error(`the connected wallet is ${short(wallet)}, and the account on screen is ${short(WALLET_ADDR)} — only an account can name itself`);
+    }
+    const label = release ? (info.held_label || '') : $('hintname-label').value.trim().toLowerCase();
+    if (!label) throw new Error('type a label first');
+    // Re-read the nonce immediately before signing: it moves when any claim of
+    // this account's mines, and a signature made against a stale one is refused.
+    const fresh = await api(`/v1/names?account=${WALLET_ADDR}`);
+    const deadline = String(Math.floor(Date.now() / 1000) + 900);
+    const typed = hintnameTypedData(fresh, label, wallet, fresh.nonce, deadline, release ? 'Release' : 'Claim');
+    say(release ? 'sign the release — no gas, nothing is sent from your wallet…'
+                : 'sign the claim — no gas, nothing is sent from your wallet…');
+    const signature = await window.ethereum.request({
+      method: 'eth_signTypedData_v4', params: [wallet, JSON.stringify(typed)],
+    });
+    say('sending — this deployment pays for it…');
+    const r = await api('/v1/names', {
+      method: 'POST', reader: true, headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ label, account: wallet, deadline, signature, release }),
+    });
+    say(release ? 'released' : (r.mined === false ? 'sent; waiting for it to mine' : `claimed — ${r.name || label}`));
+    if (release) $('hintname-label').value = '';
+    await loadHintName();
+  } catch (e) {
+    say('');
+    showErr('hintname-err', e.status ? new Error(`${e.status}: ${e.message}`) : e);
+  } finally {
+    renderHintName();
   }
 }
 
@@ -5335,6 +5519,7 @@ function renderHoldings() {
     $('total-tier').className = `badge ${tier}`;
   }
   updateVerdictBar();
+  loadHintName();
 }
 
 // The one control: up signs +1, down signs −1, for this row, until the signature.
@@ -5579,6 +5764,9 @@ $('account').addEventListener('input', () => {
 });
 $('account').addEventListener('keydown', e => { if (e.key === 'Enter') lookup(); });
 $('verdict-connect').addEventListener('click', connectForVerdict);
+$('hintname-claim').addEventListener('click', () => hintnameAct(false));
+$('hintname-release').addEventListener('click', () => hintnameAct(true));
+$('hintname-label').addEventListener('input', renderHintName);
 $('verdict-sign').addEventListener('click', signVerdict);
 
 // Portable state has its own immutable signed history; legacy writes stay live.
@@ -6211,7 +6399,11 @@ $("state-check-batch").addEventListener("click", stateAction(verifyStateBatch, "
 // A wallet that switches accounts changes who can sign; the bar says so at once.
 if (window.ethereum && window.ethereum.on) {
   try {
-    window.ethereum.on('accountsChanged', (accts) => { VERDICT_WALLET = (accts && accts[0]) || ''; updateVerdictBar(); });
+    window.ethereum.on('accountsChanged', (accts) => {
+      VERDICT_WALLET = (accts && accts[0]) || '';
+      updateVerdictBar();
+      renderHintName();
+    });
   } catch { /* a wallet without events */ }
 }
 
