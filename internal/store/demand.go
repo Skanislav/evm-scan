@@ -302,6 +302,12 @@ func (s *Store) ReplaceVerdicts(ctx context.Context, chainID uint64, account com
 	voter := voterKey(salt, chainID, account)
 
 	err = s.inTx(ctx, func(tx pgx.Tx) error {
+		if err := lockState(ctx, tx, account); err != nil {
+			return err
+		}
+		if err := markLegacyState(ctx, tx, account); err != nil {
+			return err
+		}
 		// The replay guard first: the row is only written when the deadline rises,
 		// and a signature that does not raise it is refused before anything moves.
 		// The deadline is a uint256 on the wire, so it travels as text into NUMERIC.

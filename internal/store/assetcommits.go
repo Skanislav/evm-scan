@@ -111,6 +111,12 @@ func (s *Store) PutAssetCommit(ctx context.Context, c AssetCommit) error {
 	}
 
 	return s.inTx(ctx, func(tx pgx.Tx) error {
+		if err := lockState(ctx, tx, c.Account); err != nil {
+			return err
+		}
+		if err := markLegacyState(ctx, tx, c.Account); err != nil {
+			return err
+		}
 		ct, err := tx.Exec(ctx, `
 			INSERT INTO account_asset_commits (account, digest, deadline, signed_at)
 			VALUES ($1, $2, $3, now())

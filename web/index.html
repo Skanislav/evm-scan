@@ -852,6 +852,29 @@
       <div id="v2-trail-steps"></div>
     </div>
 
+      <details class="verdict-bar" id="portable-state-card" hidden>
+        <summary>Portable wallet memory · public, signed, recoverable</summary>
+        <p class="hint">Keep your verdicts and remembered assets on this server and in a downloadable backup. Publishing makes the list and your preferences public. The indexer may include your signed state in its ENS checkpoint. A hash cannot restore a missing backup.</p>
+        <label><input type="checkbox" id="state-optin"> Sign public state and submit its verdicts together</label>
+        <div class="row" style="gap:8px;margin-top:12px">
+          <button class="btn btn-secondary btn-sm" id="state-review-button">Review public state</button>
+          <button class="btn btn-ghost btn-sm" id="state-export">Download backup</button>
+          <button class="btn btn-ghost btn-sm" id="state-use-server">Use latest server snapshot</button>
+          <label class="btn btn-ghost btn-sm">Restore backup <input type="file" id="state-import" accept="application/json,.json" style="max-width:200px"></label>
+        </div>
+        <div id="state-review" hidden><p>Review this complete public snapshot. Signing replaces your indexing verdicts on all chains and remembers the listed assets.</p><div id="state-review-rows" style="max-height:300px;overflow:auto"></div><button class="btn btn-primary btn-sm" id="state-sign-reviewed">Sign reviewed public state</button></div>
+        <p class="hint" id="state-note"></p>
+        <hr>
+        <p class="hint">ENSv2 Sepolia checkpoints. Your RPC sees the name being read. Publishing from your wallet costs Sepolia ETH. The operator checkpoint is a separate batch.</p>
+        <input class="input" id="state-rpc" placeholder="Your Sepolia RPC URL" spellcheck="false">
+        <input class="input" id="state-ens-name" placeholder="Your ENSv2 Sepolia name" spellcheck="false">
+        <div class="row" style="gap:8px;margin-top:8px">
+          <button class="btn btn-secondary btn-sm" id="state-publish">Publish my checkpoint</button>
+          <button class="btn btn-ghost btn-sm" id="state-restore-ens">Restore from my ENS checkpoint</button>
+          <button class="btn btn-ghost btn-sm" id="state-check-batch">Verify operator checkpoint</button>
+        </div>
+        <p class="hint" id="state-ens-status"></p>
+      </details>
     <div id="wallet-head" hidden>
       <div class="ans-head">
         <span class="ans-addr" id="wallet-name"></span>
@@ -922,6 +945,8 @@
         <p class="hint" id="verdict-note" style="margin:10px 0 0; max-width:92ch; text-wrap:pretty"></p>
         <div class="err" id="verdict-err" hidden></div>
       </div>
+
+
 
       <!-- Each enabled chain is read only after the reader opens the picker. Results
            below merge the same asset across chains, while retaining each chain row. -->
@@ -4491,7 +4516,8 @@ async function lookup() {
     // exist so the first render is already split the way the signature put it,
     // rather than flashing the proposal and then rearranging it.
     // A verdict is about one chain; a memory of another chain's split says nothing here.
-    const mem = loadVerdict(addr);
+    try { await loadPortableState(addr); } catch(e) { stateNote(`Portable state unavailable: ${e.message}`); }
+    const mem = portableMemory(addr, activeChainID()) || loadVerdict(addr);
     VERDICT_MEM = mem && (!mem.chain_id || mem.chain_id === activeChainID()) ? mem : null;
     VERDICT_OVERRIDES = new Map();
     $('verdict-status').textContent = '';
@@ -4507,7 +4533,7 @@ async function lookup() {
     const indexed = r.assets || [];
     VALUATION = indexed.length ? r.valuation : null;
     v2Trace(indexed.length ? 'Index knows this address' : 'Index has no rows for this address', `${num(indexed.length)} indexed contract${indexed.length === 1 ? '' : 's'} · block ${num((r.valuation || {}).as_of_block || HEAD)}`, location.host || 'this deployment', indexStarted);
-    const committed = assetCommitItemsFor(WALLET_CHAIN);
+    const committed = [...new Set([...assetCommitItemsFor(WALLET_CHAIN), ...portableAssets(WALLET_CHAIN)])];
     if (!indexed.length && !committed.length && V2_CONSENTED_ADDRESS !== addr) {
       $('v2-consent-copy').textContent = `Its activity is older than this index or touches contracts it does not cover. Reading balances sends the address to ${chainRpc() ? hostOf(chainRpc()) : location.host || 'this deployment'} for one lens call.`;
       $('v2-consent').hidden = false;
@@ -4838,6 +4864,7 @@ async function connectForVerdict() {
 }
 
 async function signVerdict() {
+  if ($('state-optin').checked) return stateAction(prepareStateReview)();
   const btn = $('verdict-sign');
   const status = $('verdict-status');
   const say = (t) => { status.textContent = t; };
@@ -5275,6 +5302,546 @@ $('account').addEventListener('input', () => {
 $('account').addEventListener('keydown', e => { if (e.key === 'Enter') lookup(); });
 $('verdict-connect').addEventListener('click', connectForVerdict);
 $('verdict-sign').addEventListener('click', signVerdict);
+
+// Portable state has its own immutable signed history; legacy writes stay live.
+let PORTABLE = null,
+  PORTABLE_REMOTE = null,
+  PORTABLE_REVIEW = null,
+  PORTABLE_SELECTED = false,
+  stateCodePromise;
+const stateKey = (a) => `evmscan.state.${a.toLowerCase()}`;
+async function stateAPI(path, opts = {}) {
+  return api(path, { ...opts, signal: AbortSignal.timeout(15000) });
+}
+async function stateCode() {
+  return (stateCodePromise ||= Promise.all([
+    import("./userstate.mjs"),
+    viem(),
+  ]).then(([m, v]) => ({ ...m, ...m.codec(v), v })));
+}
+function stateNote(t) {
+  $("state-note").textContent = t;
+}
+function cachePortable(s) {
+  PORTABLE = s;
+  try {
+    localStorage.setItem(stateKey(s.account), JSON.stringify(s));
+  } catch {
+    stateNote(
+      "State verified, but this browser could not save it. Download a backup.",
+    );
+  }
+}
+async function loadPortableState(account) {
+  $("portable-state-card").hidden = false;
+  PORTABLE = null;
+  PORTABLE_REMOTE = null;
+  PORTABLE_REVIEW = null;
+  PORTABLE_SELECTED = false;
+  $("state-review").hidden = true;
+  stateNote("");
+  const c = await stateCode();
+  let local = null,
+    remote = null,
+    lid,
+    rid;
+  const notes = [];
+  try {
+    const raw = localStorage.getItem(stateKey(account));
+    if (raw) {
+      local = JSON.parse(raw);
+      lid = await c.verify(local);
+      if (local.account.toLowerCase() !== account.toLowerCase())
+        throw Error("Backup account mismatch");
+    }
+  } catch (e) {
+    local = null;
+    notes.push("Local state unavailable: " + e.message);
+  }
+  try {
+    const result = await stateAPI(`/v1/accounts/${account}/state`);
+    remote = result.state.snapshot;
+    rid = await c.verify(remote);
+    if (remote.account.toLowerCase() !== account.toLowerCase())
+      throw Error("Server account mismatch");
+    if (result.state.id.toLowerCase() !== rid)
+      throw Error("Server revision identifier mismatch");
+    PORTABLE_REMOTE = result;
+  } catch (e) {
+    remote = null;
+    if (e.status !== 404) notes.push("Server state unavailable: " + e.message);
+  }
+  try {
+    try {
+      PORTABLE_SELECTED =
+        !!local &&
+        localStorage.getItem(stateKey(account) + ".selected") === lid;
+    } catch {}
+    PORTABLE = PORTABLE_SELECTED
+      ? local
+      : c.chooseRevision(local, remote, lid, rid);
+    if (PORTABLE_SELECTED)
+      notes.push("Using the snapshot you explicitly selected.");
+  } catch (e) {
+    PORTABLE = local;
+    notes.push(e.message);
+  }
+  if (PORTABLE) {
+    cachePortable(PORTABLE);
+    notes.push(`Signed public state revision ${PORTABLE.revision}.`);
+    if (PORTABLE_REMOTE?.state.legacy_changed)
+      notes.push(
+        "Legacy writes changed the live verdicts or asset list. Review them before signing another snapshot.",
+      );
+  }
+  $("state-optin").checked = !!PORTABLE;
+  stateNote(notes.join(" "));
+}
+function portableMemory(account, chain) {
+  if (!PORTABLE || PORTABLE.account.toLowerCase() !== account.toLowerCase())
+    return null;
+  const pairs = {};
+  for (const e of PORTABLE.entries)
+    if (e.kind === "verdict" && e.chain_id === String(chain))
+      pairs[e.address.toLowerCase()] = e.weight;
+  return { chain_id: Number(chain), deadline: PORTABLE.deadline, pairs };
+}
+function portableAssets(chain) {
+  return (PORTABLE?.entries || [])
+    .filter((e) => e.kind === "asset" && e.chain_id === String(chain))
+    .map((e) => e.address);
+}
+function stateAction(fn) {
+  return async (event) => {
+    const btn = event?.currentTarget;
+    if (btn?.tagName === "BUTTON") btn.disabled = true;
+    try {
+      await fn();
+    } catch (e) {
+      stateNote(e.message || String(e));
+    } finally {
+      if (btn?.tagName === "BUTTON") btn.disabled = false;
+    }
+  };
+}
+async function prepareStateReview() {
+  if (!WALLET_ADDR) throw Error("Look up your wallet first");
+  if (!$("state-optin").checked)
+    throw Error("Choose public state storage before signing");
+  const account = WALLET_ADDR.toLowerCase(),
+    c = await stateCode();
+  let remote = null;
+  try {
+    remote = await stateAPI(`/v1/accounts/${account}/state`);
+    await c.verify(remote.state.snapshot);
+    if (remote.state.snapshot.account.toLowerCase() !== account)
+      throw Error("State account mismatch");
+  } catch (e) {
+    if (e.status !== 404) throw e;
+  }
+  // Refresh the generation before review. Any write during review causes a conflict.
+  const base = remote?.state.snapshot || PORTABLE;
+  let entries = (
+    remote?.state.legacy_changed && !PORTABLE_SELECTED
+      ? remote.projection
+      : PORTABLE?.entries || remote?.state.snapshot.entries || []
+  ).map((e) => ({ ...e }));
+  const chain = String(WALLET_CHAIN || activeChainID());
+  const current = verdictPairs();
+  // Preserve signed verdicts that a bounded lookup did not display. Visible unsure
+  // rows explicitly remove their old verdict; unseen chains and rows survive.
+  const visible = new Set(
+    HOLDINGS.filter((h) => h.address).map((h) => h.address.toLowerCase()),
+  );
+  entries = entries.filter(
+    (e) =>
+      !(
+        e.kind === "verdict" &&
+        e.chain_id === chain &&
+        visible.has(e.address.toLowerCase())
+      ),
+  );
+  for (const p of current)
+    entries.push({
+      kind: "verdict",
+      chain_id: chain,
+      address: p.address,
+      weight: p.weight,
+    });
+  if (!PORTABLE && !remote) {
+    const mem = loadVerdict(account);
+    if (mem?.chain_id) {
+      for (const [address, weight] of Object.entries(mem.pairs)) {
+        if (String(mem.chain_id) === chain && visible.has(address)) continue;
+        entries.push({
+          kind: "verdict",
+          chain_id: String(mem.chain_id),
+          address,
+          weight,
+        });
+      }
+    }
+  }
+  // The existing signed asset commit is the latest exact list, including legacy writes.
+  const asset = await loadAssetCommit(account);
+  if (asset && !PORTABLE_SELECTED) {
+    entries = entries.filter((e) => e.kind !== "asset");
+    for (const a of asset.assets || [])
+      entries.push({
+        kind: "asset",
+        chain_id: String(a.chain_id),
+        address: a.address,
+      });
+  }
+  const unique = new Map();
+  for (const e of entries)
+    unique.set(`${e.kind}:${e.chain_id}:${e.address.toLowerCase()}`, e);
+  entries = [...unique.values()];
+  const state = {
+    version: 1,
+    account,
+    state_root: c.root(entries),
+    revision: base ? String(BigInt(base.revision) + 1n) : "1",
+    previous: base ? await c.verify(base) : c.ZERO,
+    deadline: String(Math.floor(Date.now() / 1000) + 3600),
+    entries,
+    signature: "0x",
+  };
+  PORTABLE_REVIEW = {
+    snapshot: state,
+    generation: remote?.state.generation || "0",
+  };
+  const holder = $("state-review-rows");
+  holder.replaceChildren();
+  for (const e of entries) {
+    const row = document.createElement("p");
+    row.textContent = `Chain ${e.chain_id} · ${e.address} · ${e.kind === "asset" ? "remembered asset" : e.weight > 0 ? "recognized" : "junk"}`;
+    row.style.overflowWrap = "anywhere";
+    if (e.kind === "verdict") {
+      const select = document.createElement("select");
+      select.className = "input";
+      select.setAttribute(
+        "aria-label",
+        `Verdict for ${e.address} on chain ${e.chain_id}`,
+      );
+      for (const [value, label] of [
+        [1, "Recognized"],
+        [-1, "Junk"],
+        [0, "No verdict"],
+      ]) {
+        const option = document.createElement("option");
+        option.value = String(value);
+        option.textContent = label;
+        select.append(option);
+      }
+      select.value = String(e.weight);
+      select.addEventListener("change", () => {
+        e.weight = Number(select.value);
+      });
+      row.append(" ", select);
+    }
+    holder.append(row);
+  }
+  if (!entries.length)
+    holder.textContent =
+      "Empty snapshot: retract every verdict and clear remembered assets.";
+  $("state-review").hidden = false;
+  stateNote(
+    "Review the full list, then sign below. Unseen verdicts and other chains are preserved.",
+  );
+}
+async function signReviewedState() {
+  if (!PORTABLE_REVIEW) throw Error("Review the snapshot first");
+  const req = PORTABLE_REVIEW,
+    c = await stateCode();
+  if (req.snapshot.account !== WALLET_ADDR.toLowerCase())
+    throw Error("Wallet changed; review again");
+  const wallet = await connectVerdictWallet();
+  if (wallet.toLowerCase() !== req.snapshot.account)
+    throw Error("Connect the account whose state is being signed");
+  req.snapshot.entries = req.snapshot.entries.filter(
+    (e) => e.kind !== "verdict" || e.weight !== 0,
+  );
+  req.snapshot.state_root = c.root(req.snapshot.entries);
+  req.snapshot.deadline = String(Math.floor(Date.now() / 1000) + 3600);
+  const typed = c.typed(req.snapshot);
+  typed.types.EIP712Domain = [
+    { name: "name", type: "string" },
+    { name: "version", type: "string" },
+  ];
+  req.snapshot.signature = await window.ethereum.request({
+    method: "eth_signTypedData_v4",
+    params: [
+      wallet,
+      JSON.stringify(typed, (_, v) => (typeof v === "bigint" ? String(v) : v)),
+    ],
+  });
+  await c.verify(req.snapshot);
+  const accepted = await stateAPI(`/v1/accounts/${wallet}/state`, {
+    method: "POST",
+    reader: true,
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(req),
+  });
+  if (accepted.id.toLowerCase() !== (await c.verify(req.snapshot)))
+    throw Error("Server acknowledged a different revision");
+  cachePortable(req.snapshot);
+  try {
+    localStorage.removeItem(stateKey(wallet) + ".selected");
+  } catch {}
+  PORTABLE_SELECTED = false;
+  PORTABLE_REVIEW = null;
+  $("state-review").hidden = true;
+  // Reload uses the stored state to add every remembered address to live reads.
+  await lookup();
+  stateNote(
+    "Public state saved. Download a backup; ENS checkpoint publication is separate.",
+  );
+}
+async function exportPortable() {
+  if (!PORTABLE) throw Error("No signed snapshot to export");
+  const c = await stateCode();
+  await c.verify(PORTABLE);
+  const u = URL.createObjectURL(
+    new Blob([JSON.stringify(PORTABLE, null, 2) + "\n"], {
+      type: "application/json",
+    }),
+  );
+  const a = document.createElement("a");
+  a.href = u;
+  a.download = `evmscan-state-${PORTABLE.account}-${PORTABLE.revision}.json`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(u), 1000);
+}
+async function importPortable(s) {
+  const c = await stateCode();
+  await c.verify(s);
+  if (!WALLET_ADDR || s.account.toLowerCase() !== WALLET_ADDR.toLowerCase())
+    throw Error("Look up the backup account before restoring");
+  if (PORTABLE) {
+    const old = await c.verify(PORTABLE),
+      id = await c.verify(s);
+    if (
+      id !== old &&
+      (BigInt(s.revision) <= BigInt(PORTABLE.revision) || s.previous !== old)
+    ) {
+      if (
+        !window.confirm(
+          "This backup selects a different or older signed history. Replace this browser’s copy? The server and ENS records will not change.",
+        )
+      )
+        return;
+    }
+  }
+  cachePortable(s);
+  PORTABLE_SELECTED = true;
+  try {
+    localStorage.setItem(stateKey(s.account) + ".selected", await c.verify(s));
+  } catch {}
+  $("state-optin").checked = true;
+  VERDICT_MEM = portableMemory(WALLET_ADDR, WALLET_CHAIN || activeChainID());
+  VERDICT_OVERRIDES = new Map();
+  renderHoldings();
+  stateNote(
+    "Backup restored locally. Look up again to read all restored assets. On a replacement server, import this backup with evmscan-state before signing its successor.",
+  );
+}
+const STATE_RESOLVER_ABI = [
+  {
+    type: "function",
+    name: "text",
+    stateMutability: "view",
+    inputs: [
+      { name: "node", type: "bytes32" },
+      { name: "key", type: "string" },
+    ],
+    outputs: [{ type: "string" }],
+  },
+  {
+    type: "function",
+    name: "setText",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "node", type: "bytes32" },
+      { name: "key", type: "string" },
+      { name: "value", type: "string" },
+    ],
+    outputs: [],
+  },
+];
+async function stateENS(name, key) {
+  const c = await stateCode(),
+    v = c.v,
+    url = $("state-rpc").value.trim();
+  if (!url) throw Error("Enter your Sepolia RPC URL");
+  if (BigInt(await rpc(url, "eth_chainId", [])) !== 11155111n)
+    throw Error("ENS state checkpoints require Sepolia");
+  const norm = normalizeName(name);
+  if (!norm) throw Error("Enter an ENSv2 Sepolia name");
+  const node = namehash(v, norm),
+    inner = v.encodeFunctionData({
+      abi: STATE_RESOLVER_ABI,
+      functionName: "text",
+      args: [node, key],
+    });
+  const data = v.encodeFunctionData({
+    abi: UR_ABI,
+    functionName: "resolve",
+    args: [dnsEncode(v, norm), inner],
+  });
+  const out = await rpc(url, "eth_call", [
+    { to: UNIVERSAL_RESOLVER, data },
+    "latest",
+  ]);
+  const [result, resolver] = v.decodeFunctionResult({
+    abi: UR_ABI,
+    functionName: "resolve",
+    data: out,
+  });
+  const value = v.decodeFunctionResult({
+    abi: STATE_RESOLVER_ABI,
+    functionName: "text",
+    data: result,
+  });
+  // Direct read rejects offchain-only and alias-rewritten targets for writes.
+  const direct = await rpc(url, "eth_call", [
+    { to: resolver, data: inner },
+    "latest",
+  ]);
+  if (
+    v.decodeFunctionResult({
+      abi: STATE_RESOLVER_ABI,
+      functionName: "text",
+      data: direct,
+    }) !== value
+  )
+    throw Error("Use the canonical ENS name, without a resolver alias");
+  return { c, v, url, node, resolver, value, name: norm };
+}
+async function publishPortable() {
+  if (!PORTABLE) throw Error("Sign or restore state first");
+  const s = PORTABLE,
+    c = await stateCode(),
+    id = await c.verify(s);
+  const e = await stateENS($("state-ens-name").value, "evmscan.state");
+  const wallet = await connectVerdictWallet();
+  if (wallet.toLowerCase() !== s.account.toLowerCase())
+    throw Error("Connect the state account");
+  await window.ethereum.request({
+    method: "wallet_switchEthereumChain",
+    params: [{ chainId: "0xaa36a7" }],
+  });
+  const value = `evmscan:state:1:${id}`,
+    data = e.v.encodeFunctionData({
+      abi: STATE_RESOLVER_ABI,
+      functionName: "setText",
+      args: [e.node, "evmscan.state", value],
+    });
+  const gas = await rpc(e.url, "eth_estimateGas", [
+    { from: wallet, to: e.resolver, data },
+  ]);
+  $("state-ens-status").textContent =
+    `Estimated gas: ${BigInt(gas)}. Review the checkpoint transaction in your wallet.`;
+  const hash = await window.ethereum.request({
+    method: "eth_sendTransaction",
+    params: [{ from: wallet, to: e.resolver, data }],
+  });
+  $("state-ens-status").textContent =
+    `Submitted ${hash}. Waiting for 12 confirmations…`;
+  const client = e.v.createPublicClient({
+    transport: e.v.http(e.url),
+    ccipRead: false,
+  });
+  const receipt = await client.waitForTransactionReceipt({
+    hash,
+    confirmations: 12,
+    timeout: 240000,
+  });
+  if (receipt.status !== "success")
+    throw Error("ENS checkpoint transaction reverted");
+  const check = await stateENS(e.name, "evmscan.state");
+  if (check.value !== value) throw Error("ENS checkpoint differs at readback");
+  $("state-ens-status").textContent =
+    `Personal checkpoint verified: revision ${s.revision}, ${hash}`;
+}
+async function restoreENS() {
+  const e = await stateENS($("state-ens-name").value, "evmscan.state");
+  if (!/^evmscan:state:1:0x[0-9a-f]{64}$/i.test(e.value))
+    throw Error("Name has no supported state checkpoint");
+  const id = e.value.slice(-66),
+    s = await stateAPI(`/v1/state/revisions/${id}`);
+  if ((await e.c.verify(s)) !== id.toLowerCase())
+    throw Error("Snapshot does not match ENS");
+  await importPortable(s);
+  $("state-ens-status").textContent =
+    "Snapshot verified against the personal ENS record read at head.";
+}
+async function verifyStateBatch() {
+  if (!WALLET_ADDR) throw Error("Look up an account first");
+  const status = await stateAPI("/v1/state/status");
+  if (!status.name)
+    throw Error("Operator has not configured a checkpoint name");
+  const e = await stateENS(status.name, "evmscan.states");
+  if (!/^evmscan:states:1:0x[0-9a-f]{64}$/i.test(e.value))
+    throw Error("Operator name has no supported checkpoint");
+  const root = e.value.slice(-66),
+    out = await stateAPI(
+      `/v1/state/checkpoints/${root}?account=${WALLET_ADDR}`,
+    );
+  if (
+    out.proof.key.toLowerCase() !== e.c.accountKey(WALLET_ADDR) ||
+    !e.c.proof(root, out.proof)
+  )
+    throw Error("Invalid account proof");
+  if (!out.proof.value) {
+    $("state-ens-status").textContent =
+      "Verified absence: this account is not in that operator checkpoint.";
+    return;
+  }
+  const id = e.v.toHex(
+    Uint8Array.from(atob(out.proof.value), (x) => x.charCodeAt(0)),
+  );
+  if (id.length !== 66) throw Error("Invalid aggregate leaf");
+  const s = await stateAPI(`/v1/state/revisions/${id}`);
+  if (
+    s.account.toLowerCase() !== WALLET_ADDR.toLowerCase() ||
+    (await e.c.verify(s)) !== id
+  )
+    throw Error("Checkpoint signature mismatch");
+  $("state-ens-status").textContent =
+    `Operator checkpoint verifies revision ${s.revision}. ${PORTABLE && (await e.c.verify(PORTABLE)) !== id ? "It differs from the browser snapshot." : "It matches the signed snapshot."}`;
+}
+$("state-review-button").addEventListener(
+  "click",
+  stateAction(prepareStateReview),
+);
+$("state-sign-reviewed").addEventListener(
+  "click",
+  stateAction(signReviewedState),
+);
+$("state-export").addEventListener("click", stateAction(exportPortable));
+$("state-use-server").addEventListener(
+  "click",
+  stateAction(async () => {
+    if (!WALLET_ADDR) throw Error("Look up a wallet first");
+    const r = await stateAPI(`/v1/accounts/${WALLET_ADDR}/state`);
+    await importPortable(r.state.snapshot);
+  }),
+);
+$("state-import").addEventListener(
+  "change",
+  stateAction(async () => {
+    const f = $("state-import").files[0];
+    if (!f) return;
+    if (f.size > 256 * 1024) throw Error("Backup exceeds 256 KiB");
+    await importPortable(JSON.parse(await f.text()));
+    $("state-import").value = "";
+  }),
+);
+$("state-publish").addEventListener("click", stateAction(publishPortable));
+$("state-restore-ens").addEventListener("click", stateAction(restoreENS));
+$("state-check-batch").addEventListener("click", stateAction(verifyStateBatch));
+
 // A wallet that switches accounts changes who can sign; the bar says so at once.
 if (window.ethereum && window.ethereum.on) {
   try {
