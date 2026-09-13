@@ -141,6 +141,10 @@ type Registry struct {
 	// means the gateway signs for whatever sender asks, which is fine before the
 	// resolver is deployed and wrong afterwards.
 	ENSResolver string `yaml:"ens_resolver"`
+	// ENSNameResolver is a deployed HintAliasResolver, which serves the same
+	// records as the wildcard hint name plus labels an account has claimed with a
+	// signature. Empty turns /v1/names off; nothing else depends on it.
+	ENSNameResolver string `yaml:"ens_name_resolver"`
 	// Publisher controls how commitments reach the chain.
 	Publisher PublisherCfg `yaml:"publisher"`
 }
@@ -354,6 +358,9 @@ func (c *Config) applyEnv() {
 	if v := os.Getenv("EVMSCAN_ENS_RESOLVER"); v != "" {
 		c.Registry.ENSResolver = v
 	}
+	if v := os.Getenv("EVMSCAN_ENS_NAME_RESOLVER"); v != "" {
+		c.Registry.ENSNameResolver = v
+	}
 	if v := os.Getenv("EVMSCAN_REGISTRY_ADDRESS"); v != "" {
 		c.Registry.Address = v
 	}
@@ -397,6 +404,9 @@ func (c *Config) validate() error {
 		}
 	}
 
+	if c.Registry.ENSNameResolver != "" && !common.IsHexAddress(c.Registry.ENSNameResolver) {
+		return fmt.Errorf("config: registry.ens_name_resolver %q is not an address", c.Registry.ENSNameResolver)
+	}
 	if c.Registry.ENSResolver != "" && !common.IsHexAddress(c.Registry.ENSResolver) {
 		return fmt.Errorf("config: registry.ens_resolver %q is not an address", c.Registry.ENSResolver)
 	}

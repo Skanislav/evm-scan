@@ -321,6 +321,7 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 			Relay:             relay,
 			Signer:            signer,
 			ENSResolver:       common.HexToAddress(cfg.Registry.ENSResolver),
+			NameResolver:      common.HexToAddress(cfg.Registry.ENSNameResolver),
 			AllowRegistration: cfg.API.AllowRegistration,
 			AuthToken:         cfg.API.AuthToken,
 			Cost:              cfg.Cost,

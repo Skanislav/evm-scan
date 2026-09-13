@@ -34,6 +34,12 @@ func TestAuthorizedGuardsOnlySpendingEndpoints(t *testing.T) {
 		// the credential, checked by the contract.
 		{http.MethodPost, "/v1/demand/relay"},
 		{http.MethodGet, "/v1/demand/relay"},
+		// A name claim is the same shape: the reader signs, the resolver recovers
+		// the signer on chain, and this deployment only pays the gas. What it costs
+		// is bounded in the handler by a per-account window, not by a token that
+		// would shut readers out of the one act that is theirs.
+		{http.MethodPost, "/v1/names"},
+		{http.MethodGet, "/v1/names"},
 		// The signed ENS gateway is the other thing a resolver on the internet has
 		// to reach; the signature it returns is what the resolver trusts, not the
 		// caller. A reader's hint is written under the reader's own signature.

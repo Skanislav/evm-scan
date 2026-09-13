@@ -80,7 +80,11 @@ type Deps struct {
 	Signer hintreg.Signer
 	// ENSResolver is that resolver's address. When set, /ens signs only for it;
 	// zero signs for any sender, which is only right before it is deployed.
-	ENSResolver       common.Address
+	ENSResolver common.Address
+	// NameResolver is a deployed HintAliasResolver, which lets an account claim a
+	// readable label under the hints parent with a signature this deployment
+	// carries. Zero turns /v1/names off entirely.
+	NameResolver      common.Address
 	AllowRegistration bool
 	// AuthToken, when set, is required as a bearer token on every endpoint that
 	// spends something. Empty leaves those endpoints open.
@@ -218,6 +222,8 @@ func New(d Deps) *Server {
 	s.mux.HandleFunc("POST /v1/demand", s.recordDemand)
 	s.mux.HandleFunc("GET /v1/demand/relay", s.relayInfo)
 	s.mux.HandleFunc("POST /v1/demand/relay", s.relayVote)
+	s.mux.HandleFunc("GET /v1/names", s.nameInfo)
+	s.mux.HandleFunc("POST /v1/names", s.relayName)
 	// A verdict: a reader's signed split of their own wallet. Open like a vote,
 	// because the signature is the credential; see guarded().
 	s.mux.HandleFunc("POST /v1/verdict", s.postVerdict)
@@ -318,6 +324,12 @@ func guarded(r *http.Request) bool {
 	// page: with min_voters at 1 an unsigned vote from a made-up account would
 	// buy a verified backfill for one curl.
 	if p == "/ccip" || p == "/ens" || strings.HasPrefix(p, "/v1/demand/relay") {
+		return false
+	}
+	// A name claim is the reader's own EIP-712 signature, which the resolver
+	// recovers on chain; the operator's token would only stop readers. What this
+	// deployment spends on it is bounded in the handler, not here.
+	if p == "/v1/names" {
 		return false
 	}
 	// A verdict is a vote that can point either way, written under the reader's
