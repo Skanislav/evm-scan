@@ -164,6 +164,29 @@ failed. Fee-stuck transactions remain pending; v1 does not automatically replace
 fees or discard a nonce. The dedicated key must not be used by another process or
 a different database.
 
+## What each half costs
+
+The wallet card presents the two halves side by side — **Making the record** (opt in,
+review, sign, publish the root) and **Reading it back** (resolve the name, read the
+record, fetch and verify the revision) — because the interesting number is the
+comparison, and a single card mixing them hides it.
+
+Each half reports what it actually spent: requests made and bytes moved, counted by a
+scope opened around the action and closed in a `finally`, so a path that failed still
+reports what it spent getting there. Bytes in are the wire length when the server
+declared `content-length` and the decoded length otherwise; the readout says which,
+because a gzipped body is smaller on the wire than the text it parses into and
+averaging the two would be a made-up number. Gas is deliberately not reported: the
+publish path already estimates it as its own permission check, and a gas figure
+answers a different question from the one this measures.
+
+The per-entry figure divides by the entries in the signed snapshot — the trie's
+leaves, which is exactly what the root covers — not by holdings on screen and not by
+chains swept. Both the totals and the per-entry figure are shown, because the two
+halves do not scale together: making the record walks a token list and grows with it,
+while reading it is one record plus the one revision that record names, whatever the
+list holds.
+
 ## Export and replacement-server recovery
 
 ```sh

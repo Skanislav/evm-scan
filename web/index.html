@@ -690,6 +690,16 @@
   #beat3, #beat4, #beat5 { display: none; }
   .v2-footer { display: flex; justify-content: center; gap: 16px; flex-wrap: wrap; width: 100%; max-width: 720px; padding: 24px 16px 36px; color: var(--ink-65); font-size: 13px; }
   .v2-footer a { color: inherit; }
+  /* Two halves of the same record: one makes it, one reads it back. Side by side
+     because the point is the comparison, and stacked under 860px because a column
+     of two panels still reads in order. */
+  .state-split { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 14px 0; }
+  @media (max-width: 860px) { .state-split { grid-template-columns: 1fr; } }
+  .state-panel { border: 1px solid var(--rule); border-radius: 10px; padding: 13px 14px 12px; min-width: 0; }
+  .state-panel-head { display: flex; align-items: baseline; gap: 9px; margin-bottom: 7px; }
+  .state-cost { margin-top: 11px; padding-top: 10px; border-top: 1px solid var(--rule);
+    font: 400 11.5px/1.55 var(--mono); color: var(--ink-65); }
+  .state-cost b { color: var(--ink); font-weight: 500; }
 </style>
 </head>
 <body>
@@ -855,24 +865,40 @@
       <details class="verdict-bar" id="portable-state-card" hidden>
         <summary>Portable wallet memory · public, signed, recoverable</summary>
         <p class="hint">Keep your verdicts and remembered assets on this server and in a downloadable backup. Publishing makes the list and your preferences public. The indexer may include your signed state in its ENS checkpoint. A hash cannot restore a missing backup.</p>
-        <label><input type="checkbox" id="state-optin"> Sign public state and submit its verdicts together</label>
-        <div class="row" style="gap:8px;margin-top:12px">
-          <button class="btn btn-secondary btn-sm" id="state-review-button">Review public state</button>
-          <button class="btn btn-ghost btn-sm" id="state-export">Download backup</button>
-          <button class="btn btn-ghost btn-sm" id="state-use-server">Use latest server snapshot</button>
-          <label class="btn btn-ghost btn-sm">Restore backup <input type="file" id="state-import" accept="application/json,.json" style="max-width:200px"></label>
+        <p class="hint">ENSv2 Sepolia checkpoints. Your RPC sees the name being read. Publishing from your wallet costs Sepolia ETH. The operator checkpoint is a separate batch. Both halves below read these two.</p>
+        <div class="row" style="gap:8px">
+          <input class="input" id="state-rpc" placeholder="Your Sepolia RPC URL" spellcheck="false">
+          <input class="input" id="state-ens-name" placeholder="Your ENSv2 Sepolia name" spellcheck="false">
         </div>
-        <div id="state-review" hidden><p>Review this complete public snapshot. Signing replaces your indexing verdicts on all chains and remembers the listed assets.</p><div id="state-review-rows" style="max-height:300px;overflow:auto"></div><button class="btn btn-primary btn-sm" id="state-sign-reviewed">Sign reviewed public state</button></div>
+
+        <div class="state-split">
+          <section class="state-panel" id="state-panel-create">
+            <div class="state-panel-head"><strong>Making the record</strong><span class="empty">sign, then write one root</span></div>
+            <p class="hint">Your wallet signs the snapshot; publishing writes the revision it names to <code>evmscan.state</code>. One record, whatever the list holds.</p>
+            <label><input type="checkbox" id="state-optin"> Sign public state and submit its verdicts together</label>
+            <div class="row" style="gap:8px;margin-top:12px">
+              <button class="btn btn-secondary btn-sm" id="state-review-button">Review public state</button>
+              <button class="btn btn-primary btn-sm" id="state-publish">Publish my checkpoint</button>
+              <button class="btn btn-ghost btn-sm" id="state-export">Download backup</button>
+            </div>
+            <div id="state-review" hidden><p>Review this complete public snapshot. Signing replaces your indexing verdicts on all chains and remembers the listed assets.</p><div id="state-review-rows" style="max-height:300px;overflow:auto"></div><button class="btn btn-primary btn-sm" id="state-sign-reviewed">Sign reviewed public state</button></div>
+            <div class="state-cost" id="state-cost-create">not run yet</div>
+          </section>
+
+          <section class="state-panel" id="state-panel-view">
+            <div class="state-panel-head"><strong>Reading it back</strong><span class="empty">resolve, read, verify</span></div>
+            <p class="hint">Resolves the name at head, reads the record, fetches the revision it names and checks the signature against the root. Nothing here signs or spends.</p>
+            <div class="row" style="gap:8px;margin-top:12px">
+              <button class="btn btn-secondary btn-sm" id="state-restore-ens">Restore from my ENS checkpoint</button>
+              <button class="btn btn-ghost btn-sm" id="state-check-batch">Verify operator checkpoint</button>
+              <button class="btn btn-ghost btn-sm" id="state-use-server">Use latest server snapshot</button>
+              <label class="btn btn-ghost btn-sm">Restore backup <input type="file" id="state-import" accept="application/json,.json" style="max-width:200px"></label>
+            </div>
+            <div class="state-cost" id="state-cost-view">not run yet</div>
+          </section>
+        </div>
+        <p class="hint" id="state-cost-compare"></p>
         <p class="hint" id="state-note"></p>
-        <hr>
-        <p class="hint">ENSv2 Sepolia checkpoints. Your RPC sees the name being read. Publishing from your wallet costs Sepolia ETH. The operator checkpoint is a separate batch.</p>
-        <input class="input" id="state-rpc" placeholder="Your Sepolia RPC URL" spellcheck="false">
-        <input class="input" id="state-ens-name" placeholder="Your ENSv2 Sepolia name" spellcheck="false">
-        <div class="row" style="gap:8px;margin-top:8px">
-          <button class="btn btn-secondary btn-sm" id="state-publish">Publish my checkpoint</button>
-          <button class="btn btn-ghost btn-sm" id="state-restore-ens">Restore from my ENS checkpoint</button>
-          <button class="btn btn-ghost btn-sm" id="state-check-batch">Verify operator checkpoint</button>
-        </div>
         <p class="hint" id="state-ens-status"></p>
       </details>
     <div id="wallet-head" hidden>
@@ -1461,6 +1487,54 @@ function setOperatorToken(v) {
 // gas, RPC quota, or a judgement written into the index.
 const SPENDING_METHODS = ['POST', 'PATCH', 'DELETE'];
 
+// --------------------------------------------------------------------------
+// Call meter
+//
+// What a record costs is a question about requests, not about gas: creating one
+// sweeps a token list, signs it and writes a root; reading one resolves a name and
+// fetches the revision that root names. A scope is opened around either path and
+// every daemon and RPC call inside it is counted, with the bytes each moved, so the
+// two are compared on one axis instead of by argument.
+//
+// Bytes in are the wire length when the server declared one and the decoded length
+// otherwise. The readout says which, because a gzipped body is smaller on the wire
+// than the text it parses into, and averaging the two would be a made-up number.
+// --------------------------------------------------------------------------
+const COST = { create: null, view: null };
+let COST_SCOPE = null;
+
+function costOpen(kind) {
+  COST_SCOPE = { kind, calls: 0, bytesOut: 0, bytesIn: 0, decoded: 0, hosts: new Set(), started: performance.now() };
+  return COST_SCOPE;
+}
+
+// Closed in a finally, so a path that failed still reports what it spent getting
+// there: a failed read is not a free read.
+function costClose() {
+  const scope = COST_SCOPE;
+  COST_SCOPE = null;
+  if (!scope) return null;
+  scope.elapsed = Math.round(performance.now() - scope.started);
+  COST[scope.kind] = scope;
+  renderStateCost();
+  return scope;
+}
+
+// UTF-8, not UTF-16 code units: a body of multibyte characters is longer on the
+// wire than String.length claims.
+const byteLen = (s) => (s == null ? 0 : new Blob([s]).size);
+
+function costRecord(url, sent, res, text) {
+  const scope = COST_SCOPE;
+  if (!scope) return;
+  scope.calls += 1;
+  scope.bytesOut += byteLen(sent);
+  const declared = res && res.headers ? res.headers.get('content-length') : null;
+  if (declared) scope.bytesIn += Number(declared) || 0;
+  else { scope.bytesIn += byteLen(text); scope.decoded += 1; }
+  try { scope.hosts.add(new URL(url, location.href).host); } catch { /* same-origin path */ }
+}
+
 // opts.reader marks a write made under the reader's own signature: it neither
 // carries the operator token nor asks for one on a 401, because a 401 there means
 // the signature did not match the account, which no token would fix.
@@ -1471,6 +1545,7 @@ async function api(path, opts) {
   }
   const res = await fetch(path, opts);
   const text = await res.text();
+  costRecord(path, opts && opts.body, res, text);
   let body;
   try { body = text ? JSON.parse(text) : {}; } catch { body = { error: text }; }
   if (!res.ok) {
@@ -2812,12 +2887,15 @@ async function lenses() {
 }
 
 async function rpc(url, method, params) {
+  const sent = JSON.stringify({ jsonrpc: '2.0', id: 1, method, params });
   const res = await fetch(url, {
     method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+    body: sent,
   });
+  const text = await res.text();
+  costRecord(url, sent, res, text);
   if (!res.ok) throw new Error(`${method}: ${res.status} ${res.statusText}`);
-  const body = await res.json();
+  const body = text ? JSON.parse(text) : {};
   if (body.error) {
     // Revert data rides along so a caller can tell a resolver's "no such name" from
     // an endpoint that fell over, by selector rather than by message text.
@@ -5409,6 +5487,43 @@ async function stateCode() {
 function stateNote(t) {
   $("state-note").textContent = t;
 }
+
+const costBytes = (n) => (n >= 1024 ? (n / 1024).toFixed(1) + " KiB" : n + " B");
+
+// costLine reports one half's spend. The denominator for "per entry" is the number
+// of entries in the signed snapshot — the trie's leaves, which is exactly what the
+// root covers — not the holdings on screen and not the chains swept.
+function costLine(scope, entries) {
+  if (!scope) return "not run yet";
+  const total = scope.bytesIn + scope.bytesOut;
+  const per = entries
+    ? ` · <b>${(scope.calls / entries).toFixed(2)}</b> calls and <b>${costBytes(Math.round(total / entries))}</b> per entry`
+    : "";
+  const how = scope.decoded
+    ? ` · ${scope.decoded} measured after decoding, so the wire was smaller`
+    : "";
+  return `<b>${num(scope.calls)}</b> call${scope.calls === 1 ? "" : "s"} · <b>${costBytes(total)}</b> ` +
+    `(${costBytes(scope.bytesOut)} out, ${costBytes(scope.bytesIn)} in) · ${num(scope.elapsed)} ms` +
+    `<br>${[...scope.hosts].map(esc).join(", ") || "this origin"}${per}${how}`;
+}
+
+function renderStateCost() {
+  const entries = PORTABLE && Array.isArray(PORTABLE.entries) ? PORTABLE.entries.length : 0;
+  $("state-cost-create").innerHTML = costLine(COST.create, entries);
+  $("state-cost-view").innerHTML = costLine(COST.view, entries);
+  const compare = $("state-cost-compare"), c = COST.create, v = COST.view;
+  if (!c || !v) {
+    compare.textContent = "Run both halves to compare them: same account, same meter.";
+    return;
+  }
+  const ct = c.bytesIn + c.bytesOut, vt = v.bytesIn + v.bytesOut;
+  const ratio = vt > 0 ? ct / vt : 0;
+  compare.innerHTML = `Making the record cost <b>${num(c.calls)}</b> calls and <b>${costBytes(ct)}</b>; ` +
+    `reading it back cost <b>${num(v.calls)}</b> and <b>${costBytes(vt)}</b>` +
+    (ratio ? ` — <b>${ratio.toFixed(1)}×</b> the bytes` : "") +
+    `. The two do not scale together: making it walks a token list, so it grows with the list, ` +
+    `while reading it is one record plus the one revision that record names, whatever the list holds.`;
+}
 function cachePortable(s) {
   PORTABLE = s;
   try {
@@ -5498,15 +5613,17 @@ function portableAssets(chain) {
     .filter((e) => e.kind === "asset" && e.chain_id === String(chain))
     .map((e) => e.address);
 }
-function stateAction(fn) {
+function stateAction(fn, kind) {
   return async (event) => {
     const btn = event?.currentTarget;
     if (btn?.tagName === "BUTTON") btn.disabled = true;
+    if (kind) costOpen(kind);
     try {
       await fn();
     } catch (e) {
       stateNote(e.message || String(e));
     } finally {
+      if (kind) costClose();
       if (btn?.tagName === "BUTTON") btn.disabled = false;
     }
   };
@@ -5900,12 +6017,13 @@ async function verifyStateBatch() {
 }
 $("state-review-button").addEventListener(
   "click",
-  stateAction(prepareStateReview),
+  stateAction(prepareStateReview, "create"),
 );
 $("state-sign-reviewed").addEventListener(
   "click",
-  stateAction(signReviewedState),
+  stateAction(signReviewedState, "create"),
 );
+// A download reads nothing and sends nothing, so it is not a measured half.
 $("state-export").addEventListener("click", stateAction(exportPortable));
 $("state-use-server").addEventListener(
   "click",
@@ -5913,7 +6031,7 @@ $("state-use-server").addEventListener(
     if (!WALLET_ADDR) throw Error("Look up a wallet first");
     const r = await stateAPI(`/v1/accounts/${WALLET_ADDR}/state`);
     await importPortable(r.state.snapshot);
-  }),
+  }, "view"),
 );
 $("state-import").addEventListener(
   "change",
@@ -5925,9 +6043,9 @@ $("state-import").addEventListener(
     $("state-import").value = "";
   }),
 );
-$("state-publish").addEventListener("click", stateAction(publishPortable));
-$("state-restore-ens").addEventListener("click", stateAction(restoreENS));
-$("state-check-batch").addEventListener("click", stateAction(verifyStateBatch));
+$("state-publish").addEventListener("click", stateAction(publishPortable, "create"));
+$("state-restore-ens").addEventListener("click", stateAction(restoreENS, "view"));
+$("state-check-batch").addEventListener("click", stateAction(verifyStateBatch, "view"));
 
 // A wallet that switches accounts changes who can sign; the bar says so at once.
 if (window.ethereum && window.ethereum.on) {
