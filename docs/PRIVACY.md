@@ -128,9 +128,10 @@ filter, partitioning watchlists with no extra mechanism.
 
 Be clear about the seam between "implemented" and "reachable", because the gap is
 where a reader would otherwise assume a protection they do not have. As of the
-2026-09-13 ship (docs/SHIP.md) the reader page exposes one act, a signed verdict;
-the private lookup, the watchlist builder, the vote and relay buttons, the signed
-hint card, the set-aside toggle and `read.html` below are in code behind no UI:
+2026-09-13 ship (docs/SHIP.md) the reader page exposes two acts: a signed verdict and
+a signed exact asset-list commit. The private lookup, the watchlist builder, the vote
+and relay buttons, the signed hint card, the set-aside toggle and `read.html` below
+are in code behind no UI:
 
 | piece | state |
 |---|---|
@@ -152,8 +153,12 @@ hint card, the set-aside toggle and `read.html` below are in code behind no UI:
   only. Adds every contract it names, orders the candidate cap, removes nothing, and
   says on screen what it did |
 | the reader's cross-chain hint: a bloom of the sweep's confirmed pairs, signed and kept by the daemon (`POST /v1/accounts/{addr}/hint`, `evmscan.hint`) | shipped;
-  per-account, enumerable, **unblinded** — the one row of that kind here, kept only
-  under the account's EIP-712 signature; it orders the next sweep and removes nothing |
+  per-account, enumerable, **unblinded** — kept only under the account's EIP-712
+  signature; it orders the next sweep and removes nothing |
+| the reader's exact signed asset list (`POST /v1/accounts/{addr}/asset-commit`) | shipped;
+  per-account, enumerable, **unblinded** `(chain_id, address)` pairs. The button says
+  this disclosure is retained; later matching-chain lookups read the list before broad
+  candidate discovery, so the commitment trades disclosure for fewer calls |
 | `hints.evm-scan.eth` served by a signed resolver on mainnet (`/ens`) | built, not deployed; the
   publisher key signs on a public endpoint, bound to the resolver by the 0x1900
   prefix so the signatures attest records and nothing else; signer-trust, not

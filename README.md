@@ -102,6 +102,13 @@ A verdict is a priority signal and nothing else. It buys no position — an oper
 report or a majority against still sinks a contract regardless of how many signed for
 it — and it changes nothing about what a balance read says.
 
+An account can also sign an exact sweep snapshot through **Commit discovered assets**.
+`AssetCommit(account, digest, deadline)` covers sorted `(chain_id, address)` pairs.
+It does not register or promote contracts; it authorizes the daemon to keep that
+enumerable list and, on a later lookup, read its matching chain entries before broad
+candidate discovery. A newer deadline atomically replaces the old snapshot, so an old
+signature cannot restore stale assets.
+
 ## Why a snap-synced node is enough
 
 The node requirement is the difference between "you could run this" and "you won't".
@@ -478,6 +485,8 @@ epoch that made verifying it in practice too expensive to bother with.
 | --- | --- | --- |
 | `GET` | `/v1/accounts/{addr}/contracts` | **The discovery surface.** Contracts this account has touched. Each carries `committed` (in the latest finalized epoch's leaf for this account) and `demand: {for, against}` from signed verdicts, and the list is ordered by the rule above. |
 | `GET` | `/v1/accounts/{addr}` | Same, enriched with token metadata and live balances. |
+| `GET` | `/v1/accounts/{addr}/asset-commit` | The account's latest exact signed sweep list, or 404. Public because the account explicitly signed this enumerable disclosure. |
+| `POST` | `/v1/accounts/{addr}/asset-commit` | `{assets: [{chain_id, address}], deadline, signature}` signed as EIP-712 `AssetCommit(account, digest, deadline)`, with `digest = keccak256(sorted(uint64(chain_id) \|\| address))`. Replaces the account's prior list only when the deadline rises; no operator token, registration, promotion, or scan. |
 | `POST` | `/v1/verdict` | **The reader's act.** `{chain_id, account, deadline, verdicts: [{address, weight ±1}], signature}` signed as EIP-712 `Verdict(account, chainId, digest, deadline)`. Signer must be the account and the deadline must beat the last one stored; the set replaces the account's previous verdict. Answers `{recorded, cleared, indexed_here}`. |
 | `GET` | `/v1/demand` | Per-contract signer counts, `voters` (for) and `against`, and whether each chain is `indexed_here`. |
 | `POST` | `/v1/demand` | Legacy unsigned +1 for a contract, behind the operator token. `POST /v1/verdict` is what the page sends. |

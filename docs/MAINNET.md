@@ -214,8 +214,10 @@ so a reader needs no gas on Base. A registry deployed before `voteFor` makes the
 relay report `available: false`. Deploying the signed-vote registry is the same
 command as §6a with the current arbiter; the daemon must be redeployed with the
 matching artifacts afterwards. The relay and the on-chain vote stay in code and
-are off the reader page: the page's act is one signed verdict to the daemon
-(`POST /v1/verdict`, docs/SHIP.md D1), and only the API counter promotes.
+are off the reader page: its indexing act is a signed verdict to the daemon
+(`POST /v1/verdict`, docs/SHIP.md D1), and only the API counter promotes. The
+separate signed asset-list commit only prioritizes a later balance read; it does not
+reach the registry or promote anything.
 
 ### 6c. Rotating the arbiter key
 

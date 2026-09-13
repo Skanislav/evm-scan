@@ -231,8 +231,8 @@ shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module 
   one the daemon builds a bloom from the account's committed contracts. A hint
   **orders** a sweep and **removes nothing**. **Status:** the routes stay; the
   browser-built, signed hint card is off the page since the 2026-09-13 ship, so in
-  practice only the daemon-built bloom is served. The reader's signed act is now the
-  verdict (invariants below), whose EIP-712 shape is a copy of `Hint`'s.
+  practice only the daemon-built bloom is served. The reader's signed acts are the
+  verdict (index priority) and exact asset-list commit (future read priority).
 - `internal/api` depends on the indexer through the small `Worker` interface, not the package.
   `gateway.go` is the ERC-3668 gateway for `HintRegistry.contractsOf`; `internal/ccip` holds
   the response codec and an ERC-3668 client shared with `cmd/evmscan-verify -ccip`. The
@@ -244,9 +244,9 @@ shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module 
   everything that is not a read, minus the allowlisted exceptions (`POST /ccip` and
   `POST /ens`, which any ERC-3668 resolver has to reach; `POST /v1/verdict`, a
   reader's signed verdict; `/v1/demand/relay`, a vote the signer already authorised;
-  `POST /v1/accounts/{addr}/hint`, written under the reader's own signature) —
-  an inverted rule, so a new mutating route is guarded before anyone remembers to add
-  it, and `auth_test.go` is what holds the exceptions open.
+  `POST /v1/accounts/{addr}/hint` and `/asset-commit`, written under the reader's own
+  signature) — an inverted rule, so a new mutating route is guarded before anyone
+  remembers to add it, and `auth_test.go` is what holds the exceptions open.
 - Money buys indexing and does not buy position. `HintRegistry.Funding` keeps
   `vouched` beside `balance`: `balance` drains as `claimCoverage` pays the publisher,
   so a well-funded, well-indexed asset reads as zero there — the same as one nobody
@@ -340,19 +340,19 @@ shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module 
   reader's behalf — the one exception is `read.html`'s registry mode (in code, off
   the nav), which follows the resolver's `OffchainLookup` in the reader's own browser
   with the gateway named on screen; that is the reader following it, not us.
-- A reader's act on their own wallet is **one signed verdict: not a list, not a
-  transaction, not a vote button** (docs/SHIP.md D1, §4). The page proposes a split
-  of the holdings into recognized and unrecognized from signals the API already
-  carries — `price.confidence`, `known`, `vouched_wei`, `demand`, `roles`,
-  `reports`, a symbol lookalike — the reader flips what it got wrong and signs once:
-  EIP-712 `Verdict(address account, uint64 chainId, bytes32 digest, uint256 deadline)`
-  under the domain `{name: "evm-scan verdict", version: "1"}`, no chain, no
-  verifying contract (same reasoning as `Hint`); `digest = keccak256(concat over
-  pairs sorted by address of (address ‖ int8 weight))`, weight ∈ {−1, +1}, a 0 is not
-  sent and absence is 0. `POST /v1/verdict` (`internal/api/verdict.go`,
-  `verdictsig.go`) recovers the signer, which must equal `account`, requires
-  `deadline` in the future and strictly greater than the one stored for
-  `(chain, voter)` in `account_verdicts` (migration 0012) — that is the replay guard
+- A reader's act on their own wallet is a signed verdict for indexing priority, not
+  a transaction or a vote button (docs/SHIP.md D1, §4). The page proposes a split of
+  the holdings into recognized and unrecognized from signals the API already carries —
+  `price.confidence`, `known`, `vouched_wei`, `demand`, `roles`, `reports`, a symbol
+  lookalike — the reader flips what it got wrong and signs once: EIP-712
+  `Verdict(address account, uint64 chainId, bytes32 digest, uint256 deadline)` under
+  the domain `{name: "evm-scan verdict", version: "1"}`, no chain, no verifying
+  contract (same reasoning as `Hint`); `digest = keccak256(concat over pairs sorted by
+  address of (address ‖ int8 weight))`, weight ∈ {−1, +1}, a 0 is not sent and absence
+  is 0. `POST /v1/verdict` (`internal/api/verdict.go`, `verdictsig.go`) recovers the
+  signer, which must equal `account`, requires `deadline` in the future and strictly
+  greater than the one stored for `(chain, voter)` in `account_verdicts` (migration
+  0012) — that is the replay guard
   — and **replaces** the voter's rows for that chain: rows not in the list are
   deleted, `weight` upserted for the rest, response `{recorded, cleared,
   indexed_here}`. Go and the page compute the digest independently and
@@ -373,6 +373,14 @@ shared `hintreg.Mirror`, optional `hintreg.Publisher`, and the HTTP API. Module 
   `max_promotions_per_tick`, a verdict buys no position, and no verdict changes what
   a balance read says. `min_voters` is 3 on a metered node — a single fresh address
   must not buy a backfill; the live profile runs 1 for demo day (docs/SHIP.md D4).
+- A signed exact asset-list commit is a separate read optimization:
+  `AssetCommit(account, digest, deadline)` under `{name: "evm-scan assets",
+  version: "1"}` signs `keccak256` over `(uint64 chainId ‖ address)` pairs sorted by
+  chain then address. `POST /v1/accounts/{addr}/asset-commit` requires that signer,
+  writes its enumerable cross-chain list only when `deadline` rises, and never
+  registers, promotes, or scans a contract. Later matching-chain lookups read that
+  list before speculative candidate discovery; it is an explicit public disclosure,
+  not an index claim.
 - The on-chain counter is still there and off the page. `HintRegistry.vote` and
   `voteFor` (EIP-712 `Vote(voter, chainId, tokens, nonce, deadline)`, carried to the
   frozen contract by `POST /v1/demand/relay` with the publisher's sender,

@@ -823,6 +823,7 @@
       </div>
       <div id="v2-commit-wrap" hidden>
         <button class="btn btn-primary" id="v2-commit-assets">Commit discovered assets</button>
+        <div class="hint" style="margin:8px 4px 0">Your wallet signs this exact, public chain-and-contract list. No gas, registration, or promotion; a later lookup reads it before broad discovery.</div>
         <div id="v2-commit-status"></div>
       </div>
       <div class="v2-assets" id="v2-assets"></div>
@@ -1482,15 +1483,31 @@ function usd(s) {
   return '$' + whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',') + (frac ? '.' + frac : '');
 }
 
-// Newly read contract balances are candidates for this deployment's asset index.
+// Newly read contract balances can become the reader's exact signed asset list.
+// This is deliberately distinct from registering an asset: it spends no daemon
+// quota and only lets a later lookup read the same contracts before discovery.
 let V2_DISCOVERED = [];
+let ASSET_COMMIT = null;
+
+function assetCommitItemsFor(chainId) {
+  const seen = new Set();
+  const out = [];
+  for (const item of (ASSET_COMMIT && ASSET_COMMIT.assets) || []) {
+    const address = String(item.address || '');
+    if (Number(item.chain_id) !== Number(chainId) || !ADDRESS_RE.test(address)) continue;
+    const key = address.toLowerCase();
+    if (!seen.has(key)) { seen.add(key); out.push(address); }
+  }
+  return out;
+}
 
 function v2CommitCandidates() {
   const registered = new Set((ASSETS || []).map(asset => `${Number(asset.chain_id || activeChainID())}:${String(asset.address).toLowerCase()}`));
+  const committed = new Set(((ASSET_COMMIT && ASSET_COMMIT.assets) || []).map(asset => `${Number(asset.chain_id)}:${String(asset.address).toLowerCase()}`));
   const seen = new Set();
   return V2_DISCOVERED.filter(asset => {
     const key = `${asset.chainId}:${String(asset.address).toLowerCase()}`;
-    if (!asset.address || seen.has(key) || registered.has(key)) return false;
+    if (!asset.address || seen.has(key) || registered.has(key) || committed.has(key)) return false;
     seen.add(key);
     return true;
   });
@@ -1499,7 +1516,50 @@ function v2CommitCandidates() {
 function renderV2CommitAction() {
   const candidates = v2CommitCandidates();
   $('v2-commit-wrap').hidden = candidates.length === 0;
-  $('v2-commit-assets').textContent = `Commit ${num(candidates.length)} discovered asset${candidates.length === 1 ? '' : 's'} to the index`;
+  $('v2-commit-assets').textContent = `Commit ${num(candidates.length)} discovered asset${candidates.length === 1 ? '' : 's'} to your list`;
+}
+
+function assetCommitPairs(items) {
+  const byPair = new Map();
+  for (const item of items) {
+    const chain_id = Number(item.chainId ?? item.chain_id);
+    const address = String(item.address || '').toLowerCase();
+    if (Number.isSafeInteger(chain_id) && chain_id > 0 && ADDRESS_RE.test(address)) {
+      byPair.set(`${chain_id}:${address}`, { chain_id, address });
+    }
+  }
+  return [...byPair.values()]
+    .sort((a, b) => (a.chain_id - b.chain_id) || (a.address < b.address ? -1 : a.address > b.address ? 1 : 0));
+}
+
+function assetCommitDigestBytes(items) {
+  const out = new Uint8Array(28 * items.length);
+  const view = new DataView(out.buffer);
+  items.forEach((item, i) => {
+    view.setBigUint64(28 * i, BigInt(item.chain_id));
+    out.set(hexToBytes(item.address), 28 * i + 8);
+  });
+  return out;
+}
+
+async function assetCommitDigest(items) {
+  const v = await viem();
+  return v.keccak256(assetCommitDigestBytes(items));
+}
+
+function assetCommitTypedData(account, digest, deadline) {
+  return {
+    types: {
+      EIP712Domain: [{ name: 'name', type: 'string' }, { name: 'version', type: 'string' }],
+      AssetCommit: [
+        { name: 'account', type: 'address' }, { name: 'digest', type: 'bytes32' },
+        { name: 'deadline', type: 'uint256' },
+      ],
+    },
+    primaryType: 'AssetCommit',
+    domain: { name: 'evm-scan assets', version: '1' },
+    message: { account, digest, deadline: String(deadline) },
+  };
 }
 
 async function commitV2Assets() {
@@ -1508,32 +1568,30 @@ async function commitV2Assets() {
   const button = $('v2-commit-assets');
   const status = $('v2-commit-status');
   button.disabled = true;
-  status.textContent = `Committing 0 of ${num(candidates.length)}…`;
-  let committed = 0;
   try {
-    for (const asset of candidates) {
-      try {
-        await api('/v1/assets', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ address: asset.address, chain_id: asset.chainId }),
-        });
-      } catch (error) {
-        // Hosted deployments intentionally disable direct writes. Their candidate
-        // promotion path is the public, funded route — but only for the chain this
-        // deployment indexes, never a similarly numbered external network.
-        if (error.status !== 403 || asset.chainId !== activeChainID()) throw error;
-        await api(onChain(`/v1/candidates/${asset.address}/promote`), {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ reason: 'discovered by a wallet sweep' }),
-        });
-      }
-      committed++;
-      status.textContent = `Committing ${num(committed)} of ${num(candidates.length)}…`;
+    if (!WALLET_ADDR) throw new Error('look an account up first');
+    const wallet = VERDICT_WALLET || await connectVerdictWallet();
+    if (wallet.toLowerCase() !== WALLET_ADDR.toLowerCase()) {
+      throw new Error(`the connected wallet is ${short(wallet)}, and the account on screen is ${short(WALLET_ADDR)} — only the account can sign for itself`);
     }
-    await Promise.all([loadAssets(), loadCandidates(), loadDecisions()]);
-    status.textContent = `${num(committed)} asset${committed === 1 ? '' : 's'} committed. They will be included by the indexer's next scan.`;
+    // The API replaces a commit atomically. Carry its old pairs into this signed
+    // list, so committing a later sweep adds newly discovered contracts rather than
+    // accidentally dropping a different chain's still-useful result.
+    const assets = assetCommitPairs([...(ASSET_COMMIT?.assets || []), ...candidates]);
+    if (assets.length > 200) throw new Error('this committed list would contain more than 200 assets; narrow the networks and sign that list');
+    const digest = await assetCommitDigest(assets);
+    const deadline = String(Math.floor(Date.now() / 1000) + 3600);
+    status.textContent = 'sign the asset list in your wallet — no gas, nothing is sent from it…';
+    const signature = await window.ethereum.request({
+      method: 'eth_signTypedData_v4',
+      params: [wallet, JSON.stringify(assetCommitTypedData(wallet, digest, deadline))],
+    });
+    status.textContent = 'recording your signed list…';
+    ASSET_COMMIT = await api(`/v1/accounts/${wallet}/asset-commit`, {
+      method: 'POST', reader: true, headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ assets, deadline, signature }),
+    });
+    status.textContent = `your signed list now names ${num(assets.length)} asset${assets.length === 1 ? '' : 's'}. A later lookup reads its matching chain entries before discovery.`;
     renderV2CommitAction();
   } catch (error) {
     status.textContent = error.message || String(error);
@@ -4348,35 +4406,38 @@ function showResolved(r) {
 // Wallet
 // --------------------------------------------------------------------------
 
-// The token list the lens is asked about: every indexed asset, then everything this
-// browser remembers signing a verdict on, then the candidates nobody has ruled on.
-// Without the last part every row would read "indexed" and the split would be
-// decoration — the point is that the index says which contracts to ask about,
-// including the ones it has not committed to.
-//
-// What the memory is allowed to do, exactly. It ADDS: a remembered contract is asked
-// about whether or not the index offers it. It ORDERS: remembered contracts go ahead
-// of the per-lookup cap, and never ahead of an indexed asset — the index committed to
-// those, and a memory is a signature over a guess. It REMOVES nothing: absence means
-// "not signed for last time", which is no statement about what is held now.
-function walletTokens(remembered) {
+// The lens starts with indexed contracts, then this account's exact signed list,
+// then its remembered verdict. An exact list is a fresh sweep snapshot, so when it
+// matches this chain it replaces speculative candidate discovery and avoids its
+// otherwise unnecessary multicalls. Indexed contracts still lead: the index has a
+// stronger, independently committed statement about them.
+function walletTokens(remembered, committed) {
   const seen = new Set();
   const out = [];
   const push = a => { const k = a.toLowerCase(); if (!seen.has(k)) { seen.add(k); out.push(a); } };
   for (const a of ASSETS) push(a.address);
+  for (const a of (committed || [])) if (ADDRESS_RE.test(a)) push(a);
   for (const a of (remembered || [])) if (ADDRESS_RE.test(a)) push(a);
 
-  // Spam is asked about too, and lands in the lower group at render. Leaving it out
-  // here would tell a wallet holding three spam tokens that it holds none, which is
-  // the opposite of what the lower group is for.
+  // A signed list is the reader's deliberate replacement for a broad discovery
+  // read. Its absence says nothing about balances, so only then do candidates fill
+  // the bounded speculative tail.
+  if (committed && committed.length) return out;
   const cands = CANDIDATES.filter(c => !c.promoted).map(c => c.address);
   for (const a of cands) {
-    // The lens batches by twenty and tokens= caps at 512; this cap is what keeps both
-    // the URL and the number of eth_calls bounded no matter how busy discovery is.
     if (out.length >= 50) break;
     push(a);
   }
   return out;
+}
+
+async function loadAssetCommit(account) {
+  try {
+    return await api(`/v1/accounts/${account}/asset-commit`);
+  } catch (error) {
+    if (error.status === 404) return null;
+    throw error;
+  }
 }
 
 function verdictOf(address) {
@@ -4416,24 +4477,28 @@ async function lookup() {
     showErr('verdict-err', null);
 
     const indexStarted = performance.now();
-    const r = await api(onChain(`/v1/accounts/${addr}?prices=true`));
+    const [r, assetCommit] = await Promise.all([
+      api(onChain(`/v1/accounts/${addr}?prices=true`)),
+      loadAssetCommit(addr),
+    ]);
+    ASSET_COMMIT = assetCommit;
     WALLET_CHAIN = Number(r.chain_id) || activeChainID();
     const indexed = r.assets || [];
     VALUATION = indexed.length ? r.valuation : null;
     v2Trace(indexed.length ? 'Index knows this address' : 'Index has no rows for this address', `${num(indexed.length)} indexed contract${indexed.length === 1 ? '' : 's'} · block ${num((r.valuation || {}).as_of_block || HEAD)}`, location.host || 'this deployment', indexStarted);
-    if (!indexed.length && V2_CONSENTED_ADDRESS !== addr) {
+    const committed = assetCommitItemsFor(WALLET_CHAIN);
+    if (!indexed.length && !committed.length && V2_CONSENTED_ADDRESS !== addr) {
       $('v2-consent-copy').textContent = `Its activity is older than this index or touches contracts it does not cover. Reading balances sends the address to ${chainRpc() ? hostOf(chainRpc()) : location.host || 'this deployment'} for one lens call.`;
       $('v2-consent').hidden = false;
       return;
     }
 
-    // The index knows what it has seen; the lens knows what is held now. An account
-    // whose last token event fell out of the node's window has no rows above and may
-    // still hold plenty, and a candidate nobody has promoted has none by construction —
-    // so both are asked about either way, and so is everything the memory names.
+    // The index knows what it has seen; the lens knows what is held now. A signed
+    // exact list is the account's own prior sweep, so it is read before remembered
+    // verdicts and replaces broad candidate discovery for this chain.
     const known = new Set(indexed.map(a => a.address.toLowerCase()));
     const remembered = VERDICT_MEM ? Object.keys(VERDICT_MEM.pairs) : [];
-    const ask = walletTokens(remembered).filter(a => !known.has(a.toLowerCase()));
+    const ask = walletTokens(remembered, committed).filter(a => !known.has(a.toLowerCase()));
     const balancesStarted = performance.now();
     const extra = ask.length ? await heldBalances(addr, ask) : [];
     HOLDINGS = indexed.concat(extra);

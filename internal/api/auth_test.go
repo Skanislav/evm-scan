@@ -41,6 +41,8 @@ func TestAuthorizedGuardsOnlySpendingEndpoints(t *testing.T) {
 		{http.MethodGet, "/ens/0x0/0x0"},
 		{http.MethodPost, "/v1/accounts/0xabc/hint"},
 		{http.MethodGet, "/v1/accounts/0xabc/hint"},
+		{http.MethodPost, "/v1/accounts/0xabc/asset-commit"},
+		{http.MethodGet, "/v1/accounts/0xabc/asset-commit"},
 	}
 	for _, r := range reads {
 		if !s.authorized(httptest.NewRequest(r.method, r.path, nil)) {

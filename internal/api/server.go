@@ -245,6 +245,11 @@ func New(d Deps) *Server {
 	s.mux.HandleFunc("GET /v1/accounts/{address}/hint", s.getAccountHint)
 	s.mux.HandleFunc("GET /v1/accounts/{address}/hint.json", s.getAccountHintJSON)
 	s.mux.HandleFunc("POST /v1/accounts/{address}/hint", s.postAccountHint)
+	// An exact asset list a reader signed after a sweep. It is public only because
+	// the account's signature explicitly authorizes that enumerable disclosure.
+	s.mux.HandleFunc("GET /v1/accounts/{address}/asset-commit", s.getAssetCommit)
+	s.mux.HandleFunc("POST /v1/accounts/{address}/asset-commit", s.postAssetCommit)
+
 
 	if d.WebDir != "" {
 		s.mux.Handle("/", http.FileServer(http.Dir(d.WebDir)))
@@ -313,9 +318,10 @@ func guarded(r *http.Request) bool {
 	if p == "/v1/verdict" {
 		return false
 	}
-	// A reader's hint is written with the reader's own signature, which the handler
-	// checks; the operator's token would only stop readers.
-	if strings.HasPrefix(p, "/v1/accounts/") && strings.HasSuffix(p, "/hint") {
+	// A reader's hint or exact asset list is written with the reader's own
+	// signature, which the handler checks; the operator's token would only stop
+	// readers.
+	if strings.HasPrefix(p, "/v1/accounts/") && (strings.HasSuffix(p, "/hint") || strings.HasSuffix(p, "/asset-commit")) {
 		return false
 	}
 	return true
