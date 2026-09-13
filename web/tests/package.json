@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "test": "node --test *.test.mjs",
-    "test:browser": "node browser.mjs"
+    "test:browser": "node browser.mjs",
+    "test:send-browser": "node send-browser.mjs"
   },
   "devDependencies": {
     "@playwright/test": "1.55.0",

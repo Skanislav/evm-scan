@@ -700,6 +700,12 @@
   .state-cost { margin-top: 11px; padding-top: 10px; border-top: 1px solid var(--rule);
     font: 400 11.5px/1.55 var(--mono); color: var(--ink-65); }
   .state-cost b { color: var(--ink); font-weight: 500; }
+  #send-card fieldset { border:0; padding:0; display:grid; gap:12px; margin:16px 0; }
+  #send-card label { display:grid; gap:6px; margin:10px 0; }
+  #send-card input, #send-card select { width:100%; box-sizing:border-box; }
+  #send-card pre { font-size:12px; max-height:320px; overflow:auto; }
+  #send-card p { font-size:13px; line-height:1.6; }
+  #send-card [hidden] { display:none !important; }
 </style>
 </head>
 <body>
@@ -858,6 +864,7 @@
       <div class="v2-answer-note" id="v2-answer-note"></div>
       <div id="xchain-hint"></div>
     </div>
+    <div id="send-card" class="verdict-bar"></div>
     <div id="v2-trail" hidden>
       <div class="v2-trail-head"><strong>What happened</strong><span class="empty">every call, host and block</span></div>
       <div id="v2-trail-steps"></div>
@@ -4246,7 +4253,7 @@ function renderXChainAssets(results) {
   $('v2-assets').innerHTML = assets.size ? [...assets.values()].map(asset => {
     const total = formatUnits(asset.total.toString(), asset.decimals);
     return `<div class="v2-asset"><div class="v2-asset-head"><span class="v2-asset-symbol">${esc(asset.symbol)}</span><span class="v2-asset-name">${esc(asset.name)}</span><span class="v2-asset-balance">${total}</span></div>${
-      asset.chains.map(({ chain, holding }) => `<div class="v2-asset-chain"><i style="background:${chainColor(chain.id)}"></i><span>${esc(chain.name)}</span><b>${formatUnits(holding.balance, holding.decimals)}</b></div>`).join('')
+      asset.chains.map(({ chain, holding }) => `<div class="v2-asset-chain"><i style="background:${chainColor(chain.id)}"></i><span>${esc(chain.name)}</span><b>${formatUnits(holding.balance, holding.decimals)}</b>${sendAction(holding, chain)}</div>`).join('')
     }</div>`;
   }).join('') : '<div class="empty" style="padding:14px 0">No holdings on the enabled networks that answered.</div>';
   $('v2-answer-note').textContent = `${num(answered.length)} of ${num(results.length)} enabled networks answered · every chain balance is shown above`;
@@ -4750,6 +4757,7 @@ async function lookup() {
     // The panel promises "same account, same meter", so a different account starts
     // over rather than showing the last one's cost against this one's entry count.
     if (WALLET_ADDR !== addr) { COST.create = null; COST.view = null; renderStateCost(); }
+    SEND_HOLDINGS.clear();
     WALLET_ADDR = addr;
     WALLET_NAME = resolved.name || '';
     showResolved(resolved.name ? resolved : null);
@@ -5202,6 +5210,33 @@ function updateVerdictBar() {
 }
 
 // --------------------------------------------------------------------------
+// Lazy transaction builder: each action retains the chain and exact token address.
+const SEND_HOLDINGS = new Map();
+let SEND_UI;
+function sendAction(holding, chain) {
+  if (holding.standard && holding.standard !== 'erc20') return '';
+  if (!holding.address || holding.decimals == null) return '';
+  const key = `${chain.id}:${holding.address.toLowerCase()}`;
+  SEND_HOLDINGS.set(key, { ...holding, chainId: Number(chain.id), chainName: chain.name, owner: WALLET_ADDR });
+  return `<button class="linkbtn" data-send-token="${esc(key)}">Send</button>`;
+}
+document.addEventListener('click', async event => {
+  const button = event.target.closest('[data-send-token]');
+  if (!button) return;
+  button.disabled = true;
+  try {
+    const h = SEND_HOLDINGS.get(button.dataset.sendToken);
+    if (!h || h.owner !== WALLET_ADDR) throw Error('Look up this holding again');
+    if (!SEND_UI) SEND_UI = import('./send.mjs').then(m => m.mount({ root: $('send-card'), viem, resolveAccount, currentAccount: () => WALLET_ADDR }));
+    (await SEND_UI).open(h, h.owner);
+  } catch (e) { $('send-card').textContent = e.message; SEND_UI = null; }
+  finally { button.disabled = false; }
+});
+// Recovery is available without a token lookup.
+import('./send.mjs').then(m => {
+  if (!SEND_UI) SEND_UI = Promise.resolve(m.mount({ root: $('send-card'), viem, resolveAccount, currentAccount: () => WALLET_ADDR }));
+}).catch(e => { $('send-card').textContent = `Send unavailable: ${e.message}`; });
+
 // The split
 // --------------------------------------------------------------------------
 
@@ -5246,7 +5281,7 @@ function renderV2CurrentAnswer(rows) {
   $('v2-network-summary').textContent = chain.name;
   $('v2-assets').innerHTML = rows.length ? rows.map(holding => `<div class="v2-asset">
     <div class="v2-asset-head"><span class="v2-asset-symbol">${esc(holding.symbol || short(holding.address, 4))}</span><span class="v2-asset-name">${esc(holding.name || '')}</span><span class="v2-asset-balance">${formatUnits(holding.balance, holding.decimals)}</span></div>
-    <div class="v2-asset-chain"><i style="background:${chainColor(chain.id)}"></i><span>${esc(chain.name)}</span><b>${formatUnits(holding.balance, holding.decimals)}</b></div>
+    <div class="v2-asset-chain"><i style="background:${chainColor(chain.id)}"></i><span>${esc(chain.name)}</span><b>${formatUnits(holding.balance, holding.decimals)}</b>${sendAction(holding, chain)}</div>
   </div>`).join('') : '<div class="empty" style="padding:14px 0">Nothing held on this network at this block.</div>';
   const block = (VALUATION && VALUATION.as_of_block) || (STATUS && STATUS.head_block);
   $('v2-answer-note').textContent = `Read at block ${num(block)} · choose more networks to extend this answer`;
