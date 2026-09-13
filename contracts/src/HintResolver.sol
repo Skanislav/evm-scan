@@ -128,7 +128,11 @@ contract HintResolver {
 
     /// @notice Reads the account from the first label and the chain from the second
     ///         when it is decimal, else `defaultChainId`.
-    function parseName(bytes calldata name) public view returns (address account, uint64 chainId, bool ok) {
+    /// @dev `virtual` so a subclass can widen what a first label may be — see
+    ///      HintAliasResolver, which falls back to a claimed name. Everything else
+    ///      about resolution is a function of `(account, chainId)` and so needs no
+    ///      overriding: there is one implementation of the records.
+    function parseName(bytes calldata name) public view virtual returns (address account, uint64 chainId, bool ok) {
         bytes memory n = name;
         (bytes memory first, uint256 next) = n.readLabel(0);
         (account, ok) = first.parseHexAddress();
