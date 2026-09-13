@@ -625,6 +625,44 @@
   .asset-chain { display: flex; align-items: center; gap: 8px; margin-top: 7px; color: var(--ink-65); font-size: 12.5px; }
   .asset-chain-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
   .asset-chain-balance { margin-left: auto; color: var(--ink); font: 500 12.5px/1 var(--mono); }
+  /* The answer follows the lookup card: assets first, then their contributing
+     chains. The detailed classifier remains in the DOM for its signed-verdict flow. */
+  #beat2 { display: grid; place-items: start center; background: #f5f4f0; }
+  #beat2 > .wrap { width: 100%; max-width: 560px; padding-top: 24px; }
+  #beat2 > .wrap > .kicker, #wallet-head, #networks, #chain-unverified,
+  #holdings-wrap > :not(#xchain) { display: none !important; }
+  #v2-answer { width: 100%; border-radius: 28px; background: #fff; box-shadow: 0 12px 32px rgba(20,22,26,.13); padding: 12px; }
+  .v2-answer-address { padding: 10px 16px 12px; }
+  .v2-answer-name { font: 600 20px/1.2 'Syne', var(--sans); }
+  .v2-answer-address .addr { margin-top: 5px; color: var(--ink-65); font: 400 12px/1.4 var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .v2-network-bar, .v2-assets { border-radius: 20px; background: var(--bg-2); padding: 13px 16px; }
+  .v2-network-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 13px; }
+  .v2-network-dots { display: flex; margin-left: 3px; }
+  .v2-network-dots span { width: 12px; height: 12px; border: 2px solid #fff; border-radius: 50%; margin-left: -3px; }
+  .v2-network-change { margin-left: auto; border: 0; background: transparent; color: var(--blue-text); cursor: pointer; font: 500 13px/1 var(--sans); }
+  #v2-assets { padding-block: 4px; }
+  .v2-asset { padding: 13px 0; border-top: 1px solid var(--line); }
+  .v2-asset:first-child { border-top: 0; }
+  .v2-asset-head { display: flex; align-items: baseline; gap: 8px; }
+  .v2-asset-symbol { font-weight: 600; font-size: 17px; }
+  .v2-asset-name { color: var(--ink-65); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .v2-asset-balance { margin-left: auto; font: 500 17px/1.2 var(--mono); white-space: nowrap; }
+  .v2-asset-chain { display: flex; align-items: center; gap: 8px; margin-top: 7px; color: var(--ink-65); font-size: 12.5px; }
+  .v2-asset-chain i { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .v2-asset-chain b { margin-left: auto; color: var(--ink); font: 500 12.5px/1 var(--mono); }
+  .v2-answer-note { padding: 9px 9px 2px; color: var(--ink-65); font-size: 12.5px; text-align: center; }
+  #xchain { display: none !important; }
+  #v2-network-modal { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 16px; background: rgba(20,22,26,.32); backdrop-filter: blur(4px); }
+  #v2-network-dialog { width: min(440px, 100%); max-height: min(680px, 90vh); overflow: hidden auto; border-radius: 28px; background: #fff; box-shadow: 0 16px 40px rgba(20,22,26,.22); padding: 18px; }
+  .v2-network-dialog-head { display: flex; align-items: baseline; gap: 10px; }
+  .v2-network-dialog-head h2 { font: 600 20px/1.2 'Syne', var(--sans); }
+  .v2-network-close { margin-left: auto; border: 0; border-radius: 999px; padding: 7px 12px; background: transparent; cursor: pointer; font: 500 13px/1 var(--sans); }
+  .v2-network-row { display: flex; align-items: center; gap: 12px; width: 100%; border: 0; border-radius: 14px; padding: 10px; background: transparent; color: var(--ink); text-align: left; cursor: pointer; font: inherit; }
+  .v2-network-row:hover { background: var(--bg-2); }
+  .v2-network-row .check { width: 20px; height: 20px; border: 1.5px solid var(--line-3); border-radius: 6px; display: grid; place-items: center; margin-left: auto; }
+  .v2-network-row .check.on { border-color: var(--ink); background: var(--ink); color: #fff; }
+  .v2-network-row .dot { width: 22px; height: 22px; border-radius: 50%; flex: none; }
+  #v2-network-read { width: 100%; margin-top: 12px; border-radius: 999px; }
 </style>
 </head>
 <body>
@@ -746,6 +784,20 @@
     <div class="idle" id="answer-idle">Look an address up and the answer lands here — which indexed
       contracts it has touched, and what it holds in them right now, read at head in one call.</div>
     <div class="loading" id="answer-loading" hidden><span class="pulse">reading your node · one eth_call, one block…</span></div>
+    <div id="v2-answer" hidden>
+      <div class="v2-answer-address">
+        <div class="v2-answer-name" id="v2-wallet-name"></div>
+        <div class="addr" id="v2-wallet-address"></div>
+      </div>
+      <div class="v2-network-bar">
+        <span>Networks</span>
+        <span class="v2-network-dots" id="v2-network-dots"></span>
+        <span class="empty" id="v2-network-summary"></span>
+        <button class="v2-network-change" id="v2-network-change">Change</button>
+      </div>
+      <div class="v2-assets" id="v2-assets"></div>
+      <div class="v2-answer-note" id="v2-answer-note"></div>
+    </div>
 
     <div id="wallet-head" hidden>
       <div class="ans-head">
@@ -1239,6 +1291,20 @@
     </div>
   </div>
 </section>
+
+<div id="v2-network-modal" hidden>
+  <div id="v2-network-dialog" role="dialog" aria-modal="true" aria-labelledby="v2-network-title">
+    <div class="v2-network-dialog-head">
+      <h2 id="v2-network-title">Networks</h2>
+      <span class="empty" id="v2-network-count"></span>
+      <button class="v2-network-close" id="v2-network-close">Done</button>
+    </div>
+    <p class="hint" id="v2-network-loading" style="margin:12px 0"></p>
+    <div id="v2-network-list"></div>
+    <button class="btn btn-primary" id="v2-network-read" disabled>Read enabled networks</button>
+    <p class="hint" id="v2-network-disclosure" style="margin:10px 0 0"></p>
+  </div>
+</div>
 
 <script>
 const $ = (id) => document.getElementById(id);
@@ -3560,12 +3626,16 @@ let XSTATE = 'idle';      // idle | running | done
 let XLAST = null;         // the last sweep's totals, for the status line after it
 let XRPC_EDIT = null;     // the chain whose endpoint row is open, if any
 async function openXChain() {
+  $('v2-network-modal').hidden = false;
   if (XCHAIN) {
     $('xchain-openrow').hidden = true;
     $('xchain-panel').hidden = false;
     renderXChainList();
     return;
   }
+  $('v2-network-loading').textContent = 'Loading available networks…';
+  $('v2-network-list').innerHTML = '<div class="empty" style="padding:14px 0">Loading chain definitions and the token list…</div>';
+  $('v2-network-read').disabled = true;
   $('xchain-open').disabled = true;
   $('xchain-load').textContent = 'loading chain definitions and the token list…';
   $('xchain-panel').hidden = false;
@@ -3579,6 +3649,7 @@ async function openXChain() {
     $('xchain-panel').inert = false;
     $('xchain-open').disabled = false;
     $('xchain-load').textContent = `could not load: ${e.message}`;
+    $('v2-network-loading').textContent = `Could not load networks: ${e.message}`;
     return;
   }
   $('xchain-panel').inert = false;
@@ -3659,6 +3730,7 @@ function renderXChainList() {
       + `${dead.map(c => c.name).join(', ')}. Nobody holds anything there by accident — pick one by hand if you mean it.`
     : 'every chain on the list is a mainnet.';
   updateXChainStatus();
+  renderV2NetworkPicker();
 }
 
 // The cost is worth showing before it is spent: a reader picking twelve chains
@@ -3698,6 +3770,35 @@ function updateXChainStatus() {
 function chainColor(id) {
   return `hsl(${(Number(id) * 47) % 360} 48% 48%)`;
 }
+function renderV2NetworkPicker() {
+  if (!XCHAIN) return;
+  const picked = XCHAIN.filter(chain => XSELECTED.has(chain.id));
+  $('v2-network-count').textContent = `${num(picked.length)} enabled`;
+  $('v2-network-loading').textContent = 'Choose every network to include. Each selected endpoint receives the address only when you read.';
+  $('v2-network-list').innerHTML = XCHAIN.map(chain => {
+    const on = XSELECTED.has(chain.id);
+    return `<button class="v2-network-row" data-v2-chain="${chain.id}" aria-pressed="${on}">
+      <span class="dot" style="background:${chainColor(chain.id)}"></span>
+      <span><strong>${esc(chain.name)}</strong><span class="empty" style="display:block;font-size:12px">${num(chain.tokens.length)} indexed contracts${chain.mine ? ' · your endpoint' : ''}</span></span>
+      <span class="check ${on ? 'on' : ''}">${on ? '✓' : ''}</span>
+    </button>`;
+  }).join('');
+  for (const button of $('v2-network-list').querySelectorAll('[data-v2-chain]')) {
+    button.addEventListener('click', () => {
+      const id = Number(button.dataset.v2Chain);
+      XSELECTED.has(id) ? XSELECTED.delete(id) : XSELECTED.add(id);
+      XSTATE = 'idle';
+      renderXChainList();
+    });
+  }
+  const read = $('v2-network-read');
+  read.disabled = !picked.length || !WALLET_ADDR || XSTATE === 'running';
+  read.textContent = XSTATE === 'running' ? 'Reading enabled networks…' : !picked.length ? 'Select a network' : `Read ${num(picked.length)} enabled network${picked.length === 1 ? '' : 's'}`;
+  $('v2-network-disclosure').textContent = !picked.length
+    ? 'No endpoint will be contacted.'
+    : `${num(picked.filter(chain => !chain.mine).length)} selected endpoint${picked.filter(chain => !chain.mine).length === 1 ? '' : 's'} are not yours and will receive the address.`;
+}
+
 
 function renderXChainAssets(results) {
   const assets = new Map();
@@ -3726,6 +3827,17 @@ function renderXChainAssets(results) {
       ${chains}
     </div>`;
   }).join('')}</div>` : '<div class="empty" style="padding:14px 0">No holdings on the enabled chains that answered.</div>';
+  const answered = results.filter(result => !result.error);
+  const reached = answered.map(result => result.chain);
+  $('v2-network-dots').innerHTML = reached.map(chain => `<span title="${esc(chain.name)}" style="background:${chainColor(chain.id)}"></span>`).join('');
+  $('v2-network-summary').textContent = `${num(answered.length)} reached`;
+  $('v2-assets').innerHTML = assets.size ? [...assets.values()].map(asset => {
+    const total = formatUnits(asset.total.toString(), asset.decimals);
+    return `<div class="v2-asset"><div class="v2-asset-head"><span class="v2-asset-symbol">${esc(asset.symbol)}</span><span class="v2-asset-name">${esc(asset.name)}</span><span class="v2-asset-balance">${total}</span></div>${
+      asset.chains.map(({ chain, holding }) => `<div class="v2-asset-chain"><i style="background:${chainColor(chain.id)}"></i><span>${esc(chain.name)}</span><b>${formatUnits(holding.balance, holding.decimals)}</b></div>`).join('')
+    }</div>`;
+  }).join('') : '<div class="empty" style="padding:14px 0">No holdings on the enabled networks that answered.</div>';
+  $('v2-answer-note').textContent = `${num(answered.length)} of ${num(results.length)} enabled networks answered · every chain balance is shown above`;
 }
 
 async function runXChain() {
@@ -4633,9 +4745,25 @@ function holdingRow(h) {
   </div>`;
 }
 
+function renderV2CurrentAnswer(rows) {
+  const chain = { id: INDEXED_CHAIN || (STATUS && STATUS.chain_id) || 1, name: chainName() };
+  $('v2-answer').hidden = false;
+  $('v2-wallet-name').textContent = WALLET_NAME || short(WALLET_ADDR, 4);
+  $('v2-wallet-address').textContent = WALLET_ADDR;
+  $('v2-network-dots').innerHTML = `<span style="background:${chainColor(chain.id)}"></span>`;
+  $('v2-network-summary').textContent = chain.name;
+  $('v2-assets').innerHTML = rows.length ? rows.map(holding => `<div class="v2-asset">
+    <div class="v2-asset-head"><span class="v2-asset-symbol">${esc(holding.symbol || short(holding.address, 4))}</span><span class="v2-asset-name">${esc(holding.name || '')}</span><span class="v2-asset-balance">${formatUnits(holding.balance, holding.decimals)}</span></div>
+    <div class="v2-asset-chain"><i style="background:${chainColor(chain.id)}"></i><span>${esc(chain.name)}</span><b>${formatUnits(holding.balance, holding.decimals)}</b></div>
+  </div>`).join('') : '<div class="empty" style="padding:14px 0">Nothing held on this network at this block.</div>';
+  const block = (VALUATION && VALUATION.as_of_block) || (STATUS && STATUS.head_block);
+  $('v2-answer-note').textContent = `Read at block ${num(block)} · choose more networks to extend this answer`;
+}
+
 function renderHoldings() {
   if (!WALLET_ADDR) return;
   const rows = HOLDINGS.filter(h => h.address).map(h => ({ ...h, v: effectiveVerdict(h) }));
+  renderV2CurrentAnswer(rows);
   // Within a group: committed first, then score, then value. The reported and the
   // signed-against are already at the bottom by their score.
   const val = h => Number(h.value_usd || 0);
@@ -4861,6 +4989,15 @@ async function loadExamples() {
   }
 }
 
+$('v2-network-change').addEventListener('click', openXChain);
+$('v2-network-close').addEventListener('click', () => { $('v2-network-modal').hidden = true; });
+$('v2-network-modal').addEventListener('click', event => {
+  if (event.target === $('v2-network-modal')) $('v2-network-modal').hidden = true;
+});
+$('v2-network-read').addEventListener('click', async () => {
+  $('v2-network-modal').hidden = true;
+  await runXChain();
+});
 async function buildEpoch() {
   showErr('epoch-err', null);
   $('build').disabled = true;
