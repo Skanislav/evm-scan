@@ -676,6 +676,8 @@
   #v2-consent h2 { margin: 0 0 6px; font: 600 20px/1.2 'Syne', var(--sans); }
   #v2-consent p { margin: 0 0 14px; color: var(--ink-65); font-size: 14px; line-height: 1.5; }
   #v2-consent .row { justify-content: space-between; }
+  #v2-commit-assets { width: 100%; margin-top: 10px; border-radius: 999px; }
+  #v2-commit-status { margin: 8px 4px 0; color: var(--ink-65); font-size: 12.5px; text-align: center; }
   #beat3, #beat4, #beat5 { display: none; }
   .v2-footer { display: flex; justify-content: center; gap: 16px; flex-wrap: wrap; width: 100%; max-width: 720px; padding: 24px 16px 36px; color: var(--ink-65); font-size: 13px; }
   .v2-footer a { color: inherit; }
@@ -818,6 +820,10 @@
         <span class="v2-network-dots" id="v2-network-dots"></span>
         <span class="empty" id="v2-network-summary"></span>
         <button class="v2-network-change" id="v2-network-change">Change</button>
+      </div>
+      <div id="v2-commit-wrap" hidden>
+        <button class="btn btn-primary" id="v2-commit-assets">Commit discovered assets</button>
+        <div id="v2-commit-status"></div>
       </div>
       <div class="v2-assets" id="v2-assets"></div>
       <div class="v2-answer-note" id="v2-answer-note"></div>
@@ -1476,6 +1482,64 @@ function usd(s) {
   return '$' + whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',') + (frac ? '.' + frac : '');
 }
 
+// Newly read contract balances are candidates for this deployment's asset index.
+let V2_DISCOVERED = [];
+
+function v2CommitCandidates() {
+  const registered = new Set((ASSETS || []).map(asset => `${Number(asset.chain_id || activeChainID())}:${String(asset.address).toLowerCase()}`));
+  const seen = new Set();
+  return V2_DISCOVERED.filter(asset => {
+    const key = `${asset.chainId}:${String(asset.address).toLowerCase()}`;
+    if (!asset.address || seen.has(key) || registered.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function renderV2CommitAction() {
+  const candidates = v2CommitCandidates();
+  $('v2-commit-wrap').hidden = candidates.length === 0;
+  $('v2-commit-assets').textContent = `Commit ${num(candidates.length)} discovered asset${candidates.length === 1 ? '' : 's'} to the index`;
+}
+
+async function commitV2Assets() {
+  const candidates = v2CommitCandidates();
+  if (!candidates.length) return;
+  const button = $('v2-commit-assets');
+  const status = $('v2-commit-status');
+  button.disabled = true;
+  status.textContent = `Committing 0 of ${num(candidates.length)}…`;
+  let committed = 0;
+  try {
+    for (const asset of candidates) {
+      try {
+        await api('/v1/assets', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ address: asset.address, chain_id: asset.chainId }),
+        });
+      } catch (error) {
+        // Hosted deployments intentionally disable direct writes. Their candidate
+        // promotion path is the public, funded route — but only for the chain this
+        // deployment indexes, never a similarly numbered external network.
+        if (error.status !== 403 || asset.chainId !== activeChainID()) throw error;
+        await api(onChain(`/v1/candidates/${asset.address}/promote`), {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ reason: 'discovered by a wallet sweep' }),
+        });
+      }
+      committed++;
+      status.textContent = `Committing ${num(committed)} of ${num(candidates.length)}…`;
+    }
+    await Promise.all([loadAssets(), loadCandidates(), loadDecisions()]);
+    status.textContent = `${num(committed)} asset${committed === 1 ? '' : 's'} committed. They will be included by the indexer's next scan.`;
+    renderV2CommitAction();
+  } catch (error) {
+    status.textContent = error.message || String(error);
+    button.disabled = false;
+  }
+}
 // How long ago, in the register the ledger reads in: exact enough to order by, vague
 // enough not to imply a precision the timestamp does not carry.
 function ago(iso) {
@@ -3893,6 +3957,8 @@ function renderXChainAssets(results) {
     }</div>`;
   }).join('') : '<div class="empty" style="padding:14px 0">No holdings on the enabled networks that answered.</div>';
   $('v2-answer-note').textContent = `${num(answered.length)} of ${num(results.length)} enabled networks answered · every chain balance is shown above`;
+  V2_DISCOVERED = answered.flatMap(result => result.held.map(holding => ({ chainId: result.chain.id, address: holding.address })));
+  renderV2CommitAction();
 }
 
 async function runXChain() {
@@ -4817,6 +4883,8 @@ function renderV2CurrentAnswer(rows) {
   const chain = { id: INDEXED_CHAIN || (STATUS && STATUS.chain_id) || 1, name: chainName() };
   $('v2-answer').hidden = false;
   $('v2-wallet-name').textContent = WALLET_NAME || short(WALLET_ADDR, 4);
+  V2_DISCOVERED = rows.map(holding => ({ chainId: chain.id, address: holding.address }));
+  renderV2CommitAction();
   $('v2-wallet-address').textContent = WALLET_ADDR;
   $('v2-network-dots').innerHTML = `<span style="background:${chainColor(chain.id)}"></span>`;
   $('v2-network-summary').textContent = chain.name;
@@ -5058,6 +5126,7 @@ async function loadExamples() {
 }
 
 $('v2-network-change').addEventListener('click', openXChain);
+$('v2-commit-assets').addEventListener('click', commitV2Assets);
 $('v2-network-close').addEventListener('click', () => { $('v2-network-modal').hidden = true; });
 $('v2-network-modal').addEventListener('click', event => {
   if (event.target === $('v2-network-modal')) $('v2-network-modal').hidden = true;
