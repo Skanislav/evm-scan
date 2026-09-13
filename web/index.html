@@ -855,6 +855,7 @@
               where the index is authoritative for the question, which is the lookup above and not this. The cost of
               being right: the lens returns about 920 bytes per token, so EIP-170's 24 576-byte reply ceiling caps a
               batch at 24 and batching harder is simply not available.</div>
+            <div id="xchain-hint"></div>
           </div>
         </div>
       </div>
@@ -3558,22 +3559,30 @@ let XLIST = null;         // the token list's own name and version, for the disc
 let XSTATE = 'idle';      // idle | running | done
 let XLAST = null;         // the last sweep's totals, for the status line after it
 let XRPC_EDIT = null;     // the chain whose endpoint row is open, if any
-
 async function openXChain() {
+  if (XCHAIN) {
+    $('xchain-openrow').hidden = true;
+    $('xchain-panel').hidden = false;
+    renderXChainList();
+    return;
+  }
   $('xchain-open').disabled = true;
   $('xchain-load').textContent = 'loading chain definitions and the token list…';
+  $('xchain-panel').hidden = false;
+  $('xchain-panel').inert = true;
+  $('xchain-list').innerHTML = '<div class="empty" style="padding:14px 0">Loading available networks…</div>';
   try {
     XCHAIN = await sweepableChains();
     XLIST = await tokenList();
   } catch (e) {
+    $('xchain-panel').hidden = true;
+    $('xchain-panel').inert = false;
     $('xchain-open').disabled = false;
     $('xchain-load').textContent = `could not load: ${e.message}`;
     return;
   }
+  $('xchain-panel').inert = false;
   $('xchain-openrow').hidden = true;
-  $('xchain-panel').hidden = false;
-  // Every mainnet to begin with — the same set "All available" picks — so the
-  // disclosure below has real numbers in it before anyone touches a tile.
   for (const c of XCHAIN) if (!c.testnet) XSELECTED.add(c.id);
   renderXChainList();
 }
