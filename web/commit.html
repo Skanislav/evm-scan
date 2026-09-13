@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Commit your asset list</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  /* Same paper-and-ink ground as the index page; commit is a separate errand, so it
+     gets its own page rather than a fifth thing on that one. Two colours do all the
+     judging: blue is "trust this", amber is "this sends your address somewhere". */
+  :root {
+    --bg: #fbfaf8; --bg-2: #f6f5f2; --surface: #fff;
+    --ink: #14161a; --ink-70: rgba(20,22,26,.7); --ink-65: rgba(20,22,26,.65); --ink-45: rgba(20,22,26,.45);
+    --line: rgba(20,22,26,.09); --line-3: rgba(20,22,26,.22);
+    --fill: rgba(20,22,26,.055);
+    --blue-text: oklch(0.50 0.13 250); --blue-hover: oklch(0.42 0.13 250);
+    --blue-wash: oklch(0.96 0.02 250);
+    --amber-text: oklch(0.40 0.10 66); --amber-line: oklch(0.80 0.08 75); --amber-wash: oklch(0.985 0.012 80);
+    --sans: 'IBM Plex Sans', system-ui, sans-serif;
+    --mono: 'IBM Plex Mono', ui-monospace, Menlo, monospace;
+    --r-md: 6px; --r-lg: 9px; --r-xl: 11px;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--sans); font-size: 14px; line-height: 1.55; }
+  a { color: var(--blue-text); text-decoration: none; }
+  a:hover { color: var(--blue-hover); }
+  code { font-family: var(--mono); font-size: .92em; }
+  .wrap { max-width: 860px; margin: 0 auto; padding-inline: 24px; }
+  .top { border-bottom: 1px solid var(--line); background: rgba(251,250,248,.93); }
+  .bar { display: flex; align-items: center; gap: 12px; padding-block: 12px; }
+  .brand { font: 600 14px/1 var(--mono); }
+  .toplinks { margin-left: auto; display: flex; gap: 16px; font: 400 12px/1 var(--sans); color: var(--ink-65); }
+  .toplinks a { color: inherit; }
+  .toplinks a:hover { color: var(--ink); }
+  main { padding-block: 40px 64px; }
+  .kicker { font: 500 10px/1 var(--mono); letter-spacing: .09em; text-transform: uppercase; color: var(--blue-text); margin-bottom: 10px; }
+  h1 { font: 600 34px/1.12 var(--sans); letter-spacing: -.02em; margin: 0 0 12px; }
+  .lede { font: 400 14.5px/1.6 var(--sans); color: var(--ink-70); margin: 0 0 26px; max-width: 640px; text-wrap: pretty; }
+  .label { font: 500 10px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-65); }
+  .hint { color: var(--ink-70); font-size: 12.5px; line-height: 1.6; }
+  .empty { color: var(--ink-45); }
+  .err { color: var(--amber-text); font-size: 12.5px; margin-top: 10px; }
+  .addr { font: 400 11px/1.45 var(--mono); color: var(--ink-65); user-select: all; word-break: break-all; }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer; font: 500 12.5px/1 var(--sans);
+    color: var(--ink); background: var(--surface); border: 1px solid var(--line-3); padding: 9px 15px; border-radius: var(--r-md); }
+  .btn:hover:not(:disabled) { border-color: rgba(20,22,26,.4); }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .btn-primary { background: var(--ink); color: #fff; border-color: var(--ink); }
+  .btn-secondary { background: var(--surface); }
+  .btn-ghost { border-color: transparent; background: transparent; color: var(--blue-text); }
+  .btn-sm { font-size: 11.5px; padding: 7px 12px; }
+  .input { min-height: 38px; padding: 8px 12px; font: 400 13px/1.3 var(--mono); color: var(--ink); background: var(--surface);
+    border: 1px solid var(--line-3); border-radius: var(--r-md); }
+  .input:focus { outline: 2px solid oklch(0.55 0.13 250); outline-offset: 1px; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .card { background: var(--surface); border: 1px solid rgba(20,22,26,.11); border-radius: var(--r-xl); }
+  .card-head { padding: 12px 16px 11px; border-bottom: 1px solid var(--line); display: flex; gap: 12px; flex-wrap: wrap; align-items: baseline; }
+  .card-body { padding: 15px 16px 17px; }
+  .before { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--amber-line); background: var(--amber-wash);
+    border-radius: var(--r-lg); padding: 11px 13px; margin-bottom: 13px; font: 400 12.5px/1.6 var(--sans); color: var(--ink-70); }
+  .before .bb { flex: none; font: 500 9.5px/1 var(--mono); letter-spacing: .04em; text-transform: uppercase; color: var(--amber-text);
+    border: 1px solid oklch(0.75 0.10 75); border-radius: 3px; padding: 4px 6px; }
+  .chaingrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 8px; margin-bottom: 12px; }
+  .chaintile { display: flex; gap: 10px; align-items: center; border: 1px solid rgba(20,22,26,.14); background: var(--surface);
+    border-radius: 8px; padding: 9px 11px; min-width: 0; cursor: pointer; }
+  .chaintile:hover { border-color: rgba(20,22,26,.34); }
+  .chaintile .box { width: 17px; height: 17px; border: 1.5px solid var(--line-3); border-radius: 5px; display: grid; place-items: center; font-size: 11px; flex: none; }
+  .chaintile .box.on { background: var(--ink); border-color: var(--ink); color: #fff; }
+  .chaintile.dim { opacity: .5; }
+  .chaintile .cn { font: 500 12.5px/1.3 var(--sans); display: block; }
+  .chaintile .ch { font: 400 10.5px/1.4 var(--mono); color: var(--ink-65); display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tag { display: inline-block; font: 500 9px/1 var(--mono); letter-spacing: .04em; text-transform: uppercase; padding: 2px 5px;
+    border-radius: 3px; background: var(--fill); color: var(--ink-70); }
+  .step { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 10px; }
+  .stepn { flex: none; width: 20px; height: 20px; border-radius: 50%; background: rgba(20,22,26,.08); font: 500 11px/20px var(--mono); text-align: center; }
+  .stepn.blue { background: oklch(0.55 0.13 250); color: #fff; }
+  .step-t { font: 500 13px/1.4 var(--sans); margin-bottom: 2px; }
+  .step-d { font: 400 11.5px/1.6 var(--mono); color: var(--ink-65); }
+  .review-row { display: grid; grid-template-columns: 22px minmax(0, 1fr) 130px minmax(90px, 150px); gap: 10px; align-items: center;
+    padding: 8px 0; border-bottom: 1px solid var(--line); cursor: pointer; }
+  .review-row:hover { background: var(--blue-wash); }
+  .review-row .box { width: 17px; height: 17px; border: 1.5px solid var(--line-3); border-radius: 5px; display: grid; place-items: center; font-size: 11px; }
+  .review-row .box.on { background: var(--ink); border-color: var(--ink); color: #fff; }
+  .review-row.off .sym, .review-row.off .nm, .review-row.off .addr { opacity: .4; }
+  .sym { font: 500 13px/1.3 var(--sans); }
+  .nm { font: 400 11.5px/1.3 var(--sans); color: var(--ink-65); }
+  .num { text-align: right; font-variant-numeric: tabular-nums; font: 400 12px/1.3 var(--mono); }
+  .done { border: 1px solid oklch(0.80 0.10 155); background: oklch(0.97 0.03 150); border-radius: var(--r-xl); padding: 16px 18px; }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="wrap bar">
+    <a class="brand" href="index.html">evm-scan</a>
+    <span class="hint">commit your asset list</span>
+    <nav class="toplinks">
+      <a href="index.html">Overview</a>
+      <a href="read.html">Read via ENS</a>
+      <a href="https://github.com/Skanislav/evm-scan" target="_blank" rel="noopener">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="kicker">Commit, then discover</div>
+  <h1>Sign the list once. Every later lookup starts from it.</h1>
+  <p class="lede">A sweep reads what your wallet actually holds across the chains you pick. You review the exact
+    chain-and-contract list, sign it — no gas, nothing is sent — and the daemon keeps it under your address. The Overview
+    page applies it as the filter: your lookup reads those contracts first instead of spending calls rediscovering them.
+    The list is public by design: you signed an enumerable disclosure.</p>
+
+  <!-- 1 · The account -->
+  <div class="card" style="margin-bottom:18px">
+    <div class="card-head"><span class="label">1 · the account</span></div>
+    <div class="card-body">
+      <div class="row">
+        <input class="input" id="account" type="text" spellcheck="false" autocomplete="off" placeholder="0x… — the address that holds the assets" style="flex:1 1 340px">
+        <button class="btn btn-secondary" id="connect">Use connected wallet</button>
+      </div>
+      <div class="err" id="account-err" hidden></div>
+      <div class="hint" id="commit-existing" style="margin-top:10px" hidden></div>
+    </div>
+  </div>
+
+  <!-- 2 · The sweep -->
+  <div class="card" style="margin-bottom:18px" id="sweep-card">
+    <div class="card-head">
+      <span class="label">2 · the sweep</span>
+      <span class="hint">balances are read at head, one endpoint per chain — this daemon is not in that path</span>
+    </div>
+    <div class="card-body">
+      <div class="before" id="sweep-before" hidden><span class="bb">before you run it</span><div id="sweep-disclosure" style="min-width:0"></div></div>
+      <div class="chaingrid" id="chain-list"><div class="empty">loading the chain registry and token list…</div></div>
+      <div class="row">
+        <button class="btn btn-secondary btn-sm" id="chain-all">All available</button>
+        <button class="btn btn-ghost btn-sm" id="chain-none">clear</button>
+        <button class="btn btn-primary" id="sweep-go" disabled>Sweep</button>
+        <span class="hint mono" id="sweep-status" style="font-family:var(--mono); font-size:11.5px"></span>
+      </div>
+      <div class="err" id="sweep-err" hidden></div>
+    </div>
+  </div>
+
+  <!-- 3 · Review and sign -->
+  <div class="card" id="review-card" hidden>
+    <div class="card-head">
+      <span class="label">3 · review and sign</span>
+      <span class="hint" id="review-count"></span>
+    </div>
+    <div class="card-body">
+      <div class="hint" style="margin-bottom:12px">Uncheck anything you do not want in the signed list — dust, spam,
+        airdrops you never touched. What stays checked is exactly what you sign, and exactly what a later lookup reads
+        first. An existing list's entries are carried in even if this sweep did not reach their chain.</div>
+      <div class="row" style="margin-bottom:10px">
+        <button class="btn btn-ghost btn-sm" id="review-all">check all</button>
+        <button class="btn btn-ghost btn-sm" id="review-none">uncheck all</button>
+      </div>
+      <div id="review-rows"></div>
+      <div class="hint" id="review-carried" style="margin-top:10px" hidden></div>
+      <div class="row" style="margin-top:16px">
+        <button class="btn btn-primary" id="sign" disabled>Sign and commit</button>
+        <span class="hint" id="sign-status"></span>
+      </div>
+      <div class="err" id="sign-err" hidden></div>
+    </div>
+  </div>
+
+  <div class="done" id="done" hidden style="margin-top:18px">
+    <div class="label" style="margin-bottom:8px">committed</div>
+    <div class="hint" id="done-line"></div>
+    <div class="row" style="margin-top:12px">
+      <a class="btn btn-primary btn-sm" id="done-overview" href="index.html">See it applied in the Overview →</a>
+    </div>
+  </div>
+</main>
+
+<script type="module" src="commit.js"></script>
+</body>
+</html>

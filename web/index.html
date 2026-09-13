@@ -676,8 +676,17 @@
   #v2-consent h2 { margin: 0 0 6px; font: 600 20px/1.2 'Syne', var(--sans); }
   #v2-consent p { margin: 0 0 14px; color: var(--ink-65); font-size: 14px; line-height: 1.5; }
   #v2-consent .row { justify-content: space-between; }
-  #v2-commit-assets { width: 100%; margin-top: 10px; border-radius: 999px; }
-  #v2-commit-status { margin: 8px 4px 0; color: var(--ink-65); font-size: 12.5px; text-align: center; }
+  #v2-commit-link { display: block; width: 100%; margin-top: 10px; border-radius: 999px; text-align: center; }
+  /* The committed-filter state: the answer is the reader's signed list applied,
+     and what it excluded is named rather than silently dropped. */
+  #v2-filter-bar { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; border: 1px solid var(--line-2);
+    border-radius: var(--r-lg); background: var(--blue-wash); padding: 11px 14px; margin-bottom: 10px; }
+  #v2-filter-bar .fb { font: 500 9.5px/1 var(--mono); letter-spacing: .05em; text-transform: uppercase; color: #fff;
+    background: var(--blue); border-radius: 3px; padding: 4px 6px; }
+  #v2-filter-excluded { border: 1px solid var(--amber-line); border-radius: var(--r-lg); background: var(--amber-wash); overflow: hidden; margin-top: 14px; }
+  #v2-filter-excluded .eh { padding: 10px 14px 9px; border-bottom: 1px solid var(--amber-line); font: 500 10px/1 var(--mono); letter-spacing: .09em; text-transform: uppercase; color: var(--amber-text); }
+  #v2-filter-excluded .er { display: grid; grid-template-columns: minmax(0,1fr) minmax(90px,150px); column-gap: 12px; padding: 8px 14px; font: 400 12px/1.4 var(--mono); border-bottom: 1px solid rgba(20,22,26,.05); }
+  #v2-filter-excluded .er:last-child { border-bottom: 0; }
   #beat3, #beat4, #beat5 { display: none; }
   .v2-footer { display: flex; justify-content: center; gap: 16px; flex-wrap: wrap; width: 100%; max-width: 720px; padding: 24px 16px 36px; color: var(--ink-65); font-size: 13px; }
   .v2-footer a { color: inherit; }
@@ -822,9 +831,17 @@
         <button class="v2-network-change" id="v2-network-change">Change</button>
       </div>
       <div id="v2-commit-wrap" hidden>
-        <button class="btn btn-primary" id="v2-commit-assets">Commit discovered assets</button>
-        <div class="hint" style="margin:8px 4px 0">Your wallet signs this exact, public chain-and-contract list. No gas, registration, or promotion; a later lookup reads it before broad discovery.</div>
-        <div id="v2-commit-status"></div>
+        <a class="btn btn-primary" id="v2-commit-link" href="commit.html">Sweep more networks and commit your list →</a>
+        <div class="hint" style="margin:8px 4px 0">Commit lives on its own page now: sweep every network, review the exact
+          list, sign — no gas, no transaction. A later lookup reads that list before broad discovery.</div>
+      </div>
+      <div id="v2-filter-bar" hidden>
+        <span class="fb">committed filter</span>
+        <span class="hint" id="v2-filter-note" style="margin:0"></span>
+      </div>
+      <div id="v2-filter-excluded" hidden>
+        <div class="eh" id="v2-filter-excluded-head"></div>
+        <div id="v2-filter-excluded-rows"></div>
       </div>
       <div class="v2-assets" id="v2-assets"></div>
       <div class="v2-answer-note" id="v2-answer-note"></div>
@@ -967,7 +984,7 @@
   </div>
 </section>
 <footer class="v2-footer">
-  <button class="linkbtn" id="v2-footer-networks">Sweep more chains</button>
+  <a class="linkbtn" href="commit.html">Sweep and commit a list</a>
   <a href="#xchain-hint">Register a hint</a>
   <a href="#beat4">Operator triage</a>
   <a href="#beat4">Private watchlist</a>
@@ -1516,88 +1533,14 @@ function v2CommitCandidates() {
 function renderV2CommitAction() {
   const candidates = v2CommitCandidates();
   $('v2-commit-wrap').hidden = candidates.length === 0;
-  $('v2-commit-assets').textContent = `Commit ${num(candidates.length)} discovered asset${candidates.length === 1 ? '' : 's'} to your list`;
+  const link = $('v2-commit-link');
+  link.href = `commit.html?account=${WALLET_ADDR}`;
+  link.textContent = `Found ${num(candidates.length)} more asset${candidates.length === 1 ? '' : 's'} on other networks — commit them on the commit page →`;
 }
 
-function assetCommitPairs(items) {
-  const byPair = new Map();
-  for (const item of items) {
-    const chain_id = Number(item.chainId ?? item.chain_id);
-    const address = String(item.address || '').toLowerCase();
-    if (Number.isSafeInteger(chain_id) && chain_id > 0 && ADDRESS_RE.test(address)) {
-      byPair.set(`${chain_id}:${address}`, { chain_id, address });
-    }
-  }
-  return [...byPair.values()]
-    .sort((a, b) => (a.chain_id - b.chain_id) || (a.address < b.address ? -1 : a.address > b.address ? 1 : 0));
-}
-
-function assetCommitDigestBytes(items) {
-  const out = new Uint8Array(28 * items.length);
-  const view = new DataView(out.buffer);
-  items.forEach((item, i) => {
-    view.setBigUint64(28 * i, BigInt(item.chain_id));
-    out.set(hexToBytes(item.address), 28 * i + 8);
-  });
-  return out;
-}
-
-async function assetCommitDigest(items) {
-  const v = await viem();
-  return v.keccak256(assetCommitDigestBytes(items));
-}
-
-function assetCommitTypedData(account, digest, deadline) {
-  return {
-    types: {
-      EIP712Domain: [{ name: 'name', type: 'string' }, { name: 'version', type: 'string' }],
-      AssetCommit: [
-        { name: 'account', type: 'address' }, { name: 'digest', type: 'bytes32' },
-        { name: 'deadline', type: 'uint256' },
-      ],
-    },
-    primaryType: 'AssetCommit',
-    domain: { name: 'evm-scan assets', version: '1' },
-    message: { account, digest, deadline: String(deadline) },
-  };
-}
-
-async function commitV2Assets() {
-  const candidates = v2CommitCandidates();
-  if (!candidates.length) return;
-  const button = $('v2-commit-assets');
-  const status = $('v2-commit-status');
-  button.disabled = true;
-  try {
-    if (!WALLET_ADDR) throw new Error('look an account up first');
-    const wallet = VERDICT_WALLET || await connectVerdictWallet();
-    if (wallet.toLowerCase() !== WALLET_ADDR.toLowerCase()) {
-      throw new Error(`the connected wallet is ${short(wallet)}, and the account on screen is ${short(WALLET_ADDR)} — only the account can sign for itself`);
-    }
-    // The API replaces a commit atomically. Carry its old pairs into this signed
-    // list, so committing a later sweep adds newly discovered contracts rather than
-    // accidentally dropping a different chain's still-useful result.
-    const assets = assetCommitPairs([...(ASSET_COMMIT?.assets || []), ...candidates]);
-    if (assets.length > 200) throw new Error('this committed list would contain more than 200 assets; narrow the networks and sign that list');
-    const digest = await assetCommitDigest(assets);
-    const deadline = String(Math.floor(Date.now() / 1000) + 3600);
-    status.textContent = 'sign the asset list in your wallet — no gas, nothing is sent from it…';
-    const signature = await window.ethereum.request({
-      method: 'eth_signTypedData_v4',
-      params: [wallet, JSON.stringify(assetCommitTypedData(wallet, digest, deadline))],
-    });
-    status.textContent = 'recording your signed list…';
-    ASSET_COMMIT = await api(`/v1/accounts/${wallet}/asset-commit`, {
-      method: 'POST', reader: true, headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ assets, deadline, signature }),
-    });
-    status.textContent = `your signed list now names ${num(assets.length)} asset${assets.length === 1 ? '' : 's'}. A later lookup reads its matching chain entries before discovery.`;
-    renderV2CommitAction();
-  } catch (error) {
-    status.textContent = error.message || String(error);
-    button.disabled = false;
-  }
-}
+// commitV2Assets and its typed-data builders moved to commit.html: commit is its own
+// page, not a control on the answer. The digest the banner names comes straight from
+// the stored commit, so nothing here re-derives it.
 // How long ago, in the register the ledger reads in: exact enough to order by, vague
 // enough not to imply a precision the timestamp does not carry.
 function ago(iso) {
@@ -4052,6 +3995,41 @@ function renderXChainAssets(results) {
   $('v2-answer-note').textContent = `${num(answered.length)} of ${num(results.length)} enabled networks answered · every chain balance is shown above`;
   V2_DISCOVERED = answered.flatMap(result => result.held.map(holding => ({ chainId: result.chain.id, address: holding.address })));
   renderV2CommitAction();
+  renderCommittedFilter(answered.flatMap(result => result.held.map(h => ({
+    chainId: result.chain.id, chainName: result.chain.name,
+    address: h.address, balance: h.balance, decimals: h.decimals,
+  }))));
+}
+// The committed filter, applied. When the account has a signed asset list on file,
+// the v2 answer is that list: committed pairs on top, and everything else the read
+// found kept visible in an amber group below, because hiding a real balance the
+// reader did not re-sign yet is the one failure this view must not have.
+
+// renderCommittedFilter draws the banner and the excluded group beside whatever
+// asset markup the caller produced. `assets` are the rendered (possibly cross-chain,
+// merged) assets with their per-chain rows; `splitFn` returns [inList, excluded]
+// per-chain rows. Called after the caller has already drawn the full answer.
+function renderCommittedFilter(chainRows) {
+  const bar = $('v2-filter-bar'), box = $('v2-filter-excluded');
+  if (!ASSET_COMMIT || !ASSET_COMMIT.assets || !ASSET_COMMIT.assets.length || !chainRows.length) {
+    bar.hidden = true; box.hidden = true;
+    return;
+  }
+  const committed = new Set(((ASSET_COMMIT.assets || [])).map(a => `${Number(a.chain_id)}:${String(a.address).toLowerCase()}`));
+  const inList = [], excluded = [];
+  for (const row of chainRows) (committed.has(`${row.chainId}:${row.address.toLowerCase()}`) ? inList : excluded).push(row);
+  const signed = ASSET_COMMIT.signed_at ? new Date(Date.parse(ASSET_COMMIT.signed_at)) : null;
+  $('v2-filter-note').innerHTML =
+    `viewing your signed list — <strong>${num(inList.length)}</strong> of the ${num(chainRows.length)} ` +
+    `chain entr${chainRows.length === 1 ? 'y is' : 'ies are'} in it${signed ? ` · signed ${esc(ago(signed.toISOString()))}` : ''}` +
+    ` · digest <code>${esc(String(ASSET_COMMIT.digest).slice(0, 10))}…</code> · <a href="commit.html?account=${esc(WALLET_ADDR)}">re-sign on the commit page</a>`;
+  bar.hidden = false;
+  box.hidden = excluded.length === 0;
+  $('v2-filter-excluded-head').textContent =
+    `not in your signed list · ${num(excluded.length)} — held, but excluded by the filter you committed`;
+  $('v2-filter-excluded-rows').innerHTML = excluded.map(row =>
+    `<div class="er"><span style="min-width:0"><span class="addr">${esc(row.address)}</span> · ${esc(row.chainName)}</span>
+       <span class="num">${formatUnits(row.balance, row.decimals)}</span></div>`).join('');
 }
 
 async function runXChain() {
@@ -5002,6 +4980,7 @@ function renderV2CurrentAnswer(rows) {
   </div>`).join('') : '<div class="empty" style="padding:14px 0">Nothing held on this network at this block.</div>';
   const block = (VALUATION && VALUATION.as_of_block) || (STATUS && STATUS.head_block);
   $('v2-answer-note').textContent = `Read at block ${num(block)} · choose more networks to extend this answer`;
+  renderCommittedFilter(rows.map(h => ({ chainId: chain.id, chainName: chain.name, address: h.address, balance: h.balance, decimals: h.decimals })));
 }
 
 function renderHoldings() {
@@ -5237,12 +5216,10 @@ async function loadExamples() {
 }
 
 $('v2-network-change').addEventListener('click', openXChain);
-$('v2-commit-assets').addEventListener('click', commitV2Assets);
 $('v2-network-close').addEventListener('click', () => { $('v2-network-modal').hidden = true; });
 $('v2-network-modal').addEventListener('click', event => {
   if (event.target === $('v2-network-modal')) $('v2-network-modal').hidden = true;
 });
-$('v2-footer-networks').addEventListener('click', openXChain);
 $('v2-network-read').addEventListener('click', async () => {
   $('v2-network-modal').hidden = true;
   await runXChain();
