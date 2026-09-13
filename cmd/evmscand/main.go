@@ -22,14 +22,17 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
 
 	"github.com/Skanislav/evm-scan/internal/api"
 	"github.com/Skanislav/evm-scan/internal/chain"
 	"github.com/Skanislav/evm-scan/internal/chainset"
 	"github.com/Skanislav/evm-scan/internal/config"
+	"github.com/Skanislav/evm-scan/internal/ens"
 	"github.com/Skanislav/evm-scan/internal/hintfilter"
 	"github.com/Skanislav/evm-scan/internal/hintreg"
+	"github.com/Skanislav/evm-scan/internal/statepub"
 	"github.com/Skanislav/evm-scan/internal/store"
 )
 
@@ -246,10 +249,65 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 		}
 	}
 
+	var statePublisher *statepub.Publisher
+	if cfg.State.Enabled {
+		norm, err := ens.Normalize(cfg.State.Name)
+		if err != nil {
+			return fmt.Errorf("state.name: %w", err)
+		}
+		cfg.State.Name = norm
+		expected := ens.Namehash(norm)
+		if cfg.State.Namehash == "" {
+			cfg.State.Namehash = expected.Hex()
+		}
+		if common.HexToHash(cfg.State.Namehash) != expected {
+			return fmt.Errorf("state.namehash does not match state.name")
+		}
+
+		key, err := parseKey(cfg.State.PublisherKey)
+		if err != nil {
+			return fmt.Errorf("state publisher key: %w", err)
+		}
+		if cfg.Registry.PublisherKey != "" {
+			other, err := parseKey(cfg.Registry.PublisherKey)
+			if err != nil {
+				return err
+			}
+			if other.D.Cmp(key.D) == 0 {
+				return fmt.Errorf("state publisher requires a dedicated sender")
+			}
+		}
+		if !common.IsHexAddress(cfg.State.Resolver) || common.HexToAddress(cfg.State.Resolver) == (common.Address{}) || len(cfg.State.Namehash) != 66 {
+			return fmt.Errorf("state requires resolver and 32-byte namehash")
+		}
+		nameBytes, err := hexutil.Decode(cfg.State.Namehash)
+		if err != nil || len(nameBytes) != 32 {
+			return fmt.Errorf("invalid state namehash")
+		}
+		fee, ok := new(big.Int).SetString(cfg.State.MaxFeeWei, 10)
+		if !ok || fee.Sign() <= 0 || cfg.State.MaxGas == 0 {
+			return fmt.Errorf("state requires positive max_gas and max_fee_wei")
+		}
+		local := cfg.State.RequireLocalNode == nil || *cfg.State.RequireLocalNode
+		node, err := chain.Dial(ctx, cfg.State.Node, local)
+		if err != nil {
+			return err
+		}
+		defer node.Close()
+		id, err := node.ChainID(ctx)
+		if err != nil {
+			return err
+		}
+		if id != statepub.ChainID {
+			return fmt.Errorf("state publication requires ENSv2 Sepolia")
+		}
+		statePublisher = &statepub.Publisher{Store: st, Node: node, Key: key, Resolver: common.HexToAddress(cfg.State.Resolver), Namehash: common.BytesToHash(nameBytes), Interval: cfg.State.Interval.D(), MaxGas: cfg.State.MaxGas, MaxFee: fee, Log: log}
+	}
 	srv := &http.Server{
 		Addr: cfg.API.Listen,
 		Handler: api.New(api.Deps{
-			Store:             st,
+			Store:         st,
+			StateResolver: cfg.State.Resolver, StateNode: cfg.State.Namehash, StateName: cfg.State.Name,
 			Chains:            set,
 			StartChain:        sv.StartStored,
 			StopChain:         sv.Stop,
@@ -273,6 +331,10 @@ func run(cfgPath, webDir string, log *slog.Logger) error {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
+	if statePublisher != nil {
+		wg.Add(1)
+		go func() { defer wg.Done(); statePublisher.Run(runCtx) }()
+	}
 	if mirror != nil {
 		wg.Add(1)
 		go func() {

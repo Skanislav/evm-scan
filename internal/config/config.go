@@ -14,6 +14,7 @@ import (
 // Config is the whole deployment.
 type Config struct {
 	Database Database `yaml:"database"`
+	State    State    `yaml:"state"`
 	API      API      `yaml:"api"`
 	Registry Registry `yaml:"registry"`
 	Chains   []Chain  `yaml:"chains"`
@@ -23,6 +24,20 @@ type Config struct {
 	// Cost prices the RPC bill. Providers meter per request, so what a deployment
 	// costs is a function of how many it makes; this turns the counters into money.
 	Cost Cost `yaml:"cost"`
+}
+
+// State configures optional ENSv2 Sepolia checkpoint publication. Keys belong in env.
+type State struct {
+	Enabled          bool     `yaml:"enabled"`
+	Node             string   `yaml:"node"`
+	RequireLocalNode *bool    `yaml:"require_local_node"`
+	Resolver         string   `yaml:"resolver"`
+	Namehash         string   `yaml:"namehash"`
+	Name             string   `yaml:"name"`
+	PublisherKey     string   `yaml:"-"`
+	Interval         Duration `yaml:"interval"`
+	MaxGas           uint64   `yaml:"max_gas"`
+	MaxFeeWei        string   `yaml:"max_fee_wei"`
 }
 
 // Cost describes a provider's metering so the daemon can price its own traffic.
@@ -320,6 +335,10 @@ func Load(path string) (*Config, error) {
 
 // applyEnv lets deployment secrets stay out of the config file.
 func (c *Config) applyEnv() {
+	c.State.PublisherKey = os.Getenv("EVMSCAN_STATE_PUBLISHER_KEY")
+	if v := os.Getenv("EVMSCAN_STATE_NODE"); v != "" {
+		c.State.Node = v
+	}
 	if v := os.Getenv("EVMSCAN_DATABASE_DSN"); v != "" {
 		c.Database.DSN = v
 	}
