@@ -109,4 +109,3 @@ depend on the configured arbiter/oracle; a root is not a fraud proof. Wallet fun
 remain usable if the service disappears, but recovering preferences requires data
 availability. No repository-level license file was found; resolve that before
 claiming unrestricted reuse.
-
