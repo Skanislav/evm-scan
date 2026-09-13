@@ -49,6 +49,15 @@ contract HintAliasResolver is HintResolver, EIP712, Nonces {
     /// @notice The account a claimed label resolves to, keyed by `keccak256(label)`.
     mapping(bytes32 => address) public accountOfLabel;
 
+    /// @notice The label an account holds, or "" — the reverse of `accountOfLabel`.
+    /// @dev An account holds at most one name, and claiming a second releases the
+    ///      first in the same transaction. That is a real restriction and it is the
+    ///      point: without it this mapping could only name one of several labels and
+    ///      would disagree with the forward one, and a reader asking "what is this
+    ///      account called" would get an answer that depends on claim order. One name
+    ///      per account is also what a client wants to show.
+    mapping(address => string) public labelOfAccount;
+
     event NameClaimed(bytes32 indexed labelHash, string label, address indexed account);
     event NameReleased(bytes32 indexed labelHash, string label, address indexed account);
 
@@ -101,7 +110,17 @@ contract HintAliasResolver is HintResolver, EIP712, Nonces {
 
         _authorize(CLAIM_TYPEHASH, label, account, deadline, signature);
 
+        // An account holds one name. Claiming a second frees the first here rather
+        // than leaving it pointing at an account that no longer answers to it.
+        string memory previous = labelOfAccount[account];
+        bytes32 previousHash = keccak256(bytes(previous));
+        if (bytes(previous).length != 0 && previousHash != labelHash) {
+            delete accountOfLabel[previousHash];
+            emit NameReleased(previousHash, previous, account);
+        }
+
         accountOfLabel[labelHash] = account;
+        labelOfAccount[account] = label;
         emit NameClaimed(labelHash, label, account);
     }
 
@@ -121,6 +140,7 @@ contract HintAliasResolver is HintResolver, EIP712, Nonces {
         _authorize(RELEASE_TYPEHASH, label, account, deadline, signature);
 
         delete accountOfLabel[labelHash];
+        delete labelOfAccount[account];
         emit NameReleased(labelHash, label, account);
     }
 

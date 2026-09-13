@@ -252,6 +252,45 @@ func TestHintAliasResolverClaimsAndResolves(t *testing.T) {
 		refuses("bad label "+bad, pack("claimFor", bad, alice, d, bs), "BadLabel")
 	}
 
+	// ------------------------------------------------ one name per account
+	// The reverse mapping is what lets a client ask "what is this account called",
+	// and it can only answer that if there is one answer. Claiming a second label
+	// must therefore free the first in the same transaction.
+	labelOf := func(who common.Address) string {
+		out, err := call(resolver, pack("labelOfAccount", who))
+		if err != nil {
+			t.Fatal(err)
+		}
+		vals, err := resABI.Unpack("labelOfAccount", out)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return vals[0].(string)
+	}
+	if got := labelOf(alice); got != "alice" {
+		t.Fatalf("labelOfAccount = %q, want alice", got)
+	}
+	dSecond := future()
+	sigSecond := sign(aliceKey, "Claim", "alice-two", alice, nonceOf(alice), dSecond)
+	s.mustSend(ctx, resolver, nil, pack("claimFor", "alice-two", alice, dSecond, sigSecond))
+	if got := labelOf(alice); got != "alice-two" {
+		t.Fatalf("labelOfAccount after second claim = %q, want alice-two", got)
+	}
+	if got := accountOf("alice"); got != (common.Address{}) {
+		t.Fatalf("the first label still resolves to %s after a second claim", got)
+	}
+	if got := addrOf("alice-two." + parent); got != alice {
+		t.Fatalf("the second name does not resolve: %s", got)
+	}
+	// Put the account back on "alice" so the release assertions below read as
+	// written; re-claiming a freed label is ordinary.
+	dBack := future()
+	s.mustSend(ctx, resolver, nil,
+		pack("claimFor", "alice", alice, dBack, sign(aliceKey, "Claim", "alice", alice, nonceOf(alice), dBack)))
+	if got := accountOf("alice-two"); got != (common.Address{}) {
+		t.Fatalf("alice-two still held after moving back")
+	}
+
 	// ---------------------------------------------------------------- release
 	d5 := future()
 	sigRel := sign(aliceKey, "Release", "alice", alice, nonceOf(alice), d5)
