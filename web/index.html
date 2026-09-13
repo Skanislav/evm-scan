@@ -613,6 +613,18 @@
     #beat1 h1 { font-size: 42px; }
     #beat1 .lede { font-size: 16px; }
   }
+  /* The multi-chain answer is grouped by asset: each expanded line names the chain
+     that returned the balance, so the sum never hides where it was read. */
+  .asset-results { margin-top: 16px; border-radius: 20px; background: var(--card); padding: 4px 16px; }
+  .asset-result { padding: 14px 0; border-top: 1px solid var(--line); }
+  .asset-result:first-child { border-top: 0; }
+  .asset-result-head { display: flex; align-items: baseline; gap: 8px; }
+  .asset-result-symbol { font: 600 17px/1.25 var(--sans); }
+  .asset-result-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-65); font-size: 13px; }
+  .asset-result-total { margin-left: auto; text-align: right; white-space: nowrap; font: 500 16px/1.25 var(--mono); }
+  .asset-chain { display: flex; align-items: center; gap: 8px; margin-top: 7px; color: var(--ink-65); font-size: 12.5px; }
+  .asset-chain-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .asset-chain-balance { margin-left: auto; color: var(--ink); font: 500 12.5px/1 var(--mono); }
 </style>
 </head>
 <body>
@@ -806,27 +818,22 @@
         <div class="err" id="verdict-err" hidden></div>
       </div>
 
-      <!-- Everything above is one chain. The sweep is client-only: viem's chain registry
-           and a CORS-open token list, then the same deployless lens call per chain. The
-           disclosure sits on the button because every endpoint reached sees the address. -->
+      <!-- Each enabled chain is read only after the reader opens the picker. Results
+           below merge the same asset across chains, while retaining each chain row. -->
       <div id="xchain" class="sweep">
         <div class="sweep-head">
-          <span class="label">everything above is one chain</span>
-          <span class="colnote">an address holds things in more places than this daemon indexes</span>
+          <span class="label">Read more chains</span>
+          <span class="colnote">enable the networks you want included in this answer</span>
         </div>
         <div class="sweep-body">
-          <p class="hint" style="margin:0 0 14px; max-width:680px; text-wrap:pretty">A sweep reads balances on every chain
-            it can reach, in your browser, one endpoint per chain, rendering rows as they land. "Every chain it can
-            reach" has to mean something that cannot hang: a chain the token list has contracts for, that has somewhere
-            to ask, and that still answers — retired testnets are dropped from the list, and the live ones are listed
-            and never swept by default.</p>
+          <p class="hint" style="margin:0 0 14px; max-width:680px; text-wrap:pretty">Choose the chains to read, then review the address disclosure before starting. Holdings are grouped by asset, with every chain balance shown underneath.</p>
           <div class="row" id="xchain-openrow">
-            <button class="btn btn-secondary btn-sm" id="xchain-open">Load the chain list</button>
-            <span class="hint" id="xchain-load">viem's chain registry and the token list are fetched only when asked</span>
+            <button class="btn btn-secondary btn-sm" id="xchain-open">Choose networks</button>
+            <span class="hint" id="xchain-load">the public chain registry and token list are fetched only when you open the picker</span>
           </div>
           <div id="xchain-panel" hidden>
             <div class="subrow" style="margin-bottom:9px">
-              <span class="label">chains to ask · <span id="xchain-count">0</span> selected</span>
+              <span class="label">enabled networks · <span id="xchain-count">0</span> selected</span>
               <span class="row" style="gap:7px">
                 <button class="btn btn-secondary btn-sm" id="xchain-all">All available</button>
                 <button class="btn btn-secondary btn-sm" id="xchain-own">Only my own node</button>
@@ -3659,15 +3666,15 @@ function updateXChainStatus() {
       !picked.length ? 'nothing is selected, so nothing is asked'
       : strangers === 0 ? 'none of the endpoints you selected are strangers — this sweep only asks your own node'
       : `${num(strangers)} of the ${num(picked.length)} selected ${strangers === 1 ? 'is' : 'are'} not yours`
-    }</strong>. ${list}Switch any of them off above, or drop to your own node in one click; each result row names the
-    host that answered. None of it reaches this daemon.`;
+    }</strong>. ${list}Switch any of them off above, or drop to your own node in one click; every holding keeps the
+    chain that returned it. None of it reaches this daemon.`;
 
   const go = $('xchain-go');
   go.disabled = XSTATE === 'running' || !picked.length || !WALLET_ADDR;
-  go.textContent = XSTATE === 'running' ? 'sweeping…'
-    : XSTATE === 'done' ? 'Sweep again'
+  go.textContent = XSTATE === 'running' ? 'Reading enabled networks…'
+    : XSTATE === 'done' ? 'Read enabled networks again'
     : !picked.length ? 'Nothing selected'
-    : `Sweep ${num(picked.length)} chain${picked.length === 1 ? '' : 's'}`;
+    : `Read ${num(picked.length)} enabled network${picked.length === 1 ? '' : 's'}`;
 
   const st = $('xchain-status');
   if (!WALLET_ADDR) st.textContent = 'look an address up above first';
@@ -3677,6 +3684,39 @@ function updateXChainStatus() {
     `${num(XLAST.holdings)} holding${XLAST.holdings === 1 ? '' : 's'} across ${num(XLAST.answered)} of ${num(XLAST.chains)} chains, over ${num(XLAST.calls)} calls`
     + (XLAST.hinted ? ` · ${num(XLAST.hinted)} hinted first, from ${XLAST.hintSource}` : '')
     + (XLAST.failed ? ` · ${num(XLAST.failed)} did not answer` : '');
+}
+
+function chainColor(id) {
+  return `hsl(${(Number(id) * 47) % 360} 48% 48%)`;
+}
+
+function renderXChainAssets(results) {
+  const assets = new Map();
+  for (const result of results) {
+    if (result.error) continue;
+    for (const holding of result.held) {
+      const key = (holding.address || `${holding.symbol}:${holding.name}`).toLowerCase();
+      let asset = assets.get(key);
+      if (!asset) {
+        asset = { symbol: holding.symbol || short(holding.address, 4), name: holding.name || '', decimals: holding.decimals, total: 0n, chains: [] };
+        assets.set(key, asset);
+      }
+      asset.total += BigInt(holding.balance);
+      asset.chains.push({ chain: result.chain, holding });
+    }
+  }
+  $('xchain-results').innerHTML = assets.size ? `<div class="asset-results">${[...assets.values()].map(asset => {
+    const total = formatUnits(asset.total.toString(), asset.decimals);
+    const chains = asset.chains.map(({ chain, holding }) => `<div class="asset-chain">
+      <span class="asset-chain-dot" style="background:${chainColor(chain.id)}"></span>
+      <span>${esc(chain.name)}</span>
+      <span class="asset-chain-balance">${formatUnits(holding.balance, holding.decimals)}</span>
+    </div>`).join('');
+    return `<div class="asset-result">
+      <div class="asset-result-head"><span class="asset-result-symbol">${esc(asset.symbol)}</span><span class="asset-result-name">${esc(asset.name)}</span><span class="asset-result-total">${total}</span></div>
+      ${chains}
+    </div>`;
+  }).join('')}</div>` : '<div class="empty" style="padding:14px 0">No holdings on the enabled chains that answered.</div>';
 }
 
 async function runXChain() {
@@ -3698,24 +3738,13 @@ async function runXChain() {
   // the hint discloses nothing new.
   const hint = await loadHints().then(m => m.hintFor(addr, true)).catch(() => null);
 
-  // One row per chain as it lands — the host that answered, and what it said — with
-  // the holdings under it. A chain that failed keeps its row and says so.
+  // Results are grouped by asset as each enabled chain answers. The status retains
+  // failures so an omitted chain is never indistinguishable from a zero balance.
   const render = () => {
-    $('xchain-status').textContent = `${num(done.length)} of ${num(total)} answered…`;
-    $('xchain-results').innerHTML = done.map(r => {
-      const head = `<div class="sweep-row">
-          <div class="cn">${esc(r.chain.name)}</div>
-          <div class="ch" title="${esc(r.chain.rpc)}">${r.chain.mine ? 'your endpoint · ' : ''}${esc(r.chain.host)}</div>
-          <div class="res" style="color:${r.error ? 'var(--amber-text)' : r.held.length ? 'var(--ink)' : 'var(--ink-62)'}" title="${esc(r.error || `${r.scanned} contracts read in ${r.calls} call${r.calls === 1 ? '' : 's'}${r.hinted ? `, ${r.hinted} hinted first` : ''}`)}">${
-            r.error ? 'no answer' : `${num(r.held.length)} holding${r.held.length === 1 ? '' : 's'}${r.hinted ? ` <span class="empty">· ${num(r.hinted)} hinted first</span>` : ''}`}</div>
-        </div>`;
-      const rows = r.held.map(h => `<div class="sweep-row held-row">
-          <div class="cn"><strong>${esc(h.symbol || '')}</strong> <span class="empty">${esc(h.name || '')}</span></div>
-          <div class="ch">${esc(short(h.address, 4))}</div>
-          <div class="res mono">${formatUnits(h.balance, h.decimals)}</div>
-        </div>`).join('');
-      return head + rows + (r.error ? `<div class="hint" style="padding:0 0 8px; font-size:11px">${esc(r.error)}</div>` : '');
-    }).join('');
+    const failed = done.filter(result => result.error).length;
+    $('xchain-status').textContent =
+      `${num(done.length)} of ${num(total)} answered${failed ? ` · ${num(failed)} failed` : ''}`;
+    renderXChainAssets(done);
   };
 
   try {
