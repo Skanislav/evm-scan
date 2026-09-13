@@ -5948,6 +5948,26 @@ async function fillSepoliaRPC() {
   } catch { /* the catalog is a convenience; typing one still works */ }
 }
 
+// The Universal Resolver reports failure as a typed revert, and rpc() carries the
+// revert data on the thrown error. Decoding the few that matter turns "execution
+// reverted" into the actual problem. Selectors are the first four bytes of the
+// keccak of the error signature, checked against a live reverting call.
+const ENS_ERRORS = {
+  "0x77209fe8": "has no resolver — check it is registered on Sepolia and has a resolver set", // ResolverNotFound(bytes)
+  "0xdfce7e85": "names a resolver address that holds no contract code on Sepolia",            // ResolverNotContract(bytes)
+  "0x7b1c461b": "has a resolver that does not answer text() records",                         // UnsupportedResolverProfile(bytes4)
+  "0x95c0c752": "has a resolver that reverted",                                               // ResolverError(bytes)
+  "0xba4adc23": "could not be decoded as a DNS-encoded name",                                 // DNSDecodingFailed(bytes)
+  "0x9a4c3e3b": "could not be DNS-encoded",                                                   // DNSEncodingFailed(string)
+  "0x01800152": "has an offchain resolver whose gateway returned an HTTP error",              // HttpError(uint16,string)
+  "0x4a5c31ea": "has an offchain resolver whose gateway replied in a shape ENS rejects",      // InvalidBatchGatewayResponse()
+};
+
+function ensRevert(err, name) {
+  const data = err && typeof err.data === "string" ? err.data.slice(0, 10).toLowerCase() : "";
+  return ENS_ERRORS[data] ? Error(`"${name}" ${ENS_ERRORS[data]}.`) : err;
+}
+
 async function stateENS(name, key) {
   const c = await stateCode(),
     v = c.v,
@@ -5957,6 +5977,10 @@ async function stateENS(name, key) {
     throw Error("ENS state checkpoints require Sepolia");
   const norm = normalizeName(name);
   if (!norm) throw Error("Enter an ENSv2 Sepolia name");
+  // A single label is a TLD. Nothing under ENS owns one, so it can hold no resolver,
+  // and the call would spend a round trip to be told exactly that.
+  if (!norm.includes("."))
+    throw Error(`"${norm}" is a single label — enter the whole name, such as ${norm}.eth`);
   const node = namehash(v, norm),
     inner = v.encodeFunctionData({
       abi: STATE_RESOLVER_ABI,
@@ -5968,10 +5992,12 @@ async function stateENS(name, key) {
     functionName: "resolve",
     args: [dnsEncode(v, norm), inner],
   });
-  const out = await rpc(url, "eth_call", [
-    { to: UNIVERSAL_RESOLVER, data },
-    "latest",
-  ]);
+  let out;
+  try {
+    out = await rpc(url, "eth_call", [{ to: UNIVERSAL_RESOLVER, data }, "latest"]);
+  } catch (e) {
+    throw ensRevert(e, norm);
+  }
   const [result, resolver] = v.decodeFunctionResult({
     abi: UR_ABI,
     functionName: "resolve",
